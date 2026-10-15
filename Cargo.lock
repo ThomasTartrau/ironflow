@@ -3692,7 +3692,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-engine"
-version = "2.52.0"
+version = "2.52.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -4014,7 +4014,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-runtime"
-version = "2.4.98"
+version = "2.4.99"
 dependencies = [
  "async-nats",
  "axum",
