@@ -17,6 +17,10 @@ use crate::response::ok;
 use crate::state::AppState;
 use ironflow_auth::extractor::{API_KEY_PREFIX, API_KEY_SUFFIX_LEN};
 
+/// Maximum length of an API key name, in characters (matches the
+/// `iam.api_keys.name` VARCHAR(255) column).
+const MAX_API_KEY_NAME_LEN: usize = 255;
+
 /// Request body for creating an API key.
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Deserialize)]
@@ -60,7 +64,7 @@ pub struct CreateApiKeyResponse {
 ///
 /// # Errors
 ///
-/// - 400 if the name is empty or scopes are invalid
+/// - 400 if the name is empty or longer than 255 characters (after trimming), or scopes are invalid
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -82,9 +86,7 @@ pub async fn create_api_key(
     State(state): State<AppState>,
     Json(req): Json<CreateApiKeyRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if req.name.trim().is_empty() {
-        return Err(ApiError::BadRequest("name must not be empty".to_string()));
-    }
+    let name = validate_name(&req.name)?.to_string();
 
     if req.scopes.is_empty() {
         return Err(ApiError::BadRequest(
@@ -113,7 +115,7 @@ pub async fn create_api_key(
         .store
         .create_api_key(NewApiKey {
             user_id: user.user_id,
-            name: req.name,
+            name,
             key_hash,
             key_prefix: key_prefix.clone(),
             scopes: req.scopes,
@@ -137,6 +139,23 @@ pub async fn create_api_key(
     Ok((StatusCode::CREATED, ok(response)))
 }
 
+/// Trim `name` and check it is non-empty and within the column bound.
+///
+/// The trimmed value is the one to store, so the stored name always fits.
+/// Characters are counted, not bytes, as Postgres does for VARCHAR(n).
+fn validate_name(name: &str) -> Result<&str, ApiError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("name must not be empty".to_string()));
+    }
+    if name.chars().count() > MAX_API_KEY_NAME_LEN {
+        return Err(ApiError::BadRequest(format!(
+            "name must be at most {MAX_API_KEY_NAME_LEN} characters"
+        )));
+    }
+    Ok(name)
+}
+
 /// Generate a random API key with the `irfl_` prefix.
 fn generate_api_key() -> String {
     let mut rng = rand::rng();
@@ -148,6 +167,149 @@ fn generate_api_key() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::Arc;
+
+    use ironflow_auth::jwt::JwtConfig;
+    use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_engine::engine::Engine;
+    use ironflow_engine::notify::Event;
+    use ironflow_store::entities::NewUser;
+    use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::store::Store;
+    use tokio::sync::broadcast;
+
+    async fn test_state() -> (AppState, AuthenticatedUser) {
+        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let engine = Arc::new(Engine::new(store.clone(), provider));
+        let jwt_config = Arc::new(JwtConfig {
+            secret: "test-secret-for-api-keys".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
+        let state = AppState::new(
+            store.clone(),
+            engine,
+            jwt_config,
+            "test-worker-token".to_string(),
+            event_sender,
+        );
+
+        let user = store
+            .create_user(NewUser {
+                email: "admin@example.com".to_string(),
+                username: "admin".to_string(),
+                password_hash: password::hash("password123").expect("hash"),
+                is_admin: Some(true),
+            })
+            .await
+            .expect("create user");
+        let auth = AuthenticatedUser {
+            user_id: user.id,
+            username: user.username,
+            is_admin: true,
+        };
+        (state, auth)
+    }
+
+    fn request(name: String) -> CreateApiKeyRequest {
+        CreateApiKeyRequest {
+            name,
+            scopes: vec![ApiKeyScope::RunsRead],
+            expires_at: None,
+            rate_limit_override: None,
+        }
+    }
+
+    #[test]
+    fn validate_name_rejects_empty_and_whitespace() {
+        assert!(matches!(validate_name(""), Err(ApiError::BadRequest(_))));
+        assert!(matches!(validate_name("   "), Err(ApiError::BadRequest(_))));
+    }
+
+    #[test]
+    fn validate_name_accepts_exactly_255_chars() {
+        let name = "a".repeat(255);
+        assert_eq!(validate_name(&name).expect("valid"), name);
+    }
+
+    #[test]
+    fn validate_name_rejects_256_chars() {
+        let name = "a".repeat(256);
+        match validate_name(&name) {
+            Err(ApiError::BadRequest(msg)) => assert!(msg.contains("255")),
+            _ => panic!("expected BadRequest"),
+        }
+    }
+
+    #[test]
+    fn validate_name_trims_before_counting() {
+        let padded = format!("  {}  ", "a".repeat(255));
+        let name = validate_name(&padded).expect("valid");
+        assert_eq!(name.len(), 255);
+    }
+
+    #[test]
+    fn validate_name_counts_chars_not_bytes() {
+        let ok = "é".repeat(255);
+        assert!(validate_name(&ok).is_ok());
+        let too_long = "é".repeat(256);
+        assert!(matches!(
+            validate_name(&too_long),
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn create_api_key_name_longer_than_255_returns_400() {
+        let (state, auth) = test_state().await;
+        let user_id = auth.user_id;
+        let store = state.store.clone();
+
+        let result = create_api_key(auth, State(state), Json(request("a".repeat(300)))).await;
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+
+        let keys = store
+            .list_api_keys_by_user(user_id)
+            .await
+            .expect("list keys");
+        assert!(keys.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_api_key_name_of_255_chars_returns_201() {
+        let (state, auth) = test_state().await;
+
+        let response = create_api_key(auth, State(state), Json(request("a".repeat(255))))
+            .await
+            .expect("created")
+            .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_api_key_stores_trimmed_name() {
+        let (state, auth) = test_state().await;
+        let user_id = auth.user_id;
+        let store = state.store.clone();
+
+        let response = create_api_key(auth, State(state), Json(request("  key  ".to_string())))
+            .await
+            .expect("created")
+            .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let keys = store
+            .list_api_keys_by_user(user_id)
+            .await
+            .expect("list keys");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].name, "key");
+    }
 
     #[test]
     fn generate_api_key_has_correct_prefix() {

@@ -49,7 +49,7 @@
           "api-keys"
         ],
         "summary": "Create a new API key for the authenticated user.",
-        "description": "# Errors\n\n- 400 if the name is empty or scopes are invalid",
+        "description": "# Errors\n\n- 400 if the name is empty or longer than 255 characters (after trimming), or scopes are invalid",
         "operationId": "create_api_key",
         "requestBody": {
           "description": "API key configuration",
