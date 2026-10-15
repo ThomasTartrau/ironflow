@@ -8,9 +8,10 @@ use validator::Validate;
 
 use ironflow_auth::extractor::Authenticated;
 use ironflow_auth::password;
-use ironflow_store::entities::NewUser;
+use ironflow_store::entities::{ApiKeyScope, NewUser};
 use ironflow_store::error::StoreError;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{CreateUserRequest, UserResponse};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -46,9 +47,7 @@ pub async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
 
     req.validate()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;

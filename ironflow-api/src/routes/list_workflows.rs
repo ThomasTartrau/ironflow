@@ -6,8 +6,10 @@ use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use chrono::{DateTime, Utc};
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 use serde::{Deserialize, Serialize};
 
+use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
@@ -72,10 +74,11 @@ pub const UNCATEGORIZED_FILTER: &str = "__uncategorized__";
     )
 )]
 pub async fn list_workflows(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Query(params): Query<ListWorkflowsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::WorkflowsRead, false)?;
     let paused_at: HashMap<String, DateTime<Utc>> = state
         .store
         .list_workflow_pauses()

@@ -4,9 +4,11 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::error::EngineError;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::error::StoreError;
 use uuid::Uuid;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{CancelRunResponse, RunResponse};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -45,9 +47,7 @@ pub async fn cancel_run(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::RunsManage, true)?;
 
     let cancellation = state.engine.cancel_run(id).await.map_err(|err| match err {
         EngineError::Store(StoreError::RunNotFound(id)) => ApiError::RunNotFound(id),

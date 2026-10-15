@@ -5,7 +5,9 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::SecretResponse;
 use crate::error::ApiError;
 use crate::response::ok_paged;
@@ -46,9 +48,7 @@ pub async fn list_secrets(
     State(state): State<AppState>,
     Query(query): Query<ListSecretsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
 
     let prefix = query.prefix.as_deref().unwrap_or("");
     let page = query.page.unwrap_or(1).max(1);

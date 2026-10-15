@@ -7,7 +7,9 @@ use serde::Deserialize;
 use validator::Validate;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::SecretResponse;
 use crate::error::ApiError;
 use crate::response::ok;
@@ -57,9 +59,7 @@ pub async fn update_secret(
     Path(key): Path<String>,
     Json(req): Json<UpdateSecretRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
     reject_provider_account_key(&key)?;
 
     req.validate()

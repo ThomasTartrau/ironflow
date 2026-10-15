@@ -3,8 +3,10 @@
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::models::RunFilter;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{ListRunsQuery, StatsResponse};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -30,10 +32,11 @@ use crate::state::AppState;
     )
 )]
 pub async fn get_stats(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Query(params): Query<ListRunsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::StatsRead, false)?;
     let labels = params.parse_labels();
 
     let filter = RunFilter {

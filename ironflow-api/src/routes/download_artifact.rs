@@ -6,9 +6,11 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use futures_util::TryStreamExt;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::models::Artifact;
 use uuid::Uuid;
 
+use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -40,10 +42,11 @@ use crate::state::AppState;
     )
 )]
 pub async fn download_artifact(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path((run_id, step_id, name)): Path<(Uuid, Uuid, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsRead, false)?;
     let blob_store = state.blob_store_or_501()?;
 
     let artifact = state

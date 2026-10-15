@@ -4,7 +4,9 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::KeyVersionsResponse;
 use crate::error::ApiError;
 use crate::response::ok;
@@ -41,9 +43,7 @@ pub async fn secret_key_versions(
     auth: Authenticated,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
 
     let status = state.store.secret_key_status().await?;
 

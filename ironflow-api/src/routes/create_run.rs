@@ -9,6 +9,7 @@ use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::engine::EnqueueOptions;
 use ironflow_engine::error::EngineError;
 use ironflow_engine::notify::{Event, RunCreatedEvent};
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::models::{ConcurrencyLimit, Run, RunCreation, TriggerKind};
 use serde_json::{Value, json};
 use tracing::{info, warn};
@@ -23,6 +24,7 @@ use ironflow_core::metric_names::{
 };
 
 use crate::actor::run_actor_of;
+use crate::authorization::AuthorizeExt;
 use crate::entities::{CreateRunRequest, RunResponse, validate_idempotency_key};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -119,9 +121,7 @@ pub async fn create_run(
     headers: HeaderMap,
     Json(req): Json<CreateRunRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::RunsWrite, true)?;
 
     let idempotency_key = match headers.get(IDEMPOTENCY_KEY_HEADER) {
         Some(value) => {

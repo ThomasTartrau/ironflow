@@ -12,10 +12,12 @@ use serde::de::{self, Deserializer};
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
+use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::state::AppState;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::notify::WorkflowEvent;
+use ironflow_store::entities::ApiKeyScope;
 
 /// Deserialize a comma-separated string into `Option<Vec<String>>`.
 fn deserialize_comma_strings<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
@@ -107,11 +109,12 @@ pub struct RunEventsQuery {
     )
 )]
 pub async fn run_events(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Query(query): Query<RunEventsQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, ApiError> {
+    auth.require(ApiKeyScope::RunsRead, false)?;
     state.get_run_or_404(id).await?;
 
     let type_filter = query.types;

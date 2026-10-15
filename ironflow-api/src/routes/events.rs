@@ -12,9 +12,12 @@ use serde::de::{self, Deserializer};
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
+use crate::authorization::AuthorizeExt;
+use crate::error::ApiError;
 use crate::state::AppState;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::notify::Event;
+use ironflow_store::entities::ApiKeyScope;
 
 pub use ironflow_store::entities::EventKind;
 
@@ -75,17 +78,23 @@ pub struct EventsQuery {
 ///
 /// A keep-alive comment is sent every 30 seconds.
 ///
+/// Provider Account events reach an admin session, or an API key holding the
+/// `admin` scope whose owner is an admin.
+///
 /// # Errors
 ///
-/// Returns 401 if the request is not authenticated.
+/// - 401 if the request is not authenticated
+/// - 403 `INSUFFICIENT_SCOPE` if the API key lacks `runs_read`
 pub async fn events(
     auth: Authenticated,
     State(state): State<AppState>,
     Query(query): Query<EventsQuery>,
-) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, ApiError> {
+    auth.require(ApiKeyScope::RunsRead, false)?;
     let receiver = state.event_sender.subscribe();
-    // Provider Account events describe admin-only resources.
-    let is_admin = auth.is_admin();
+    // Provider Account events describe admin-only resources, which an API
+    // key reaches only through the `admin` scope.
+    let sees_provider_account_events = auth.require(ApiKeyScope::Admin, true).is_ok();
     let type_filter = query.types;
 
     let stream = BroadcastStream::new(receiver).filter_map(move |result: Result<Event, _>| {
@@ -94,7 +103,7 @@ pub async fn events(
         async move {
             let event = result.ok()?;
 
-            if !is_admin
+            if !sees_provider_account_events
                 && matches!(
                     event,
                     Event::ProviderAccountUpdated(_) | Event::ProviderAccountUsageUpdated(_)
@@ -123,7 +132,8 @@ pub async fn events(
         }
     });
 
-    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)))
+    let sse = Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)));
+    Ok(sse)
 }
 
 #[cfg(test)]
@@ -135,9 +145,15 @@ mod tests {
     use axum::Router;
     use axum::routing::get;
     use chrono::Utc;
+    use ironflow_auth::extractor::{API_KEY_PREFIX, API_KEY_SUFFIX_LEN};
+    use ironflow_auth::password;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
-    use ironflow_engine::notify::{Event, RunStatusChangedEvent, UserSignedInEvent};
+    use ironflow_engine::notify::{
+        Event, ProviderAccountChange, ProviderAccountUpdatedEvent, RunStatusChangedEvent,
+        UserSignedInEvent,
+    };
+    use ironflow_store::entities::{ApiKeyScope, NewApiKey, NewUser};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::RunStatus;
     use rust_decimal::Decimal;
@@ -193,6 +209,54 @@ mod tests {
             username: "alice".to_string(),
             at: Utc::now(),
         })
+    }
+
+    fn sample_provider_account_event() -> Event {
+        Event::ProviderAccountUpdated(ProviderAccountUpdatedEvent {
+            account_id: Uuid::now_v7(),
+            name: "acct".into(),
+            change: ProviderAccountChange::Updated,
+            at: Utc::now(),
+        })
+    }
+
+    /// A `Bearer` header for an API key holding `scopes`, owned by a fresh
+    /// user who is an admin when `owner_is_admin` is set.
+    ///
+    /// The key is written to the store directly, so a member may hold scopes
+    /// the `/api-keys` route would refuse them.
+    async fn api_key_header(
+        state: &AppState,
+        owner_is_admin: bool,
+        scopes: Vec<ApiKeyScope>,
+    ) -> String {
+        let suffix = Uuid::now_v7().simple().to_string();
+        let owner = state
+            .store
+            .create_user(NewUser {
+                email: format!("owner-{suffix}@example.com"),
+                username: format!("owner-{suffix}"),
+                password_hash: "argon2hash".to_string(),
+                is_admin: Some(owner_is_admin),
+            })
+            .await
+            .unwrap();
+        let raw_key = format!("irfl_{}rest-of-secret-key", &suffix[24..]);
+        let prefix = &raw_key[..API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN];
+        state
+            .store
+            .create_api_key(NewApiKey {
+                user_id: owner.id,
+                name: format!("key-{suffix}"),
+                key_hash: password::hash(&raw_key).unwrap(),
+                key_prefix: prefix.to_string(),
+                scopes,
+                expires_at: None,
+                rate_limit_override: None,
+            })
+            .await
+            .unwrap();
+        format!("Bearer {raw_key}")
     }
 
     /// Start a real TCP server and return (address, sender, auth header).
@@ -365,5 +429,67 @@ mod tests {
         let text = read_until_contains(&mut buf_reader, "401", Duration::from_secs(5)).await;
 
         assert!(text.contains("401"));
+    }
+
+    /// Stream a provider account event, then a run event, to a client
+    /// authenticated with `auth`, and assert only the run event arrives.
+    ///
+    /// Both events go through the same channel in order: had the provider
+    /// account event not been filtered out, it would arrive first.
+    async fn assert_provider_account_events_hidden(state: AppState, auth: &str) {
+        let (addr, sender, _jwt) = start_sse_server(state).await;
+        let mut reader = connect_sse(&addr, "", auth).await;
+        wait_for_subscriber(&sender).await;
+
+        let run_id = Uuid::now_v7();
+        sender.send(sample_provider_account_event()).unwrap();
+        sender.send(sample_run_event(run_id)).unwrap();
+
+        let text =
+            read_until_contains(&mut reader, &run_id.to_string(), Duration::from_secs(5)).await;
+
+        assert!(!text.contains("provider_account"));
+    }
+
+    #[tokio::test]
+    async fn sse_scope_hides_provider_account_events_from_a_runs_read_key() {
+        let state = test_state();
+        let auth = api_key_header(&state, true, vec![ApiKeyScope::RunsRead]).await;
+        assert_provider_account_events_hidden(state, &auth).await;
+    }
+
+    #[tokio::test]
+    async fn sse_scope_hides_provider_account_events_from_an_admin_scope_key_of_a_member() {
+        let state = test_state();
+        let auth = api_key_header(&state, false, vec![ApiKeyScope::Admin]).await;
+        assert_provider_account_events_hidden(state, &auth).await;
+    }
+
+    #[tokio::test]
+    async fn sse_scope_streams_provider_account_events_to_an_admin_scope_key() {
+        let state = test_state();
+        let auth = api_key_header(&state, true, vec![ApiKeyScope::Admin]).await;
+        let (addr, sender, _jwt) = start_sse_server(state).await;
+        let mut reader = connect_sse(&addr, "", &auth).await;
+        wait_for_subscriber(&sender).await;
+
+        sender.send(sample_provider_account_event()).unwrap();
+
+        let text =
+            read_until_contains(&mut reader, "provider_account", Duration::from_secs(5)).await;
+
+        assert!(text.contains("provider_account"));
+    }
+
+    #[tokio::test]
+    async fn sse_scope_rejects_a_key_without_runs_read() {
+        let state = test_state();
+        let auth = api_key_header(&state, true, vec![ApiKeyScope::StatsRead]).await;
+        let (addr, _sender, _jwt) = start_sse_server(state).await;
+        let mut reader = connect_sse(&addr, "", &auth).await;
+
+        let text = read_until_contains(&mut reader, "\r\n", Duration::from_secs(5)).await;
+
+        assert!(text.starts_with("HTTP/1.1 403"), "status line: {text}");
     }
 }

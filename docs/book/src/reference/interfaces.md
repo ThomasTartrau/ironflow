@@ -56,6 +56,9 @@ base_url = "http://localhost:3000"
 api_key = "irfl_..."
 ```
 
+The CLI, the SDK and the MCP server only reach the routes the key's scopes allow: see
+[API key scopes](../getting-started/server.md#api-key-scopes).
+
 Add `--json` to any command for machine-readable output. `ironflow-cli --help` lists every
 command.
 

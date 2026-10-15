@@ -9,6 +9,7 @@ use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::config::HUMAN_INPUT_SCHEMA_KEY;
 use ironflow_engine::engine::ExecutionMode;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::models::{
     Run, RunStatus, Step, StepApproval, StepKind, StepStatus, StepUpdate,
 };
@@ -19,6 +20,7 @@ use tokio::spawn;
 use tracing::error;
 use uuid::Uuid;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::RunResponse;
 use crate::error::ApiError;
 use crate::response::ok;
@@ -78,6 +80,7 @@ pub async fn submit_human_input(
     Path((id, step_id)): Path<(Uuid, Uuid)>,
     Json(answer): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsManage, false)?;
     let (run, step) = open_input_step(&state, id, step_id).await?;
     let actor = authorize_gate(&auth, &state, &run, &step).await?;
     validate_answer(step.input.as_ref(), &answer)?;
@@ -156,6 +159,7 @@ pub async fn reject_human_input(
     Path((id, step_id)): Path<(Uuid, Uuid)>,
     body: Option<Json<RejectHumanInputRequest>>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsManage, false)?;
     let (run, step) = open_input_step(&state, id, step_id).await?;
     let actor = authorize_gate(&auth, &state, &run, &step).await?;
 

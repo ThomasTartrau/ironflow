@@ -3,8 +3,10 @@
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::models::RunFilter;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{ListRunsQuery, RunResponse};
 use crate::error::ApiError;
 use crate::response::ok_paged;
@@ -37,10 +39,11 @@ use crate::state::AppState;
     )
 )]
 pub async fn list_runs(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Query(params): Query<ListRunsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsRead, false)?;
     let page = params.page.unwrap_or(1);
     let per_page = params.per_page.unwrap_or(20).min(100);
 

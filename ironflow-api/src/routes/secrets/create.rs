@@ -7,7 +7,9 @@ use axum::response::IntoResponse;
 use validator::Validate;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{SecretResponse, SetSecretRequest};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -39,9 +41,7 @@ pub async fn create_secret(
     State(state): State<AppState>,
     Json(req): Json<SetSecretRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
     reject_provider_account_key(&req.key)?;
 
     req.validate()

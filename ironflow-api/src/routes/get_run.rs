@@ -5,10 +5,12 @@ use std::collections::{HashMap, HashSet};
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::models::RunStatus;
 use tokio::join;
 use uuid::Uuid;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{
     ArtifactResponse, RunDetailResponse, RunResponse, StepAccountResponse, StepResponse,
 };
@@ -38,10 +40,11 @@ use crate::state::AppState;
     )
 )]
 pub async fn get_run(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsRead, false)?;
     let run = state.get_run_or_404(id).await?;
 
     // Artifacts are fetched for the whole run in one call and grouped by step,
