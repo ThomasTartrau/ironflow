@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.52.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.52.0...ironflow-engine-v2.52.1) - 2026-10-15
+
+### Fixed
+
+- #200 CI (attempt 2)
+
+- #200 CI (attempt 1)
+
+- #200 close approval bypass on child cancel, isolate and bound plan mode, claim local resumes atomically
+
 ## [2.52.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.51.12...ironflow-engine-v2.52.0) - 2026-10-13
 
 ### Added
