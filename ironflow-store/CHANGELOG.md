@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.47.2](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.47.1...ironflow-store-v2.47.2) - 2026-10-15
+
+### Fixed
+
+- #199 harden account creation, gate assignee binding, sign-in timing and password change limiting
+
 ## [2.47.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.46.3...ironflow-store-v2.47.0) - 2026-10-12
 
 ### Added
