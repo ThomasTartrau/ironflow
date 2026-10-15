@@ -23,6 +23,8 @@ The repository includes a complete example server:
 | `ALLOWED_ORIGINS` | same-origin | Comma-separated CORS origins |
 | `RATE_LIMIT_AUTH` | `10` | Sign-in / sign-up requests per minute, per client IP and per targeted email (`0` disables) |
 | `RATE_LIMIT_GENERAL` | `60` | Other API requests per minute, per caller (`0` disables) |
+| `SSE_MAX_CONNECTIONS_PER_PRINCIPAL` | `5` | Simultaneous SSE streams (`/events`, `/runs/{id}/events`) per user or API key owner; beyond it the answer is `429` (`0` disables). A dashboard tab holds up to two |
+| `SSE_MAX_CONNECTIONS` | `1000` | Same cap for the whole server (`0` disables) |
 | `TRUSTED_PROXIES` | -- | Comma-separated IPs or CIDR ranges of the reverse proxies whose forwarding header is believed |
 | `TRUSTED_PROXY_HEADER` | `x-forwarded-for` | Header a trusted proxy reports the client IP in: `x-forwarded-for`, or `x-real-ip` to read only that header. There is no fallback between the two |
 | `ARTIFACTS_DIR` | -- | Filesystem root for step [artifacts](../concepts/artifacts.md); unset disables them |

@@ -114,6 +114,10 @@ pub enum ApiError {
     #[error("{0}")]
     MonthlyBudgetExceeded(String),
 
+    /// Too many simultaneous event streams for the caller or the server (429).
+    #[error("too many open event streams")]
+    SseConnectionLimit,
+
     /// The requested artifact does not exist (404).
     #[error("artifact not found")]
     ArtifactNotFound(String),
@@ -216,6 +220,7 @@ impl ApiError {
             ApiError::IdempotencyKeyConflict(_) => "IDEMPOTENCY_KEY_CONFLICT",
             ApiError::ConcurrencyConflict { .. } => CONCURRENCY_CONFLICT_CODE,
             ApiError::MonthlyBudgetExceeded(_) => MONTHLY_BUDGET_EXCEEDED_CODE,
+            ApiError::SseConnectionLimit => "SSE_CONNECTION_LIMIT",
             ApiError::ArtifactNotFound(_) => "ARTIFACT_NOT_FOUND",
             ApiError::ArtifactStorageUnavailable => "ARTIFACT_STORAGE_UNAVAILABLE",
             ApiError::ArtifactTooLarge => "ARTIFACT_TOO_LARGE",
@@ -256,6 +261,7 @@ impl ApiError {
             ApiError::IdempotencyKeyConflict(_) => StatusCode::CONFLICT,
             ApiError::ConcurrencyConflict { .. } => StatusCode::CONFLICT,
             ApiError::MonthlyBudgetExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
+            ApiError::SseConnectionLimit => StatusCode::TOO_MANY_REQUESTS,
             ApiError::ArtifactNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::ArtifactStorageUnavailable => StatusCode::NOT_IMPLEMENTED,
             ApiError::ArtifactTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -526,5 +532,12 @@ mod tests {
         assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(err.code(), "MONTHLY_BUDGET_EXCEEDED");
         assert_eq!(err.to_string(), "quota exhausted");
+    }
+
+    #[test]
+    fn sse_connection_limit_status_and_code() {
+        let err = ApiError::SseConnectionLimit;
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.code(), "SSE_CONNECTION_LIMIT");
     }
 }

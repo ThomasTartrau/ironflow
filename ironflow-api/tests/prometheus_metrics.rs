@@ -153,3 +153,43 @@ async fn metrics_do_not_label_unknown_urls_with_their_raw_path() {
         "an unknown URL must not create its own time series"
     );
 }
+
+#[tokio::test]
+async fn metrics_label_unknown_http_methods_as_other() {
+    let app = create_router(test_state(), RouterConfig::default());
+
+    let req = Request::builder()
+        .method("FOOBAR")
+        .uri("/api/v1/health-check")
+        .body(Body::empty())
+        .unwrap();
+    let _response = app.clone().oneshot(req).await.unwrap();
+
+    let body = scrape(app).await;
+    assert!(
+        !body.contains(r#"method="FOOBAR""#),
+        "an invented method must not create its own time series"
+    );
+    assert!(
+        body.contains(r#"method="other""#),
+        "an invented method must be labelled other"
+    );
+}
+
+#[tokio::test]
+async fn metrics_keep_standard_method_labels() {
+    let app = create_router(test_state(), RouterConfig::default());
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/health-check")
+        .body(Body::empty())
+        .unwrap();
+    let _response = app.clone().oneshot(req).await.unwrap();
+
+    let body = scrape(app).await;
+    assert!(
+        body.contains(r#"method="GET""#),
+        "a standard method keeps its own label"
+    );
+}

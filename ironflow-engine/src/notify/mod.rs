@@ -51,6 +51,7 @@ pub use event::{
     SignalReceivedEvent, StepCompletedEvent, StepFailedEvent, UserSignedInEvent,
     UserSignedOutEvent, UserSignedUpEvent,
 };
+pub(crate) use event_bus::EventBusReleaser;
 pub use event_bus::{
     WorkflowAgentStepResumedEvent, WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent,
     WorkflowEvent, WorkflowEventBus, WorkflowInputRequiredEvent, WorkflowStepCompletedEvent,

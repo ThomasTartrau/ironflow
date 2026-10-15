@@ -29,6 +29,7 @@ use crate::escalator::Escalator;
 use crate::reaper::Reaper;
 use crate::schedule_sync::{repair_unscheduled_schedules, sync_handler_schedules};
 use crate::schedule_ticker::ScheduleTicker;
+use crate::sse_limiter::{SseLimiter, SseLimits};
 use crate::waker::Waker;
 use crate::worker_registry::WorkerRegistry;
 
@@ -91,6 +92,11 @@ pub struct AppState {
     /// Workers that recently asked for a run, with what they can take. Read
     /// by the run detail route to flag a queued run no worker can take.
     pub worker_registry: WorkerRegistry,
+    /// Caps on simultaneous SSE streams, per principal and for the server.
+    ///
+    /// Defaults to [`SseLimits::default`]; set with
+    /// [`with_sse_limits`](Self::with_sse_limits).
+    pub sse_limiter: SseLimiter,
     /// Prometheus metrics handle (only when `prometheus` feature is enabled).
     #[cfg(feature = "prometheus")]
     pub prometheus_handle: PrometheusHandle,
@@ -148,6 +154,7 @@ impl AppState {
             blob_store: None,
             account_kinds: Arc::new(default_account_kinds()),
             worker_registry: WorkerRegistry::new(),
+            sse_limiter: SseLimiter::default(),
             #[cfg(feature = "prometheus")]
             prometheus_handle: Self::global_prometheus_handle(),
         }
@@ -215,6 +222,30 @@ impl AppState {
     /// ```
     pub fn with_event_bus(mut self, bus: WorkflowEventBus) -> Self {
         self.event_bus = Some(bus);
+        self
+    }
+
+    /// Set the caps on simultaneous SSE streams (`GET /api/v1/events`,
+    /// `GET /api/v1/runs/{id}/events`).
+    ///
+    /// A stream past either cap is refused with `429 SSE_CONNECTION_LIMIT`.
+    /// Without this call the [`SseLimits::default`] caps apply.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_api::sse_limiter::SseLimits;
+    /// use ironflow_api::state::AppState;
+    ///
+    /// # fn example(state: AppState) -> AppState {
+    /// state.with_sse_limits(SseLimits {
+    ///     per_principal: Some(10),
+    ///     global: None,
+    /// })
+    /// # }
+    /// ```
+    pub fn with_sse_limits(mut self, limits: SseLimits) -> Self {
+        self.sse_limiter = SseLimiter::new(limits);
         self
     }
 
