@@ -143,9 +143,11 @@ pub struct ServerConfig {
     /// Rate limit for general public API routes in requests per minute per IP.
     /// `None` disables rate limiting on these routes.
     pub rate_limit_general: Option<u32>,
-    /// Reverse proxies whose `X-Forwarded-For` / `X-Real-IP` the rate limiters
-    /// believe, from `TRUSTED_PROXIES` (comma-separated IPs or CIDR ranges).
-    /// Unset: none, the client IP is the TCP peer.
+    /// Reverse proxies whose forwarding header the rate limiters believe, from
+    /// `TRUSTED_PROXIES` (comma-separated IPs or CIDR ranges), and that header
+    /// from `TRUSTED_PROXY_HEADER` (`x-forwarded-for` by default, or
+    /// `x-real-ip`; the other one is never read). Unset: none, the client IP
+    /// is the TCP peer.
     pub trusted_proxies: TrustedProxies,
     /// Blob storage backend: `local` or `s3`.
     pub artifact_backend: String,
@@ -326,8 +328,11 @@ impl ServerConfig {
 
         let rate_limit_auth = parse_optional_u32("RATE_LIMIT_AUTH", 10, &mut errors);
         let rate_limit_general = parse_optional_u32("RATE_LIMIT_GENERAL", 60, &mut errors);
-        let trusted_proxies =
-            parse_trusted_proxies(env::var("TRUSTED_PROXIES").ok().as_deref(), &mut errors);
+        let trusted_proxies = parse_trusted_proxies(
+            env::var("TRUSTED_PROXIES").ok().as_deref(),
+            env::var("TRUSTED_PROXY_HEADER").ok().as_deref(),
+            &mut errors,
+        );
 
         let artifacts_dir = env::var("ARTIFACTS_DIR").ok().map(PathBuf::from);
         let artifact_max_bytes = match env::var("ARTIFACT_MAX_BYTES").ok() {
@@ -497,6 +502,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
 
     use crate::purger::{DEFAULT_SIGNAL_RETENTION_DAYS, RunPurger};
+    use crate::rate_limit::ClientIpHeader;
 
     use super::*;
 
@@ -520,6 +526,7 @@ mod tests {
             env::remove_var("RATE_LIMIT_AUTH");
             env::remove_var("RATE_LIMIT_GENERAL");
             env::remove_var("TRUSTED_PROXIES");
+            env::remove_var("TRUSTED_PROXY_HEADER");
             env::remove_var("PURGE_MAX_AGE_DAYS");
             env::remove_var("PURGE_MAX_RUNS_PER_WORKFLOW");
             env::remove_var("PURGE_DRY_RUN");
@@ -740,6 +747,23 @@ mod tests {
         unsafe { env::set_var("TRUSTED_PROXIES", "10.0.0.0/8") };
         let config = ServerConfig::from_env().unwrap();
         assert!(config.trusted_proxies.contains("10.1.2.3".parse().unwrap()));
+        assert_eq!(
+            config.trusted_proxies.header(),
+            ClientIpHeader::XForwardedFor
+        );
+
+        unsafe { env::set_var("TRUSTED_PROXY_HEADER", "x-real-ip") };
+        let config = ServerConfig::from_env().unwrap();
+        assert_eq!(config.trusted_proxies.header(), ClientIpHeader::XRealIp);
+
+        unsafe { env::set_var("TRUSTED_PROXY_HEADER", "forwarded") };
+        let err = ServerConfig::from_env().unwrap_err();
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.contains("TRUSTED_PROXY_HEADER"))
+        );
+        unsafe { env::remove_var("TRUSTED_PROXY_HEADER") };
 
         unsafe { env::set_var("TRUSTED_PROXIES", "not-an-ip") };
         let err = ServerConfig::from_env().unwrap_err();

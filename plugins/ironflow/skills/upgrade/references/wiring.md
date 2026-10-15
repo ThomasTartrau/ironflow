@@ -161,3 +161,38 @@ of those tags take it:
 A worker released before this change sends no capabilities and still takes every run, so
 workers can be upgraded one at a time. Upgrade the API server first: an older server
 ignores the filter and hands any run to an upgraded worker.
+
+## rate-limit-client-ip-header
+- kind: behavior
+- since: ironflow-api after 2.52.1 (#198)
+- detect: `TRUSTED_PROXIES`
+
+Behind a trusted proxy the rate limiters read one forwarding header only, chosen by
+`TRUSTED_PROXY_HEADER`: `x-forwarded-for` (default) or `x-real-ip`. `X-Real-IP` is no
+longer a fallback when `X-Forwarded-For` is missing, so behind a proxy that only sets
+`X-Real-IP` the client IP is the proxy itself: every client shares the proxy's single
+bucket, and users lock each other out, until the header is configured. A server served
+without connect info no longer puts every client in one shared bucket: its IP limit is
+skipped, with a warning logged once, so serve it with
+`into_make_service_with_connect_info::<SocketAddr>()`.
+
+```diff
+  TRUSTED_PROXIES=10.0.0.0/8
++ TRUSTED_PROXY_HEADER=x-real-ip
+```
+
+## api-key-rate-limit-override-admin
+- kind: behavior
+- since: ironflow-api after 2.52.1 (#198)
+- detect: `rate_limit_override`
+
+Only an admin may set `rate_limit_override` on an API key: a member gets `403`. An override
+already stored on a key owned by a member is ignored, and the key uses the server-wide
+limit. A request is counted under an API key only once its secret is verified: a token
+whose secret does not verify counts on the IP bucket, and a client guessing secrets of one
+key gets `429` after 10 verifications a minute.
+
+```diff
+- ironflow-cli api-key create --name ci --scope runs_read --rate-limit-override 0
++ ironflow-cli api-key create --name ci --scope runs_read
+```

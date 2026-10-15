@@ -1,6 +1,7 @@
 //! The account bucket of the credential routes.
 
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{Value as JsonValue, from_slice};
 use tower::ServiceExt;
@@ -108,7 +109,10 @@ async fn expired_counters_are_swept_past_the_threshold() {
     let stale = now_epoch() - WINDOW_SECS - 1;
     for i in 0..SWEEP_THRESHOLD {
         ctx.limiter.counters.insert(
-            RateLimitKey::Account(format!("user{i}@x.dev")),
+            RateLimitKey::Account {
+                route: "/sign-in".to_string(),
+                email: format!("user{i}@x.dev"),
+            },
             WindowEntry {
                 count: AtomicU32::new(1),
                 window_start: AtomicU64::new(stale),
@@ -121,4 +125,55 @@ async fn expired_counters_are_swept_past_the_threshold() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(ctx.limiter.counters.len(), 1);
+}
+
+#[tokio::test]
+async fn sign_up_flood_does_not_block_sign_in() {
+    let ctx = by_email(2);
+    let body = r#"{"email":"alice@ironflow.dev","password":"a"}"#;
+    let attempts = [
+        StatusCode::OK,
+        StatusCode::OK,
+        StatusCode::TOO_MANY_REQUESTS,
+    ];
+    for (i, expected) in attempts.into_iter().enumerate() {
+        let peer = format!("198.51.100.{}", i + 1);
+        let resp = test_app(ctx.clone())
+            .oneshot(email_request_to("/sign-up", &peer, body))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), expected, "sign-up {}", i + 1);
+    }
+
+    let resp = test_app(ctx)
+        .oneshot(email_request_to("/sign-in", "198.51.100.9", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn credential_request_without_peer_is_counted_on_the_account() {
+    let ctx = by_email(2);
+    let body = r#"{"email":"dave@ironflow.dev","password":"pw"}"#;
+    let no_peer_sign_in = || {
+        Request::builder()
+            .method("POST")
+            .uri("/sign-in")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap()
+    };
+
+    for expected_remaining in ["1", "0"] {
+        let resp = test_app(ctx.clone())
+            .oneshot(no_peer_sign_in())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers()["x-ratelimit-limit"], "2");
+        assert_eq!(resp.headers()["x-ratelimit-remaining"], expected_remaining);
+    }
+    let resp = test_app(ctx).oneshot(no_peer_sign_in()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
 }

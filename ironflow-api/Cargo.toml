@@ -34,7 +34,7 @@ ironflow-types = { version = "0.2.2", path = "../ironflow-types" }
 
 axum = { version = "0.8", features = ["json"] }
 rust-embed = { version = "8", optional = true }
-tokio = { version = "1", features = ["macros", "time"] }
+tokio = { version = "1", features = ["macros", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7"
 futures-util = "0.3"

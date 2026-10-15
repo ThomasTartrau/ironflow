@@ -136,7 +136,8 @@ fn write_server_main(dir: &Path, _name: &str) -> Result<()> {
     let src = dir.join("src");
     fs::create_dir_all(&src)?;
 
-    let content = r#"use std::sync::Arc;
+    let content = r#"use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Result;
 use ironflow_api::state::AppState;
@@ -183,7 +184,13 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind("0.0.0.0:3000").await?;
     tracing::info!("listening on {}", listener.local_addr()?);
 
-    axum::serve(listener, router).await?;
+    // The rate limiters key on the client address: without connect info
+    // they cannot see it.
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 "#;
@@ -344,5 +351,27 @@ mod tests {
         let result = execute(&args);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not empty"));
+    }
+
+    #[test]
+    #[serial]
+    fn init_server_serves_with_connect_info() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("connect-info");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let args = InitArgs {
+            non_interactive: true,
+            name: Some("connect-info".to_string()),
+            force: false,
+        };
+
+        execute(&args).unwrap();
+
+        let main_rs = fs::read_to_string(project_dir.join("src/main.rs")).unwrap();
+        assert!(main_rs.contains("use std::net::SocketAddr;"));
+        assert!(main_rs.contains("into_make_service_with_connect_info::<SocketAddr>()"));
     }
 }

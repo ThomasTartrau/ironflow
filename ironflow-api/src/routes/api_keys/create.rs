@@ -76,7 +76,7 @@ pub struct CreateApiKeyResponse {
             (status = 201, description = "API key created successfully", body = CreateApiKeyResponse),
             (status = 400, description = "Invalid input"),
             (status = 401, description = "Unauthorized"),
-            (status = 403, description = "Forbidden (member trying to assign forbidden scopes)")
+            (status = 403, description = "Forbidden (member assigning forbidden scopes or a rate_limit_override)")
         ),
         security(("Bearer" = []))
     )
@@ -95,6 +95,11 @@ pub async fn create_api_key(
     }
 
     if !user.is_admin && !ApiKeyScope::all_allowed_for_member(&req.scopes) {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Only admins may lift their own key above the server-wide limit.
+    if !user.is_admin && req.rate_limit_override.is_some() {
         return Err(ApiError::Forbidden);
     }
 
@@ -166,7 +171,16 @@ fn generate_api_key() -> String {
 
 #[cfg(test)]
 mod tests {
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::post;
+    use http_body_util::BodyExt;
+    use serde_json::{Value as JsonValue, from_slice};
+    use tower::ServiceExt;
+
     use super::*;
+    use crate::routes::test_helpers::{create_user_auth_header, test_state};
 
     use std::sync::Arc;
 
@@ -349,5 +363,53 @@ mod tests {
         let key1 = generate_api_key();
         let key2 = generate_api_key();
         assert_ne!(key1, key2);
+    }
+
+    async fn post_create(is_admin: bool, body: &str) -> (StatusCode, JsonValue) {
+        let state = test_state();
+        let username = if is_admin { "admin" } else { "member" };
+        let auth = create_user_auth_header(&state, username, is_admin).await;
+        let app = Router::new()
+            .route("/", post(create_api_key))
+            .with_state(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("authorization", auth)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json = if bytes.is_empty() {
+            JsonValue::Null
+        } else {
+            from_slice(&bytes).unwrap()
+        };
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn member_setting_rate_limit_override_is_forbidden() {
+        let body = r#"{"name":"k","scopes":["runs_read"],"rate_limit_override":0}"#;
+        let (status, _) = post_create(false, body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn admin_can_set_rate_limit_override() {
+        let body = r#"{"name":"k","scopes":["runs_read"],"rate_limit_override":0}"#;
+        let (status, json) = post_create(true, body).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(json["data"]["rate_limit_override"], 0);
+    }
+
+    #[tokio::test]
+    async fn member_without_rate_limit_override_can_create_key() {
+        let body = r#"{"name":"k","scopes":["runs_read"]}"#;
+        let (status, json) = post_create(false, body).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(json["data"]["rate_limit_override"].is_null());
     }
 }

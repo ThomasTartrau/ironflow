@@ -20,7 +20,7 @@ pub struct CreateApiKeyTool {
     pub scopes: Vec<String>,
     /// Optional expiration date in ISO 8601 format.
     pub expires_at: Option<String>,
-    /// Optional per-key rate limit override (requests per minute).
+    /// Optional per-key rate limit override (requests per minute). Admin only.
     pub rate_limit_override: Option<u32>,
 }
 

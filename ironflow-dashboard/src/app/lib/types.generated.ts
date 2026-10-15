@@ -5375,7 +5375,7 @@ export interface operations {
 				};
 				content?: never;
 			};
-			/** @description Forbidden (member trying to assign forbidden scopes) */
+			/** @description Forbidden (member assigning forbidden scopes or a rate_limit_override) */
 			403: {
 				headers: {
 					[name: string]: unknown;

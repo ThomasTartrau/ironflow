@@ -2,7 +2,7 @@
 //! peer is a trusted proxy (pentest AUTH-VULN-08).
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderValue, Request, StatusCode};
 use tower::ServiceExt;
 
 use super::*;
@@ -65,9 +65,12 @@ async fn hops_forged_before_the_trusted_proxy_are_ignored() {
 }
 
 #[tokio::test]
-async fn x_real_ip_from_a_trusted_proxy_picks_the_bucket() {
+async fn x_real_ip_header_mode_reads_x_real_ip() {
     let mut ctx = test_ctx(1);
-    ctx.trusted_proxies = "10.0.0.2".parse().unwrap();
+    ctx.trusted_proxies = "10.0.0.2"
+        .parse::<TrustedProxies>()
+        .unwrap()
+        .with_header(ClientIpHeader::XRealIp);
     for (real_ip, expected) in [
         ("198.51.100.1", StatusCode::OK),
         ("198.51.100.2", StatusCode::OK),
@@ -77,21 +80,49 @@ async fn x_real_ip_from_a_trusted_proxy_picks_the_bucket() {
         let resp = test_app(ctx.clone()).oneshot(req).await.unwrap();
         assert_eq!(resp.status(), expected, "x-real-ip {real_ip}");
     }
+
+    // A forged X-Forwarded-For naming an exhausted client is not read.
+    let req = with_peer(
+        Request::builder()
+            .uri("/test")
+            .header("x-real-ip", "198.51.100.3")
+            .header("x-forwarded-for", "198.51.100.1")
+            .body(Body::empty())
+            .unwrap(),
+        "10.0.0.2",
+    );
+    let resp = test_app(ctx).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]
-async fn requests_without_peer_address_share_one_bucket() {
-    let ctx = test_ctx(1);
-    for (forwarded_for, expected) in [
-        ("9.9.9.1", StatusCode::OK),
-        ("9.9.9.2", StatusCode::TOO_MANY_REQUESTS),
+async fn x_real_ip_is_not_a_fallback_for_x_forwarded_for() {
+    let mut ctx = test_ctx(1);
+    ctx.trusted_proxies = "10.0.0.0/8".parse().unwrap();
+    for (real_ip, expected) in [
+        ("198.51.100.1", StatusCode::OK),
+        // Another address, same proxy peer: same bucket.
+        ("198.51.100.2", StatusCode::TOO_MANY_REQUESTS),
     ] {
-        let req = Request::builder()
-            .uri("/test")
-            .header("x-forwarded-for", forwarded_for)
-            .body(Body::empty())
-            .unwrap();
+        let req = header_request("10.0.0.2", "x-real-ip", real_ip);
         let resp = test_app(ctx.clone()).oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), expected, "x-forwarded-for {forwarded_for}");
+        assert_eq!(resp.status(), expected, "x-real-ip {real_ip}");
+    }
+}
+
+#[tokio::test]
+async fn requests_without_peer_do_not_share_one_bucket() {
+    let ctx = test_ctx(1);
+    for forwarded_for in ["9.9.9.1", "9.9.9.2"] {
+        let value = HeaderValue::from_static(forwarded_for);
+        let mut req = no_peer_request();
+        req.headers_mut().insert("x-forwarded-for", value);
+        let resp = test_app(ctx.clone()).oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "x-forwarded-for {forwarded_for}"
+        );
+        assert!(!resp.headers().contains_key("x-ratelimit-limit"));
     }
 }

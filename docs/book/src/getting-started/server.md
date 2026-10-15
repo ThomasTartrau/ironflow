@@ -23,7 +23,8 @@ The repository includes a complete example server:
 | `ALLOWED_ORIGINS` | same-origin | Comma-separated CORS origins |
 | `RATE_LIMIT_AUTH` | `10` | Sign-in / sign-up requests per minute, per client IP and per targeted email (`0` disables) |
 | `RATE_LIMIT_GENERAL` | `60` | Other API requests per minute, per caller (`0` disables) |
-| `TRUSTED_PROXIES` | -- | Comma-separated IPs or CIDR ranges of the reverse proxies whose `X-Forwarded-For` is believed |
+| `TRUSTED_PROXIES` | -- | Comma-separated IPs or CIDR ranges of the reverse proxies whose forwarding header is believed |
+| `TRUSTED_PROXY_HEADER` | `x-forwarded-for` | Header a trusted proxy reports the client IP in: `x-forwarded-for`, or `x-real-ip` to read only that header. There is no fallback between the two |
 | `ARTIFACTS_DIR` | -- | Filesystem root for step [artifacts](../concepts/artifacts.md); unset disables them |
 | `ARTIFACT_MAX_BYTES` | `104857600` | Maximum size of one artifact (100 MiB) |
 | `IRONFLOW_SECRET_KEYS` | -- | Versioned AES-GCM keys for the secret store, see [Secret encryption keys](#secret-encryption-keys); unset disables secrets |
@@ -118,16 +119,25 @@ rewrites `Host`), and must overwrite any value sent by the client.
 
 An unauthenticated request is rate limited under its client IP: the address of the TCP
 peer. Serve the router with `into_make_service_with_connect_info::<SocketAddr>()`, as the
-example server does; without it every client shares one bucket and a warning is logged.
+example server does; without it the IP limit is skipped and a warning is logged once.
 
-`X-Forwarded-For` and `X-Real-IP` are written by the client, so they are ignored unless the
-peer is listed in `TRUSTED_PROXIES`. Behind a reverse proxy, list it
-(`TRUSTED_PROXIES=10.0.0.0/8`): `X-Forwarded-For` is then read from the right, trusted hops
-are skipped and the first other address is the client. Without it, every user shares the
-proxy's bucket.
+Forwarding headers are written by the client, so they are ignored unless the peer is listed
+in `TRUSTED_PROXIES`. Behind a reverse proxy, list it (`TRUSTED_PROXIES=10.0.0.0/8`). Only
+the header named by `TRUSTED_PROXY_HEADER` is read then. With the default,
+`x-forwarded-for`, `X-Forwarded-For` is read from the right, trusted hops are skipped and
+the first other address is the client. With `x-real-ip`, `X-Real-IP` is the client. The
+other header is never read, not even as a fallback. Without `TRUSTED_PROXIES`, every user
+shares the proxy's bucket.
+
+A request with an API key is counted under that key only once its secret is verified.
+A secret that does not verify counts on the IP bucket. Unverified secrets are checked at
+most 10 times per minute per client and key, then answered `429`. Only an admin may set
+an API key's `rate_limit_override` (a member gets `403`), and it is honoured only for keys
+owned by an admin.
 
 Sign-in and sign-up are also counted per targeted email, so attempts on one account spread
-over many addresses are limited too.
+over many addresses are limited too. The two routes have separate counters: a sign-up flood
+does not lock the account out of sign-in.
 
 ### Accounts and passwords
 
