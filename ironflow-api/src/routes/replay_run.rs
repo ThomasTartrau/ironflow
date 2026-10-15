@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_engine::error::EngineError;
 use ironflow_engine::notify::{Event, RunCreatedEvent};
 use ironflow_engine::replay_policy::is_run_replayable;
 use ironflow_store::entities::ApiKeyScope;
@@ -22,6 +23,8 @@ use crate::state::AppState;
 ///
 /// Creates a new `Pending` run with `TriggerKind::Replay` pointing to the
 /// original, always on the current handler version. The original run is not modified.
+///
+/// Returns 429 `MONTHLY_BUDGET_EXCEEDED` if the global monthly cost quota is exhausted.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -34,7 +37,8 @@ use crate::state::AppState;
             (status = 400, description = "Run cannot be replayed"),
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
-            (status = 404, description = "Run not found or workflow not registered")
+            (status = 404, description = "Run not found or workflow not registered"),
+            (status = 429, description = "Monthly cost quota exhausted (MONTHLY_BUDGET_EXCEEDED)")
         ),
         security(("Bearer" = []))
     )
@@ -60,6 +64,17 @@ pub async fn replay_run(
     let Some(handler) = state.engine.get_handler(&original.workflow_name) else {
         return Err(ApiError::WorkflowNotFound(original.workflow_name.clone()));
     };
+
+    state
+        .engine
+        .check_monthly_quota(&original.workflow_name)
+        .await
+        .map_err(|e| match e {
+            EngineError::MonthlyBudgetExceeded { .. } => {
+                ApiError::MonthlyBudgetExceeded(e.to_string())
+            }
+            other => ApiError::Internal(other.to_string()),
+        })?;
 
     let new_run = state
         .store
@@ -122,6 +137,7 @@ mod tests {
     use http_body_util::BodyExt;
     use ironflow_auth::jwt::{AccessToken, JwtConfig};
     use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_engine::budget::BudgetConfig;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
@@ -172,8 +188,12 @@ mod tests {
     }
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
+        test_state_with_quota(store, BudgetConfig::new())
+    }
+
+    fn test_state_with_quota(store: Arc<InMemoryStore>, budget: BudgetConfig) -> AppState {
         let provider = Arc::new(ClaudeCodeProvider::new());
-        let mut engine = Engine::new(store.clone(), provider);
+        let mut engine = Engine::new(store.clone(), provider).with_budget_config(budget);
         engine.register(V2Handler).unwrap();
         engine.register(GpuHandler).unwrap();
         let jwt_config = Arc::new(JwtConfig {
@@ -402,6 +422,67 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = from_slice(&body).unwrap();
         assert_eq!(json_val["error"]["code"], "WORKFLOW_NOT_FOUND");
+    }
+
+    #[tokio::test]
+    async fn replay_returns_429_when_monthly_quota_exhausted() {
+        let store = Arc::new(InMemoryStore::new());
+        let original = create_run_in(
+            &store,
+            WORKFLOW,
+            Some("2.0.0"),
+            &[RunStatus::Running, RunStatus::Completed],
+        )
+        .await;
+
+        let budget = BudgetConfig::new().monthly_cost_limit_usd(Decimal::ZERO);
+        let state = test_state_with_quota(store.clone(), budget);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
+        let resp = send_replay(state, auth_header, original.id).await;
+        assert_eq!(resp.status(), HttpStatusCode::TOO_MANY_REQUESTS);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["error"]["code"], "MONTHLY_BUDGET_EXCEEDED");
+
+        let runs = store.list_runs(RunFilter::default(), 1, 50).await.unwrap();
+        assert_eq!(runs.total, 1);
+    }
+
+    #[tokio::test]
+    async fn replay_succeeds_when_monthly_quota_has_room() {
+        let store = Arc::new(InMemoryStore::new());
+        let original = create_run_in(
+            &store,
+            WORKFLOW,
+            Some("2.0.0"),
+            &[RunStatus::Running, RunStatus::Completed],
+        )
+        .await;
+
+        let budget = BudgetConfig::new().monthly_cost_limit_usd(Decimal::new(10000, 2));
+        let state = test_state_with_quota(store, budget);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
+        let resp = send_replay(state, auth_header, original.id).await;
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn replay_unregistered_workflow_returns_404_even_when_quota_exhausted() {
+        let store = Arc::new(InMemoryStore::new());
+        let original = create_run_in(
+            &store,
+            "removed-wf",
+            Some("1.0.0"),
+            &[RunStatus::Running, RunStatus::Completed],
+        )
+        .await;
+
+        let budget = BudgetConfig::new().monthly_cost_limit_usd(Decimal::ZERO);
+        let state = test_state_with_quota(store, budget);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
+        let resp = send_replay(state, auth_header, original.id).await;
+        assert_eq!(resp.status(), HttpStatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

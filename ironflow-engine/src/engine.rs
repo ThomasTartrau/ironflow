@@ -770,12 +770,28 @@ impl Engine {
     /// The window is the current calendar month in UTC. Runs already in flight
     /// are never interrupted -- only creation is refused.
     ///
+    /// The enqueue helpers call it themselves. The API also calls it before
+    /// retrying or replaying a run, as those create runs without going through
+    /// the enqueue helpers.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineError::MonthlyBudgetExceeded`] when the accumulated cost
     /// of the month has reached the configured quota. Returns
     /// [`EngineError::Store`] when the aggregate query fails.
-    async fn check_monthly_quota(&self, workflow_name: &str) -> Result<(), EngineError> {
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::engine::Engine;
+    ///
+    /// # use ironflow_engine::error::EngineError;
+    /// # async fn example(engine: &Engine) -> Result<(), EngineError> {
+    /// engine.check_monthly_quota("deploy").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn check_monthly_quota(&self, workflow_name: &str) -> Result<(), EngineError> {
         let Some(limit) = self.budget.monthly_cost_limit_usd else {
             return Ok(());
         };
