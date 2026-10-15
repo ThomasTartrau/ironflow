@@ -5,7 +5,9 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::ScheduleResponse;
 use crate::error::ApiError;
 use crate::response::ok_paged;
@@ -53,10 +55,11 @@ fn default_per_page() -> u32 {
     )
 )]
 pub async fn list_schedules(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Query(query): Query<ListSchedulesQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::WorkflowsRead, false)?;
     let page = state
         .store
         .list_schedules(query.page, query.per_page)

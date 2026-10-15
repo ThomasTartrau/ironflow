@@ -7,9 +7,11 @@ use tokio::task::spawn_blocking;
 use tracing::warn;
 
 use ironflow_engine::VERSION as ENGINE_VERSION;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_templates::error::TemplateError;
 use ironflow_templates::registry::{RegistryEntry, fetch_registry_index, resolve_registry_url};
 
+use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::response::ok;
 
@@ -78,7 +80,8 @@ impl From<RegistryEntry> for TemplateListEntry {
         )
     )
 )]
-pub async fn list_registry_templates(_auth: Authenticated) -> Result<impl IntoResponse, ApiError> {
+pub async fn list_registry_templates(auth: Authenticated) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::WorkflowsRead, false)?;
     let response = fetch_registry_listing(resolve_registry_url(None)).await?;
     Ok(ok(response))
 }

@@ -6,7 +6,9 @@ use axum::response::IntoResponse;
 use uuid::Uuid;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 
+use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -42,6 +44,7 @@ pub async fn delete_approval_delegation(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsManage, false)?;
     let delegation = state
         .store
         .find_delegation_by_id(id)
