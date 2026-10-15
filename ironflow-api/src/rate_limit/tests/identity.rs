@@ -573,8 +573,8 @@ async fn api_key_without_peer_uses_its_bucket_and_a_per_key_budget() {
     assert_eq!(remaining(&resp), 59);
 
     // Without a peer there is no IP bucket, but guessing still spends the
-    // budget of the key.
-    for i in 0..KEY_CHECKS_PER_MINUTE {
+    // budget of the key. The first verification above already spent one.
+    for i in 0..KEY_CHECKS_PER_MINUTE - 1 {
         let resp = test_app(ctx.clone())
             .oneshot(no_peer_bearer(&format!("irfl_abcdef12WRONG{i}")))
             .await
