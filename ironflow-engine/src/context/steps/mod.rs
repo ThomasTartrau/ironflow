@@ -5,7 +5,7 @@
 //! descendants of `context`, so they read its private fields directly.
 
 pub(super) mod agent;
-mod approval;
+pub(super) mod approval;
 mod conditions;
 mod decision;
 mod delay;

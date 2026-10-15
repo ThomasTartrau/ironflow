@@ -19,6 +19,9 @@ In plan mode:
 - an [approval gate](../concepts/approval-gates.md) is recorded and stepped
   over instead of suspending the run;
 - a delay is recorded without sleeping;
+- `ctx.store()` and `ctx.secrets()` return an error, so a handler cannot read
+  or write the store or a secret while planning: the plan stops there, partial;
+  check `ctx.is_planning()` first to plan past such a call;
 - nothing is written: no run, no step, no dependency, no artifact.
 
 Each step method returns a synthetic, **success-shaped** output instead
@@ -133,11 +136,16 @@ sums sequential steps and counts each parallel wave once, at its slowest member.
 `depth` incremented and `workflow` set to the child's name. `max_depth` bounds
 that expansion, so a workflow that invokes itself stops there.
 
-Two guards keep a plan bounded, and both set `truncated` with an
+Three guards keep a plan bounded, and all set `truncated` with an
 `incomplete_reason`:
 
 - the depth limit above;
-- a hard cap of 1000 planned steps, which stops a handler that loops.
+- a hard cap of 1000 planned steps, which stops a handler that loops, whatever
+  the step kind: shell, HTTP, agent, operation, parallel, sub-workflow, delay,
+  signal, approval, decision, skip or human input;
+- a timeout, `PlanOptions::timeout` (`DEFAULT_PLAN_TIMEOUT`, 10 s by default),
+  which stops a handler that awaits forever. It interrupts the handler at an
+  `.await`: a loop that never yields is bounded by the step cap instead.
 
 A handler that returns an error mid-plan does not fail the request either: the
 partial plan is returned, with `incomplete_reason` carrying the error.

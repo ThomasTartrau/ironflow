@@ -20,7 +20,7 @@ use ironflow_core::error::OperationError;
 use ironflow_core::provider::{AgentOutput, AgentProvider};
 use ironflow_core::providers::record_replay::RecordReplayProvider;
 use ironflow_engine::config::{
-    AgentStepConfig, ApprovalConfig, DelayConfig, HttpConfig, ShellConfig, StepConfig,
+    AgentStepConfig, ApprovalConfig, Approvers, DelayConfig, HttpConfig, ShellConfig, StepConfig,
 };
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
@@ -125,6 +125,27 @@ impl WorkflowHandler for GatedDeploy {
             ctx.shell("build", ShellConfig::new("cargo build")).await?;
             ctx.approval("gate", ApprovalConfig::new("Ship to production?"))
                 .await?;
+            ctx.shell("ship", ShellConfig::new("./ship.sh")).await?;
+            Ok(())
+        })
+    }
+}
+
+/// Like [`GatedDeploy`], with a gate that needs two distinct approvers.
+struct TwoApproverDeploy;
+
+impl WorkflowHandler for TwoApproverDeploy {
+    fn name(&self) -> &str {
+        "two-approver-deploy"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.approval(
+                "gate",
+                ApprovalConfig::new("Ship to production?").requiring(Approvers::at_least(2)),
+            )
+            .await?;
             ctx.shell("ship", ShellConfig::new("./ship.sh")).await?;
             Ok(())
         })
@@ -632,6 +653,30 @@ async fn test_engine_without_approval_mock_suspends_and_resumes() {
     assert_eq!(resumed.run_id(), suspended.run_id());
     assert_eq!(resumed.step_names(), vec!["build", "gate", "ship"]);
     assert_eq!(resumed.step("gate").status(), StepStatus::Completed);
+}
+
+#[tokio::test]
+async fn test_engine_resume_records_every_vote_a_multi_approver_gate_requires() {
+    let mut harness = TestEngine::new()
+        .with_handler(TwoApproverDeploy)
+        .with_mock_shell(|_cfg| Ok(MockShellOutput::ok("ok")));
+
+    let suspended = harness.run(json!({})).await.expect("the first pass ran");
+    assert_eq!(suspended.status(), RunStatus::AwaitingApproval);
+    assert!(suspended.step("gate").raw().approvals.is_empty());
+
+    let resumed = harness
+        .resume(suspended.run_id())
+        .await
+        .expect("the resume pass ran");
+
+    assert_eq!(resumed.status(), RunStatus::Completed);
+    assert_eq!(resumed.step_names(), vec!["gate", "ship"]);
+    let gate = resumed.step("gate");
+    assert_eq!(gate.status(), StepStatus::Completed);
+    let approvals = &gate.raw().approvals;
+    assert_eq!(approvals.len(), 2);
+    assert_ne!(approvals[0].user_id, approvals[1].user_id);
 }
 
 // ---------------------------------------------------------------------------

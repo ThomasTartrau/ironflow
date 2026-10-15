@@ -21,7 +21,7 @@ use super::{StepArtifacts, StepOutput};
 /// use ironflow_engine::executor::{StepOutput, SubWorkflowOutput};
 ///
 /// # async fn example(ctx: &WorkflowContext, child: &SubWorkflowOutput) -> Result<(), EngineError> {
-/// for step in ctx.store().list_steps(child.run_id()).await? {
+/// for step in ctx.store()?.list_steps(child.run_id()).await? {
 ///     println!("{}: {}", step.name, StepOutput::from(&step).stdout());
 /// }
 /// # Ok(())

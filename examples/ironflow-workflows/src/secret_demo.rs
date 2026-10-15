@@ -26,7 +26,7 @@ impl WorkflowHandler for SecretDemo {
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            let store = ctx.store();
+            let store = ctx.store()?;
 
             let secret = store
                 .get_secret("demo/api-key")

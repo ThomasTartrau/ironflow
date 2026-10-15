@@ -106,9 +106,8 @@ impl WorkflowContext {
         if let Some(plan) = self.plan().cloned() {
             self.position += 1;
             let mut recorder = lock_plan(&plan);
-            if recorder.record(name, StepKind::Decision, &self.workflow_name, None) {
-                recorder.set_last(vec![name.to_string()]);
-            }
+            recorder.record_or_stop(name, StepKind::Decision, &self.workflow_name, None)?;
+            recorder.set_last(vec![name.to_string()]);
             return Ok(DecisionOutput {
                 model: None,
                 answers: BTreeMap::new(),

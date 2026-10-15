@@ -52,14 +52,13 @@ impl WorkflowContext {
             self.position += 1;
             let mut recorder = lock_plan(&plan);
             recorder.seed_estimate(name, config.duration());
-            if recorder.record(
+            recorder.record_or_stop(
                 name,
                 StepKind::Custom("delay".to_string()),
                 &self.workflow_name,
                 None,
-            ) {
-                recorder.set_last(vec![name.to_string()]);
-            }
+            )?;
+            recorder.set_last(vec![name.to_string()]);
             return Ok(());
         }
 
@@ -87,7 +86,7 @@ impl WorkflowContext {
 
         let trace_id = step_trace_id(self.run_id(), name, position);
         let step = self
-            .store()
+            .store
             .create_step(NewStep {
                 run_id: self.run_id(),
                 trace_id,
@@ -103,7 +102,7 @@ impl WorkflowContext {
         self.start_step(step.id, now).await?;
 
         if config.is_zero() {
-            self.store()
+            self.store
                 .update_step(
                     step.id,
                     StepUpdate {
@@ -120,7 +119,7 @@ impl WorkflowContext {
 
         let wake_at = now + Duration::seconds(config.duration_secs() as i64);
 
-        self.store()
+        self.store
             .update_step(
                 step.id,
                 StepUpdate {

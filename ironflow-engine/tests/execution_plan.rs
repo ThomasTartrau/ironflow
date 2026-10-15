@@ -3,25 +3,36 @@
 use std::fs::remove_file;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
+use ironflow_core::error::OperationError;
 use ironflow_core::provider::AgentProvider;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_core::providers::record_replay::RecordReplayProvider;
 use ironflow_engine::config::delay::DelayConfig;
-use ironflow_engine::config::{ApprovalConfig, ShellConfig, StepConfig};
+use ironflow_engine::config::{
+    ApprovalConfig, DecisionConfig, HumanInputConfig, ShellConfig, StepConfig,
+};
 use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::decision::DecisionAnswers;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
-use ironflow_engine::plan::{ConditionResult, PlanOptions};
+use ironflow_engine::operation::{Operation, OperationContext};
+use ironflow_engine::plan::{
+    ConditionResult, DEFAULT_PLAN_TIMEOUT, MAX_PLANNED_STEPS, PlanOptions,
+};
+use ironflow_engine::signal::Signal;
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::models::{RunFilter, StepKind, TriggerKind};
+use ironflow_store::models::{RunFilter, RunStatus, StepKind, TriggerKind};
 use ironflow_store::store::RunStore;
 
 /// Wall-clock budget for a single test; a plan must never block on a process.
@@ -804,6 +815,355 @@ async fn plan_skips_estimation_when_asked_to() {
             .expect("plan built");
 
         assert!(plan.estimated_duration.is_none());
+    })
+    .await
+    .expect("test timed out");
+}
+
+// ---------------------------------------------------------------------------
+// Plan mode bounds and isolation
+// ---------------------------------------------------------------------------
+
+/// A custom operation that does nothing; plan mode never calls it anyway.
+struct NoopOp;
+
+#[async_trait]
+impl Operation for NoopOp {
+    fn kind(&self) -> &str {
+        "noop"
+    }
+
+    async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+        Ok(json!({}))
+    }
+}
+
+/// A signal nobody sends: plan mode never waits for it.
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct Ping {}
+
+impl Signal for Ping {
+    const NAME: &'static str = "test.ping";
+}
+
+/// Answers of the decision step of [`CappedLoop`].
+#[derive(Debug, DecisionAnswers)]
+struct Urgency {
+    #[noul("Does this convey urgency?")]
+    urgent: f64,
+}
+
+/// A sub-workflow without any step, so each call records exactly one step.
+struct EmptyChild;
+
+impl TypedWorkflow for EmptyChild {
+    type Input = ();
+}
+
+impl WorkflowHandler for EmptyChild {
+    fn name(&self) -> &str {
+        "empty-child"
+    }
+
+    fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move { Ok(()) })
+    }
+}
+
+/// Step kind repeated by a [`CappedLoop`].
+#[derive(Clone, Copy, Debug)]
+enum LoopKind {
+    Operation,
+    Parallel,
+    SubWorkflow,
+    Delay,
+    Signal,
+    Approval,
+    Decision,
+    Skip,
+    HumanInput,
+}
+
+impl LoopKind {
+    const ALL: [LoopKind; 9] = [
+        LoopKind::Operation,
+        LoopKind::Parallel,
+        LoopKind::SubWorkflow,
+        LoopKind::Delay,
+        LoopKind::Signal,
+        LoopKind::Approval,
+        LoopKind::Decision,
+        LoopKind::Skip,
+        LoopKind::HumanInput,
+    ];
+
+    fn workflow(self) -> &'static str {
+        match self {
+            LoopKind::Operation => "loop-operation",
+            LoopKind::Parallel => "loop-parallel",
+            LoopKind::SubWorkflow => "loop-sub-workflow",
+            LoopKind::Delay => "loop-delay",
+            LoopKind::Signal => "loop-signal",
+            LoopKind::Approval => "loop-approval",
+            LoopKind::Decision => "loop-decision",
+            LoopKind::Skip => "loop-skip",
+            LoopKind::HumanInput => "loop-human-input",
+        }
+    }
+}
+
+/// Calls one step kind far more often than the plan cap allows, counting the
+/// calls that returned.
+struct CappedLoop {
+    kind: LoopKind,
+    iterations: Arc<AtomicUsize>,
+}
+
+impl WorkflowHandler for CappedLoop {
+    fn name(&self) -> &str {
+        self.kind.workflow()
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            for index in 0..MAX_PLANNED_STEPS + 50 {
+                let name = format!("step-{index}");
+                match self.kind {
+                    LoopKind::Operation => {
+                        ctx.operation(&name, &NoopOp).await?;
+                    }
+                    LoopKind::Parallel => {
+                        let wave =
+                            vec![(name.as_str(), StepConfig::Shell(ShellConfig::new("echo p")))];
+                        ctx.parallel(wave, true).await?;
+                    }
+                    LoopKind::SubWorkflow => {
+                        ctx.workflow(&EmptyChild, ()).await?;
+                    }
+                    LoopKind::Delay => {
+                        ctx.delay(&name, DelayConfig::from_secs(1)).await?;
+                    }
+                    LoopKind::Signal => {
+                        ctx.wait_for_signal::<Ping>(&name, "key", Duration::from_secs(60))
+                            .await?;
+                    }
+                    LoopKind::Approval => {
+                        ctx.approval(&name, ApprovalConfig::new("Go?")).await?;
+                    }
+                    LoopKind::Decision => {
+                        let config = DecisionConfig::new("state").answers::<Urgency>();
+                        match ctx.decision(&name, config).await {
+                            // No answer exists while planning: this handler
+                            // goes on without it, only the cap stops it.
+                            Ok(_) | Err(EngineError::Decision(_)) => {}
+                            Err(err) => return Err(err),
+                        }
+                    }
+                    LoopKind::Skip => {
+                        ctx.skip(&name, "not needed").await?;
+                    }
+                    LoopKind::HumanInput => {
+                        ctx.human_input::<Value>(&name, HumanInputConfig::new("Who?"))
+                            .await?;
+                    }
+                }
+                self.iterations.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(())
+        })
+    }
+}
+
+/// Plans for an hour unless the plan timeout stops it.
+struct Endless;
+
+impl WorkflowHandler for Endless {
+    fn name(&self) -> &str {
+        "endless"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.shell("before", ShellConfig::new("echo before")).await?;
+            sleep(Duration::from_secs(3600)).await;
+            ctx.shell("after", ShellConfig::new("echo after")).await?;
+            Ok(())
+        })
+    }
+}
+
+/// Reaches for the store, or the secrets, mid-handler.
+struct Snooping {
+    secrets: bool,
+    reached: Arc<AtomicBool>,
+}
+
+impl WorkflowHandler for Snooping {
+    fn name(&self) -> &str {
+        if self.secrets {
+            "snooping-secrets"
+        } else {
+            "snooping-store"
+        }
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.shell("before", ShellConfig::new("echo before")).await?;
+            if self.secrets {
+                #[cfg(feature = "secret-store")]
+                {
+                    let secrets = ctx.secrets()?;
+                    self.reached.store(true, Ordering::SeqCst);
+                    secrets
+                        .set("token", "leaked")
+                        .await
+                        .map_err(EngineError::Store)?;
+                }
+            } else {
+                let store = ctx.store()?;
+                self.reached.store(true, Ordering::SeqCst);
+                store
+                    .update_run_status(ctx.run_id(), RunStatus::Cancelled)
+                    .await?;
+            }
+            ctx.shell("after", ShellConfig::new("echo after")).await?;
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn plan_stops_the_handler_at_the_step_cap_for_every_step_kind() {
+    timeout(TEST_TIMEOUT, async {
+        for kind in LoopKind::ALL {
+            let iterations = Arc::new(AtomicUsize::new(0));
+            let mut engine = engine_with(test_store());
+            engine
+                .register(CappedLoop {
+                    kind,
+                    iterations: iterations.clone(),
+                })
+                .unwrap();
+
+            let plan = engine
+                .plan_handler(kind.workflow(), json!({}), PlanOptions::default())
+                .await
+                .expect("a capped handler still yields a plan");
+
+            assert_eq!(
+                iterations.load(Ordering::SeqCst),
+                MAX_PLANNED_STEPS,
+                "{kind:?} kept running past the cap"
+            );
+            assert_eq!(plan.steps.len(), MAX_PLANNED_STEPS, "{kind:?}");
+            assert!(plan.truncated, "{kind:?}");
+            let reason = plan.incomplete_reason.expect("a reason");
+            assert!(reason.contains("step cap"), "{kind:?}: {reason}");
+        }
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn plan_times_out_a_handler_that_never_returns() {
+    timeout(TEST_TIMEOUT, async {
+        let mut engine = engine_with(test_store());
+        engine.register(Endless).unwrap();
+
+        let plan = engine
+            .plan_handler(
+                "endless",
+                json!({}),
+                PlanOptions {
+                    timeout: Duration::from_millis(50),
+                    ..PlanOptions::default()
+                },
+            )
+            .await
+            .expect("a timed out handler still yields a plan");
+
+        let names: Vec<&str> = plan.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["before"]);
+        assert!(plan.truncated);
+        let reason = plan.incomplete_reason.expect("a reason");
+        assert!(reason.contains("timed out"), "{reason}");
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[test]
+fn plan_options_default_to_a_ten_second_timeout() {
+    assert_eq!(PlanOptions::default().timeout, DEFAULT_PLAN_TIMEOUT);
+    assert_eq!(DEFAULT_PLAN_TIMEOUT, Duration::from_secs(10));
+}
+
+#[tokio::test]
+async fn plan_mode_refuses_store_access() {
+    timeout(TEST_TIMEOUT, async {
+        let store = test_store();
+        let reached = Arc::new(AtomicBool::new(false));
+        let mut engine = engine_with(store.clone());
+        engine
+            .register(Snooping {
+                secrets: false,
+                reached: reached.clone(),
+            })
+            .unwrap();
+
+        let plan = engine
+            .plan_handler("snooping-store", json!({}), PlanOptions::default())
+            .await
+            .expect("plan built");
+
+        assert!(!reached.load(Ordering::SeqCst));
+        let names: Vec<&str> = plan.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["before"]);
+        assert!(plan.truncated);
+        let reason = plan.incomplete_reason.expect("a reason");
+        assert!(
+            reason.contains("ctx.store() is not available in plan mode"),
+            "{reason}"
+        );
+        let runs = store
+            .list_runs(RunFilter::default(), 1, 50)
+            .await
+            .expect("list runs");
+        assert!(runs.items.is_empty(), "planning must not create a run");
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[cfg(feature = "secret-store")]
+#[tokio::test]
+async fn plan_mode_refuses_secret_access() {
+    timeout(TEST_TIMEOUT, async {
+        let reached = Arc::new(AtomicBool::new(false));
+        let mut engine = engine_with(test_store());
+        engine
+            .register(Snooping {
+                secrets: true,
+                reached: reached.clone(),
+            })
+            .unwrap();
+
+        let plan = engine
+            .plan_handler("snooping-secrets", json!({}), PlanOptions::default())
+            .await
+            .expect("plan built");
+
+        assert!(!reached.load(Ordering::SeqCst));
+        let names: Vec<&str> = plan.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["before"]);
+        assert!(plan.truncated);
+        let reason = plan.incomplete_reason.expect("a reason");
+        assert!(
+            reason.contains("ctx.secrets() is not available in plan mode"),
+            "{reason}"
+        );
     })
     .await
     .expect("test timed out");

@@ -364,11 +364,7 @@ impl WorkflowContext {
             self.position += 1;
             let estimate = {
                 let mut recorder = lock_plan(&plan);
-                if !recorder.record(name, kind.clone(), &self.workflow_name, None) {
-                    return Err(EngineError::InvalidWorkflow(
-                        "execution plan exceeded the maximum number of steps".to_string(),
-                    ));
-                }
+                recorder.record_or_stop(name, kind.clone(), &self.workflow_name, None)?;
                 recorder.set_last(vec![name.to_string()]);
                 recorder.estimate_for(name)
             };

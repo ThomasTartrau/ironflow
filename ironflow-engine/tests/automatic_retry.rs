@@ -12,6 +12,7 @@ use std::time::Duration;
 use chrono::{TimeDelta, Utc};
 use serde_json::json;
 use tokio::time::sleep;
+use uuid::Uuid;
 
 use ironflow_core::provider::AgentProvider;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
@@ -22,7 +23,9 @@ use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::notify::{Event, EventSubscriber, SubscriberFuture};
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::models::{NewRun, RunStatus, RunUpdate, StepKind, StepStatus, TriggerKind};
+use ironflow_store::models::{
+    NewRun, RunStatus, RunUpdate, StepApproval, StepKind, StepStatus, TriggerKind,
+};
 use ironflow_store::store::RunStore;
 
 /// Records every event it receives, so tests can assert on what was published.
@@ -50,7 +53,7 @@ fn engine_with(store: Arc<InMemoryStore>) -> Engine {
     Engine::new(store, provider)
 }
 
-async fn enqueue(store: &InMemoryStore, workflow: &str, max_retries: u32) -> uuid::Uuid {
+async fn enqueue(store: &InMemoryStore, workflow: &str, max_retries: u32) -> Uuid {
     store
         .create_run(NewRun {
             created_by: None,
@@ -76,7 +79,7 @@ async fn enqueue(store: &InMemoryStore, workflow: &str, max_retries: u32) -> uui
 
 /// Move a run armed for retry to the front of the queue, as if its backoff had
 /// elapsed, then pick it up like a worker would.
-async fn fast_forward_backoff(store: &InMemoryStore, run_id: uuid::Uuid) {
+async fn fast_forward_backoff(store: &InMemoryStore, run_id: Uuid) {
     store
         .update_run(
             run_id,
@@ -362,6 +365,24 @@ async fn approval_granted_in_a_previous_attempt_is_not_asked_again() {
     assert_eq!(run.status.state, RunStatus::AwaitingApproval);
 
     // A human approves, and the resumed attempt fails past the gate.
+    let gate = store
+        .list_steps(run_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.status.state == StepStatus::AwaitingApproval)
+        .expect("the gate is open");
+    store
+        .record_step_approval(
+            gate.id,
+            StepApproval {
+                user_id: Uuid::now_v7(),
+                approved_by: "tester".to_string(),
+                at: Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
     store
         .update_run_status(run_id, RunStatus::Running)
         .await

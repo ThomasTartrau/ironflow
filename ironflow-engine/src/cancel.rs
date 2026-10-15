@@ -5,8 +5,10 @@
 //! child any more. [`Engine::cancel_descendants`] closes those children so
 //! none stays non-terminal forever, holding its concurrency key.
 //! [`Engine::cancel_run`] cancels a run with its descendants, and wakes the
-//! root of a suspended chain whose child it cancelled so the root observes it.
+//! root of a suspended chain whose child it cancelled, only when the root is
+//! suspended on that child, so the root observes it.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -15,9 +17,10 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use ironflow_store::error::StoreError;
-use ironflow_store::models::{Run, RunStatus, RunUpdate};
+use ironflow_store::models::{Run, RunStatus, RunUpdate, StepKind, StepStatus};
 
-use crate::engine::{Engine, ExecutionMode, chain_root};
+use crate::context::recorded_child_run_id;
+use crate::engine::{Engine, ExecutionMode, chain_parent, chain_root};
 use crate::error::EngineError;
 use crate::notify::{Event, RunStatusChangedEvent};
 
@@ -69,8 +72,9 @@ impl Engine {
     /// [`cancel_descendants`](Self::cancel_descendants), which releases their
     /// concurrency keys.
     ///
-    /// When the run is a child whose root waits suspended with it
-    /// (`AwaitingApproval` or `Sleeping`), the root is woken so its open
+    /// When the run is a child whose root waits suspended on it
+    /// (`AwaitingApproval` or `Sleeping`, its open `Workflow` step recording
+    /// the branch of this child, no gate of its own open), the root is woken so its open
     /// `Workflow` step observes the cancellation: under
     /// [`ExecutionMode::Local`] it resumes in a background task, under
     /// [`ExecutionMode::Workers`] it goes back to `Pending` for a worker. The
@@ -78,7 +82,8 @@ impl Engine {
     /// `allow_failure`.
     ///
     /// Cancelling a run already `Cancelled` is accepted: it publishes nothing
-    /// for the run itself and cancels whatever descendant is still active.
+    /// for the run itself, does not wake its root either, and cancels
+    /// whatever descendant is still active.
     ///
     /// # Errors
     ///
@@ -134,7 +139,11 @@ impl Engine {
         let reason = format!("ancestor run {run_id} cancelled");
         let cancelled_descendants = self.cancel_descendants(run_id, &reason).await?;
 
-        self.wake_root_of_cancelled_child(&run).await;
+        // A re-cancel changes nothing the root could observe: waking it again
+        // would replay a root that waits on something else.
+        if from != RunStatus::Cancelled {
+            self.wake_root_of_cancelled_child(&run).await;
+        }
 
         Ok(RunCancellation {
             run: self.load_run(run_id).await?,
@@ -226,7 +235,11 @@ impl Engine {
         }
     }
 
-    /// Wake the root of `run`'s chain when it waits suspended with it.
+    /// Wake the root of `run`'s chain, only when it is suspended on this child.
+    ///
+    /// A root suspended on something else (its own approval gate or human
+    /// input, a delay, another child) is left alone: waking it would replay
+    /// that suspension as if it had been resolved.
     ///
     /// Best effort: the cancellation is already persisted, so a failure is
     /// logged and the root is left for an operator.
@@ -242,6 +255,9 @@ impl Engine {
                 return;
             }
         };
+        if !self.root_awaits_child(&root, run).await {
+            return;
+        }
 
         // A paused root is not woken: it resumes as an active run, so its
         // replay observes the cancelled child once an operator resumes it.
@@ -294,6 +310,69 @@ impl Engine {
                 }
             });
         }
+    }
+
+    /// Whether `root` is suspended on the branch of its chain that holds `run`.
+    ///
+    /// True only when the root waits (`AwaitingApproval`, `Sleeping`, or
+    /// `Paused` from one of them), none of its own steps is an open gate, and
+    /// its open `Workflow` step records the child run under which `run` sits.
+    /// A store error or a broken chain gives false: the wake is best effort.
+    async fn root_awaits_child(&self, root: &Run, run: &Run) -> bool {
+        let suspended = match root.status.state {
+            RunStatus::AwaitingApproval | RunStatus::Sleeping => true,
+            RunStatus::Paused => matches!(
+                root.resume_status,
+                Some(RunStatus::AwaitingApproval | RunStatus::Sleeping)
+            ),
+            _ => false,
+        };
+        if !suspended {
+            return false;
+        }
+
+        // Labels are data: a chain that loops back on itself stops there.
+        let mut visited = HashSet::from([run.id]);
+        let mut top_child = run.clone();
+        loop {
+            let Some(parent_id) = chain_parent(&top_child) else {
+                return false;
+            };
+            if parent_id == root.id {
+                break;
+            }
+            if !visited.insert(parent_id) {
+                return false;
+            }
+            top_child = match self.store().get_run(parent_id).await {
+                Ok(Some(parent)) => parent,
+                Ok(None) => return false,
+                Err(err) => {
+                    warn!(run_id = %run.id, ancestor_run_id = %parent_id, error = %err, "cannot read an ancestor of a cancelled child");
+                    return false;
+                }
+            };
+        }
+
+        let steps = match self.store().list_steps(root.id).await {
+            Ok(steps) => steps,
+            Err(err) => {
+                warn!(run_id = %run.id, root_run_id = %root.id, error = %err, "cannot read the steps of the root of a cancelled child");
+                return false;
+            }
+        };
+        // The root's own gate or human input is what suspends it.
+        if steps
+            .iter()
+            .any(|step| step.status.state == StepStatus::AwaitingApproval)
+        {
+            return false;
+        }
+        steps.iter().any(|step| {
+            step.kind == StepKind::Workflow
+                && step.status.state == StepStatus::Running
+                && recorded_child_run_id(step) == Some(top_child.id)
+        })
     }
 
     /// Publish the move of `run` (as loaded before the update) to `Cancelled`.

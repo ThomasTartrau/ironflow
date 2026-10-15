@@ -373,7 +373,9 @@ impl Engine {
     ///
     /// Under [`ExecutionMode::Local`] the runs held `Pending` while the
     /// workflow was paused are started in background tasks, except
-    /// sub-workflow runs and runs scheduled in the future.
+    /// sub-workflow runs and runs scheduled in the future. A held run is
+    /// executed in this process only once it is claimed atomically
+    /// (`Pending -> Running`); a run a worker claimed first is left to it.
     ///
     /// # Errors
     ///
@@ -413,6 +415,10 @@ impl Engine {
 
     /// Start, in background tasks, the due root runs of `workflow_name` left
     /// `Pending` while it was paused.
+    ///
+    /// Each run goes through [`spawn_local_resume`](Self::spawn_local_resume):
+    /// it is executed here only if this process claims it atomically,
+    /// otherwise it is left to the worker that took it.
     async fn start_held_runs(self: &Arc<Self>, workflow_name: &str) -> Result<(), EngineError> {
         // Collect every run before spawning: a spawned run leaves `Pending`
         // and would shift the pages.

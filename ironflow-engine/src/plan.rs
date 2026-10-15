@@ -57,6 +57,23 @@ pub const MAX_PLANNED_STEPS: usize = 1000;
 /// How many past runs are sampled to estimate step durations.
 pub const DEFAULT_ESTIMATE_SAMPLE_RUNS: u32 = 20;
 
+/// How long a handler may run in plan mode when the caller does not say.
+///
+/// A handler that awaits forever (a sleep, a socket it opened itself) would
+/// otherwise hold the plan request open. Once the timeout fires, the plan
+/// recorded so far is returned truncated.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use ironflow_engine::plan::DEFAULT_PLAN_TIMEOUT;
+///
+/// assert_eq!(DEFAULT_PLAN_TIMEOUT, Duration::from_secs(10));
+/// ```
+pub const DEFAULT_PLAN_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Outcome of a branch condition as seen by the planner.
 ///
 /// # Examples
@@ -190,10 +207,19 @@ pub struct ExecutionPlan {
 /// # Examples
 ///
 /// ```
-/// use ironflow_engine::plan::{PlanOptions, DEFAULT_PLAN_MAX_DEPTH};
+/// use std::time::Duration;
+///
+/// use ironflow_engine::plan::{PlanOptions, DEFAULT_PLAN_MAX_DEPTH, DEFAULT_PLAN_TIMEOUT};
 ///
 /// let options = PlanOptions::default();
 /// assert_eq!(options.max_depth, DEFAULT_PLAN_MAX_DEPTH);
+/// assert_eq!(options.timeout, DEFAULT_PLAN_TIMEOUT);
+///
+/// let quick = PlanOptions {
+///     timeout: Duration::from_secs(2),
+///     ..PlanOptions::default()
+/// };
+/// assert_eq!(quick.timeout, Duration::from_secs(2));
 /// ```
 #[derive(Debug, Clone)]
 pub struct PlanOptions {
@@ -203,6 +229,9 @@ pub struct PlanOptions {
     pub estimate_durations: bool,
     /// How many past runs are sampled when estimating durations.
     pub sample_runs: u32,
+    /// How long the handler may run before the plan is cut short. A timeout
+    /// returns the steps recorded so far, marked truncated.
+    pub timeout: Duration,
 }
 
 impl Default for PlanOptions {
@@ -211,6 +240,7 @@ impl Default for PlanOptions {
             max_depth: DEFAULT_PLAN_MAX_DEPTH,
             estimate_durations: true,
             sample_runs: DEFAULT_ESTIMATE_SAMPLE_RUNS,
+            timeout: DEFAULT_PLAN_TIMEOUT,
         }
     }
 }
@@ -342,6 +372,26 @@ impl PlanRecorder {
             estimated_duration,
         });
         true
+    }
+
+    /// Record a step, or stop the handler once the step cap is reached.
+    ///
+    /// A handler that loops over step calls would otherwise keep looping long
+    /// after the plan stopped recording.
+    pub(crate) fn record_or_stop(
+        &mut self,
+        name: &str,
+        kind: StepKind,
+        workflow: &str,
+        parallel_group: Option<String>,
+    ) -> Result<(), EngineError> {
+        if self.record(name, kind, workflow, parallel_group) {
+            Ok(())
+        } else {
+            Err(EngineError::InvalidWorkflow(
+                "execution plan exceeded the maximum number of steps".to_string(),
+            ))
+        }
     }
 
     /// Set the dependency frontier the next recorded step depends on.
@@ -807,6 +857,25 @@ mod tests {
                 .expect("a reason")
                 .contains("step cap")
         );
+    }
+
+    #[test]
+    fn plan_record_or_stop_errors_once_the_step_cap_is_reached() {
+        let mut recorder = PlanRecorder::new("wf".to_string(), json!({}), 3, HashMap::new());
+        for index in 0..MAX_PLANNED_STEPS {
+            recorder
+                .record_or_stop(&format!("s{index}"), StepKind::Shell, "wf", None)
+                .expect("under the cap");
+        }
+        let err = recorder
+            .record_or_stop("overflow", StepKind::Shell, "wf", None)
+            .expect_err("over the cap");
+
+        assert!(matches!(err, EngineError::InvalidWorkflow(_)));
+        assert!(err.to_string().contains("maximum number of steps"));
+        let plan = recorder.into_plan();
+        assert_eq!(plan.steps.len(), MAX_PLANNED_STEPS);
+        assert!(plan.truncated);
     }
 
     #[test]

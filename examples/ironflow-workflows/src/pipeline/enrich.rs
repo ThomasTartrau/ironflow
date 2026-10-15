@@ -52,10 +52,14 @@ impl WorkflowHandler for Enrich {
         Box::pin(async move {
             let collect = ctx.workflow(&Collect, ()).await?;
 
-            let raw_data = ctx
-                .store()
-                .list_steps(collect.run_id())
-                .await?
+            // While planning no child run exists and the store is out of reach,
+            // so there is nothing to read.
+            let steps = if ctx.is_planning() {
+                Vec::new()
+            } else {
+                ctx.store()?.list_steps(collect.run_id()).await?
+            };
+            let raw_data = steps
                 .iter()
                 .map(|step| (step.name.clone(), StepOutput::from(step)))
                 .filter(|(_, output)| !output.stdout().is_empty())

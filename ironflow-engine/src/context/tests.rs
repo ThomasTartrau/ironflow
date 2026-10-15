@@ -10,8 +10,8 @@ use ironflow_core::providers::record_replay::RecordReplayProvider;
 use ironflow_store::error::StoreError;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{
-    Assignee, NewRun, NewStep, Run, RunActor, RunFilter, RunStatus, StepKind, StepStatus,
-    StepUpdate, TriggerKind, step_trace_id,
+    Assignee, NewRun, NewStep, Run, RunActor, RunFilter, RunStatus, StepApproval, StepKind,
+    StepStatus, StepUpdate, TriggerKind, step_trace_id,
 };
 use ironflow_store::store::RunStore;
 use schemars::JsonSchema;
@@ -1030,11 +1030,61 @@ async fn trigger_on_unknown_run_is_an_error() {
     ));
 }
 
-#[tokio::test]
-async fn context_store_returns_reference() {
+#[test]
+fn context_store_is_available_outside_plan_mode() {
     let ctx = create_test_context();
-    let _store = ctx.store();
-    // store() returns a reference to the Arc<dyn Store>, which is always available
+    let store = ctx.store();
+    assert!(store.is_ok());
+}
+
+/// Switch `ctx` to plan mode with an empty recorder.
+fn start_planning(ctx: &mut WorkflowContext) {
+    ctx.set_plan(Arc::new(Mutex::new(PlanRecorder::new(
+        "test".to_string(),
+        json!({}),
+        3,
+        HashMap::new(),
+    ))));
+}
+
+#[test]
+fn context_store_is_refused_in_plan_mode() {
+    let mut ctx = create_test_context();
+    start_planning(&mut ctx);
+
+    let Err(err) = ctx.store() else {
+        panic!("plan mode has no store");
+    };
+
+    assert!(
+        matches!(err, EngineError::InvalidWorkflow(_)),
+        "got {err:?}"
+    );
+    assert!(err.to_string().contains("ctx.store()"));
+}
+
+#[cfg(feature = "secret-store")]
+#[test]
+fn context_secrets_are_available_outside_plan_mode() {
+    let ctx = create_test_context();
+    assert!(ctx.secrets().is_ok());
+}
+
+#[cfg(feature = "secret-store")]
+#[test]
+fn context_secrets_are_refused_in_plan_mode() {
+    let mut ctx = create_test_context();
+    start_planning(&mut ctx);
+
+    let Err(err) = ctx.secrets() else {
+        panic!("plan mode has no secret");
+    };
+
+    assert!(
+        matches!(err, EngineError::InvalidWorkflow(_)),
+        "got {err:?}"
+    );
+    assert!(err.to_string().contains("ctx.secrets()"));
 }
 
 #[test]
@@ -1193,6 +1243,20 @@ async fn approval_replay_clears_deadline() {
     )
     .await
     .expect_err("approval suspends the run");
+
+    // The approve route records the vote before resuming.
+    let gates = store.list_steps(ctx.run_id()).await.expect("list steps");
+    store
+        .record_step_approval(
+            gates[0].id,
+            StepApproval {
+                user_id: Uuid::now_v7(),
+                approved_by: "tester".to_string(),
+                at: Utc::now(),
+            },
+        )
+        .await
+        .expect("record vote");
 
     // Replay the handler the way resume_run does.
     let mut resumed = WorkflowContext::new(

@@ -504,6 +504,11 @@ impl WorkflowContext {
     ///
     /// Requires the `secret-store` feature.
     ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::InvalidWorkflow`] in plan mode: planning has no
+    /// side effect, so it never reads or writes a secret.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -511,16 +516,24 @@ impl WorkflowContext {
     /// use ironflow_engine::error::EngineError;
     ///
     /// # async fn example(ctx: &WorkflowContext) -> Result<(), EngineError> {
-    /// let secrets = ctx.secrets();
+    /// let secrets = ctx.secrets()?;
     /// secrets.set("api_token", "sk-ant-12345").await.map_err(EngineError::Store)?;
     /// let token = secrets.get("api_token").await.map_err(EngineError::Store)?;
     /// # Ok(())
     /// # }
     /// ```
     #[cfg(feature = "secret-store")]
-    pub fn secrets(&self) -> ScopedSecretStore {
+    pub fn secrets(&self) -> Result<ScopedSecretStore, EngineError> {
+        if self.plan().is_some() {
+            return Err(EngineError::InvalidWorkflow(
+                "ctx.secrets() is not available in plan mode: planning has no side effect".into(),
+            ));
+        }
         let workflow_uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, self.workflow_name.as_bytes());
-        ScopedSecretStore::for_workflow(workflow_uuid, self.store.clone())
+        Ok(ScopedSecretStore::for_workflow(
+            workflow_uuid,
+            self.store.clone(),
+        ))
     }
 
     pub(super) fn ensure_operation_ctx(&mut self) -> &OperationContext {
@@ -542,8 +555,31 @@ impl WorkflowContext {
     }
 
     /// Access the store directly (advanced usage).
-    pub fn store(&self) -> &Arc<dyn Store> {
-        &self.store
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::InvalidWorkflow`] in plan mode: planning has no
+    /// side effect, so it never reaches the real store.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// # async fn example(ctx: &WorkflowContext) -> Result<(), EngineError> {
+    /// let steps = ctx.store()?.list_steps(ctx.run_id()).await?;
+    /// println!("{} steps so far", steps.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn store(&self) -> Result<&Arc<dyn Store>, EngineError> {
+        if self.plan().is_some() {
+            return Err(EngineError::InvalidWorkflow(
+                "ctx.store() is not available in plan mode: planning has no side effect".into(),
+            ));
+        }
+        Ok(&self.store)
     }
 
     /// Get and increment the current position counter.

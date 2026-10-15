@@ -3,6 +3,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use chrono::Utc;
 #[cfg(feature = "secret-store")]
 use rand::random;
 use serde_json::Value;
@@ -16,12 +17,13 @@ use ironflow_core::providers::record_replay::RecordReplayProvider;
 use ironflow_store::crypto::MasterKey;
 use ironflow_store::error::StoreError;
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::models::{RunStatus, TriggerKind};
+use ironflow_store::models::{RunStatus, StepApproval, StepKind, StepStatus, TriggerKind};
 use ironflow_store::store::{RunStore, Store};
 #[cfg(feature = "secret-store")]
 use ironflow_store::workflow_secrets::ScopedSecretStore;
 
 use crate::config::{HttpConfig, HumanInputConfig, ShellConfig};
+use crate::context::required_votes;
 use crate::engine::{Engine, WorkflowResult, chain_root};
 use crate::error::EngineError;
 use crate::executor::{ApprovalOutcome, HumanInputOutcome, SignalOutcome, StepInterceptor};
@@ -595,6 +597,11 @@ impl TestEngine {
     /// Resume a run suspended on an approval gate, a human input, a delay or a
     /// signal wait, the way the API server and the waker do.
     ///
+    /// An open approval gate of `run_id` is approved on behalf of as many
+    /// approvers as it requires, like the approve route: one vote, or the
+    /// `required_approvers` of its requirement. For a gated sub-workflow
+    /// child, pass the child run id: the gate lives there.
+    ///
     /// A suspended sub-workflow child run is resumed through its root run,
     /// like in production: the root replays and re-enters the child. The
     /// returned [`TestResult`] then describes the root run.
@@ -640,6 +647,24 @@ impl TestEngine {
             self.store
                 .update_run_status(run_id, RunStatus::Pending)
                 .await?;
+        }
+        for gate in self.store.list_steps(run_id).await? {
+            if gate.kind != StepKind::Approval || gate.status.state != StepStatus::AwaitingApproval
+            {
+                continue;
+            }
+            for _ in gate.approvals.len() as u32..required_votes(&gate) {
+                self.store
+                    .record_step_approval(
+                        gate.id,
+                        StepApproval {
+                            user_id: Uuid::now_v7(),
+                            approved_by: "test-engine".to_string(),
+                            at: Utc::now(),
+                        },
+                    )
+                    .await?;
+            }
         }
         self.store
             .update_run_status(run_id, RunStatus::Running)

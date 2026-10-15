@@ -81,9 +81,8 @@ impl WorkflowContext {
             self.position += 1;
             {
                 let mut recorder = lock_plan(&plan);
-                if recorder.record(name, StepKind::HumanInput, &self.workflow_name, None) {
-                    recorder.set_last(vec![name.to_string()]);
-                }
+                recorder.record_or_stop(name, StepKind::HumanInput, &self.workflow_name, None)?;
+                recorder.set_last(vec![name.to_string()]);
             }
             return from_value(json!({})).map_err(|e| {
                 EngineError::StepConfig(format!(

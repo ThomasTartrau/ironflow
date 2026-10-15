@@ -52,14 +52,13 @@ impl WorkflowContext {
             recorder.set_condition(ConditionResult::Skipped {
                 reason: reason.to_string(),
             });
-            if recorder.record(
+            recorder.record_or_stop(
                 name,
                 StepKind::Custom("skip".to_string()),
                 &self.workflow_name,
                 None,
-            ) {
-                recorder.set_last(vec![name.to_string()]);
-            }
+            )?;
+            recorder.set_last(vec![name.to_string()]);
             return Ok(());
         }
 

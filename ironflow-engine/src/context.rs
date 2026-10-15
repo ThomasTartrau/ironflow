@@ -37,6 +37,8 @@ mod steps;
 mod tests;
 
 pub(crate) use lifecycle::interrupt_running_steps;
+pub(crate) use steps::approval::required_votes;
+pub(crate) use steps::sub_workflow::recorded_child_run_id;
 
 use std::collections::HashMap;
 use std::fmt;
