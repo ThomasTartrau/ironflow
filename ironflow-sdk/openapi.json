@@ -5196,7 +5196,7 @@
         ]
       },
       "post": {
-        "description": "# Errors\n\n- 400 if the name is empty or scopes are invalid",
+        "description": "# Errors\n\n- 400 if the name is empty or longer than 255 characters (after trimming), or scopes are invalid",
         "operationId": "create_api_key",
         "requestBody": {
           "content": {
