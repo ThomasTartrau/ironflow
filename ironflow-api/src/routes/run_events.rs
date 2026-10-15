@@ -1,4 +1,9 @@
 //! SSE endpoint for per-run workflow event streaming.
+//!
+//! A stream past the caps of [`SseLimits`](crate::sse_limiter::SseLimits) is
+//! refused with `429 SSE_CONNECTION_LIMIT`. The stream of a run ends once the
+//! run reaches a terminal status; a run already terminal gets a stream that
+//! ends at once.
 
 use std::convert::Infallible;
 use std::pin::Pin;
@@ -6,7 +11,7 @@ use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
-use futures_util::stream::{Stream, StreamExt};
+use futures_util::stream::{Stream, StreamExt, empty};
 use serde::Deserialize;
 use serde::de::{self, Deserializer};
 use tokio_stream::wrappers::BroadcastStream;
@@ -115,14 +120,17 @@ pub async fn run_events(
     Query(query): Query<RunEventsQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, ApiError> {
     auth.require(ApiKeyScope::RunsRead, false)?;
-    state.get_run_or_404(id).await?;
+    let run = state.get_run_or_404(id).await?;
+    let connection = state.sse_limiter.try_acquire(auth.user_id)?;
 
     let type_filter = query.types;
 
     let stream: Pin<Box<dyn Stream<Item = Result<SseEvent, Infallible>> + Send>> = match state
         .event_bus
     {
-        Some(ref bus) => {
+        // A terminal run publishes nothing more, and its bus channel has been
+        // released: subscribing would re-create a channel nobody removes.
+        Some(ref bus) if !run.status.state.is_terminal() => {
             let receiver = bus.subscribe(id);
 
             Box::pin(BroadcastStream::new(receiver).filter_map(
@@ -146,8 +154,14 @@ pub async fn run_events(
                 },
             ))
         }
-        None => Box::pin(futures_util::stream::empty()),
+        _ => Box::pin(empty()),
     };
+
+    // The stream owns the slot: axum drops it when the client disconnects.
+    let stream = stream.map(move |item| {
+        let _held = &connection;
+        item
+    });
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30))))
 }
@@ -168,17 +182,17 @@ mod tests {
         WorkflowStepCompletedEvent, WorkflowStepStartedEvent,
     };
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, TriggerKind};
+    use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
     use serde_json::json;
-    use tokio::io::AsyncBufReadExt;
-    use tokio::io::BufReader;
-    use tokio::net::TcpListener;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::broadcast;
-    use tokio::time::timeout;
+    use tokio::time::{sleep, timeout};
     use uuid::Uuid;
 
     use super::run_events;
     use crate::routes::test_helpers::create_user_auth_header;
+    use crate::sse_limiter::SseLimits;
     use crate::state::AppState;
 
     fn test_state_with_bus() -> (AppState, WorkflowEventBus) {
@@ -244,11 +258,10 @@ mod tests {
         (addr, auth)
     }
 
-    async fn connect_sse(addr: &str, path: &str, auth: &str) -> BufReader<tokio::net::TcpStream> {
-        let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    async fn connect_sse(addr: &str, path: &str, auth: &str) -> BufReader<TcpStream> {
+        let stream = TcpStream::connect(addr).await.unwrap();
         let (reader, mut writer) = stream.into_split();
 
-        use tokio::io::AsyncWriteExt;
         writer
             .write_all(
                 format!(
@@ -269,7 +282,7 @@ mod tests {
     /// already called `bus.subscribe`, so this is a deterministic
     /// synchronization point for tests that publish events right after
     /// connecting -- unlike a fixed `sleep`, it cannot race under load.
-    async fn wait_for_response_headers(reader: &mut BufReader<tokio::net::TcpStream>) {
+    async fn wait_for_response_headers(reader: &mut BufReader<TcpStream>) {
         loop {
             let mut line = String::new();
             let n = reader.read_line(&mut line).await.unwrap();
@@ -280,7 +293,7 @@ mod tests {
     }
 
     async fn read_until_contains(
-        reader: &mut BufReader<tokio::net::TcpStream>,
+        reader: &mut BufReader<TcpStream>,
         needle: &str,
         dur: Duration,
     ) -> String {
@@ -347,10 +360,9 @@ mod tests {
         let run_id = create_run(&state).await;
         let (addr, _auth) = start_sse_server(state).await;
 
-        let stream = tokio::net::TcpStream::connect(&addr).await.unwrap();
+        let stream = TcpStream::connect(&addr).await.unwrap();
         let (reader, mut writer) = stream.into_split();
 
-        use tokio::io::AsyncWriteExt;
         writer
             .write_all(
                 format!(
@@ -478,5 +490,156 @@ mod tests {
 
         assert!(text.contains("only-for-a"));
         assert!(!text.contains("only-for-b"));
+    }
+
+    /// Read the HTTP status line of a response.
+    async fn status_line(reader: &mut BufReader<TcpStream>) -> String {
+        read_until_contains(reader, "\r\n", Duration::from_secs(5)).await
+    }
+
+    /// Read the headers left after the status line, then the body they announce.
+    async fn read_body(reader: &mut BufReader<TcpStream>) -> String {
+        timeout(Duration::from_secs(5), async {
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                if line.is_empty() || line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = value.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0; content_length];
+            reader.read_exact(&mut body).await.unwrap();
+            String::from_utf8(body).unwrap()
+        })
+        .await
+        .expect("timeout reading the response body")
+    }
+
+    fn limited_state(per_principal: usize) -> (AppState, WorkflowEventBus) {
+        let (state, bus) = test_state_with_bus();
+        let state = state.with_sse_limits(SseLimits {
+            per_principal: Some(per_principal),
+            global: None,
+        });
+        (state, bus)
+    }
+
+    #[tokio::test]
+    async fn run_events_returns_429_past_the_per_principal_limit() {
+        let (state, _bus) = limited_state(2);
+        let run_id = create_run(&state).await;
+        let other_auth = create_user_auth_header(&state, "otheruser", false).await;
+        let (addr, auth) = start_sse_server(state).await;
+        let path = format!("/{run_id}/events");
+
+        let mut first = connect_sse(&addr, &path, &auth).await;
+        assert!(status_line(&mut first).await.starts_with("HTTP/1.1 200"));
+        let mut second = connect_sse(&addr, &path, &auth).await;
+        assert!(status_line(&mut second).await.starts_with("HTTP/1.1 200"));
+
+        let mut third = connect_sse(&addr, &path, &auth).await;
+        let status = status_line(&mut third).await;
+        assert!(status.starts_with("HTTP/1.1 429"), "status line: {status}");
+        let body = read_body(&mut third).await;
+        assert!(body.contains("SSE_CONNECTION_LIMIT"), "body: {body}");
+
+        let mut other = connect_sse(&addr, &path, &other_auth).await;
+        let status = status_line(&mut other).await;
+        assert!(
+            status.starts_with("HTTP/1.1 200"),
+            "another user keeps its own quota: {status}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_events_frees_the_slot_when_the_client_disconnects() {
+        let (state, _bus) = limited_state(1);
+        let run_id = create_run(&state).await;
+        let (addr, auth) = start_sse_server(state).await;
+        let path = format!("/{run_id}/events");
+
+        let mut first = connect_sse(&addr, &path, &auth).await;
+        assert!(status_line(&mut first).await.starts_with("HTTP/1.1 200"));
+        let mut refused = connect_sse(&addr, &path, &auth).await;
+        assert!(status_line(&mut refused).await.starts_with("HTTP/1.1 429"));
+
+        drop(first);
+
+        let reopened = timeout(Duration::from_secs(5), async {
+            loop {
+                let mut retry = connect_sse(&addr, &path, &auth).await;
+                if status_line(&mut retry).await.starts_with("HTTP/1.1 200") {
+                    return retry;
+                }
+                sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(reopened.is_ok(), "the slot was not freed after disconnect");
+    }
+
+    #[tokio::test]
+    async fn run_events_unknown_run_is_404_before_the_limit() {
+        let (state, _bus) = limited_state(0);
+        let (addr, auth) = start_sse_server(state).await;
+
+        let unknown = Uuid::nil();
+        let mut reader = connect_sse(&addr, &format!("/{unknown}/events"), &auth).await;
+
+        let status = status_line(&mut reader).await;
+        assert!(status.starts_with("HTTP/1.1 404"), "status line: {status}");
+    }
+
+    #[tokio::test]
+    async fn run_events_on_terminal_run_ends_without_creating_a_channel() {
+        let (state, bus) = test_state_with_bus();
+        let run_id = create_run(&state).await;
+        state
+            .store
+            .update_run_status(run_id, RunStatus::Running)
+            .await
+            .unwrap();
+        state
+            .store
+            .update_run_status(run_id, RunStatus::Completed)
+            .await
+            .unwrap();
+        let (addr, auth) = start_sse_server(state).await;
+
+        let mut stream = TcpStream::connect(&addr).await.unwrap();
+        stream
+            .write_all(
+                format!(
+                    "GET /{run_id}/events HTTP/1.1\r\nHost: {addr}\r\nAccept: text/event-stream\r\nAuthorization: {auth}\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+
+        let mut response = String::new();
+        timeout(Duration::from_secs(5), stream.read_to_string(&mut response))
+            .await
+            .expect("the stream of a terminal run must end")
+            .unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+        assert!(!bus.has_channel(run_id));
+    }
+
+    #[tokio::test]
+    async fn run_events_on_live_run_subscribes_to_the_bus() {
+        let (state, bus) = test_state_with_bus();
+        let run_id = create_run(&state).await;
+        let (addr, auth) = start_sse_server(state).await;
+
+        let mut reader = connect_sse(&addr, &format!("/{run_id}/events"), &auth).await;
+        wait_for_response_headers(&mut reader).await;
+
+        assert!(bus.has_channel(run_id));
     }
 }

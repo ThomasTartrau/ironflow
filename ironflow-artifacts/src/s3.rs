@@ -12,6 +12,7 @@ use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Builder;
 use aws_smithy_types::byte_stream::ByteStream as SdkByteStream;
 use futures_util::StreamExt;
+use futures_util::stream::unfold;
 use sha2::{Digest, Sha256};
 
 use crate::blob_store::{BlobDigest, BlobFuture, BlobStore, ByteStream};
@@ -21,8 +22,9 @@ use crate::local::DEFAULT_MAX_ARTIFACT_BYTES;
 /// S3-compatible [`BlobStore`].
 ///
 /// Blobs are stored as objects under `{prefix}/{key}` in the configured bucket.
-/// SHA-256 is computed while streaming the upload, so the payload is never
-/// buffered whole in memory.
+/// SHA-256 is computed while reading the upload, which is buffered up to the
+/// size limit before `PutObject`. Downloads are streamed chunk by chunk from
+/// the S3 response body, never buffered whole in memory.
 ///
 /// # Credentials
 ///
@@ -254,13 +256,7 @@ impl BlobStore for S3BlobStore {
                     }
                 })?;
 
-            let collected = resp
-                .body
-                .collect()
-                .await
-                .map_err(|err| ArtifactError::Io(format!("S3 body collect: {err}")))?;
-
-            Ok(crate::stream_from_bytes(collected.into_bytes()))
+            Ok(stream_from_sdk_body(resp.body))
         })
     }
 
@@ -336,9 +332,65 @@ impl BlobStore for S3BlobStore {
     }
 }
 
+/// Adapt an S3 response body into a [`ByteStream`] that yields its chunks as
+/// they arrive, so a large object never sits whole in memory.
+///
+/// A read error is yielded once as [`ArtifactError::Io`], then the stream ends.
+fn stream_from_sdk_body(body: SdkByteStream) -> ByteStream {
+    Box::pin(unfold(Some(body), |state| async move {
+        let mut body = state?;
+        match body.try_next().await {
+            Ok(Some(chunk)) => Some((Ok(chunk), Some(body))),
+            Ok(None) => None,
+            Err(err) => {
+                let err = ArtifactError::Io(format!("S3 body read: {err}"));
+                Some((Err(err), None))
+            }
+        }
+    }))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
+    use tempfile::NamedTempFile;
+
     use super::*;
+
+    #[tokio::test]
+    async fn s3_body_stream_yields_chunks_in_order() {
+        let payload: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
+        let mut file = NamedTempFile::new().expect("temp file");
+        file.write_all(&payload).expect("write payload");
+        file.flush().expect("flush payload");
+
+        let body = SdkByteStream::read_from()
+            .path(file.path())
+            .buffer_size(1024)
+            .build()
+            .await
+            .expect("sdk body from file");
+
+        let mut stream = stream_from_sdk_body(body);
+        let mut chunks = 0;
+        let mut collected = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            collected.extend_from_slice(&chunk.expect("chunk"));
+            chunks += 1;
+        }
+
+        assert!(chunks > 1, "body must be streamed in several chunks");
+        assert_eq!(collected, payload);
+    }
+
+    #[tokio::test]
+    async fn s3_body_stream_empty_body_yields_nothing() {
+        let mut stream = stream_from_sdk_body(SdkByteStream::from(Vec::new()));
+        while let Some(chunk) = stream.next().await {
+            assert!(chunk.expect("chunk").is_empty(), "no data expected");
+        }
+    }
 
     #[test]
     fn s3_blob_store_construction_with_valid_config() {

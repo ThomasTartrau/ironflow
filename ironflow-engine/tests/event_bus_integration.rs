@@ -19,7 +19,10 @@ use ironflow_store::models::{RunStatus, TriggerKind};
 use ironflow_store::store::RunStore;
 use rust_decimal::Decimal;
 use serde_json::json;
-use tokio::time::timeout;
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::time::{sleep, timeout};
+use uuid::Uuid;
 
 fn create_test_engine() -> (Engine, Arc<InMemoryStore>) {
     let store = Arc::new(InMemoryStore::new());
@@ -344,5 +347,120 @@ async fn agent_step_emits_tokens_used_event() {
     assert!(
         event_types.contains(&"step_completed"),
         "should also emit StepCompleted"
+    );
+}
+
+/// Poll until the bus no longer holds a channel for `run_id`: the releaser
+/// runs in a task spawned by the event publisher.
+async fn wait_for_channel_release(bus: &WorkflowEventBus, run_id: Uuid) {
+    timeout(Duration::from_secs(5), async {
+        while bus.has_channel(run_id) {
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("channel was not released");
+}
+
+/// Drain a receiver until it closes, failing if it stays open.
+async fn drain_until_closed(rx: &mut Receiver<WorkflowEvent>) -> Vec<WorkflowEvent> {
+    let mut events = Vec::new();
+    loop {
+        match timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("receiver did not close")
+        {
+            Ok(event) => events.push(event),
+            Err(RecvError::Closed) => return events,
+            Err(RecvError::Lagged(_)) => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn channel_is_released_when_run_completes() {
+    let (mut engine, store) = create_test_engine();
+    let bus = WorkflowEventBus::new();
+    engine.set_event_bus(bus.clone());
+    engine.register(EchoWorkflow).unwrap();
+
+    let run = engine
+        .enqueue_handler("echo", TriggerKind::Manual, json!({}), 0)
+        .await
+        .unwrap();
+    store
+        .update_run_status(run.id, RunStatus::Running)
+        .await
+        .unwrap();
+
+    let mut rx = bus.subscribe(run.id);
+
+    engine.execute_handler_run(run.id).await.unwrap();
+
+    wait_for_channel_release(&bus, run.id).await;
+
+    let events = drain_until_closed(&mut rx).await;
+    let event_types: Vec<_> = events.iter().map(|e| e.event_type()).collect();
+    assert!(
+        event_types.starts_with(&["step_started", "step_completed"]),
+        "unexpected events before close: {event_types:?}"
+    );
+}
+
+#[tokio::test]
+async fn channel_is_released_when_run_fails() {
+    let (mut engine, store) = create_test_engine();
+    let bus = WorkflowEventBus::new();
+    engine.set_event_bus(bus.clone());
+    engine.register(FailingWorkflow).unwrap();
+
+    let run = engine
+        .enqueue_handler("failing", TriggerKind::Manual, json!({}), 0)
+        .await
+        .unwrap();
+    store
+        .update_run_status(run.id, RunStatus::Running)
+        .await
+        .unwrap();
+
+    let mut rx = bus.subscribe(run.id);
+
+    let result = engine.execute_handler_run(run.id).await;
+    assert!(result.is_err());
+
+    wait_for_channel_release(&bus, run.id).await;
+
+    let events = drain_until_closed(&mut rx).await;
+    let event_types: Vec<_> = events.iter().map(|e| e.event_type()).collect();
+    assert!(
+        event_types.starts_with(&["step_started", "step_failed"]),
+        "unexpected events before close: {event_types:?}"
+    );
+}
+
+#[tokio::test]
+async fn channel_is_kept_while_run_awaits_approval() {
+    let (mut engine, store) = create_test_engine();
+    let bus = WorkflowEventBus::new();
+    engine.set_event_bus(bus.clone());
+    engine.register(ApprovalWorkflow).unwrap();
+
+    let run = engine
+        .enqueue_handler("approval-test", TriggerKind::Manual, json!({}), 0)
+        .await
+        .unwrap();
+    store
+        .update_run_status(run.id, RunStatus::Running)
+        .await
+        .unwrap();
+
+    let _rx = bus.subscribe(run.id);
+
+    engine.execute_handler_run(run.id).await.unwrap();
+    sleep(Duration::from_millis(100)).await;
+
+    assert!(
+        bus.has_channel(run.id),
+        "a run awaiting approval keeps its channel"
     );
 }
