@@ -76,15 +76,17 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use axum::routing::patch;
+    use axum::routing::{get, patch};
     use http_body_util::BodyExt;
+    use ironflow_auth::extractor::{API_KEY_PREFIX, API_KEY_SUFFIX_LEN};
     use ironflow_auth::jwt::{AccessToken, JwtConfig};
+    use ironflow_auth::password;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
-    use ironflow_store::entities::NewUser;
+    use ironflow_store::entities::{NewApiKey, NewUser};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::Store;
     use serde_json::{Value as JsonValue, json, to_string};
@@ -291,5 +293,109 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(retaliate).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// Store an API key owned by `user_id` with `scopes`, returning its ID and
+    /// its `Bearer` header.
+    async fn create_api_key(
+        state: &AppState,
+        user_id: Uuid,
+        scopes: Vec<ApiKeyScope>,
+    ) -> (Uuid, String) {
+        let raw_key = format!(
+            "irfl_{}rest-of-secret-key",
+            &Uuid::now_v7().simple().to_string()[24..]
+        );
+        let prefix = &raw_key[..API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN];
+        let key = state
+            .store
+            .create_api_key(NewApiKey {
+                user_id,
+                name: format!("key-{}", Uuid::now_v7()),
+                key_hash: password::hash(&raw_key).unwrap(),
+                key_prefix: prefix.to_string(),
+                scopes,
+                expires_at: None,
+                rate_limit_override: None,
+            })
+            .await
+            .unwrap();
+        (key.id, format!("Bearer {raw_key}"))
+    }
+
+    #[tokio::test]
+    async fn demoted_admin_api_key_loses_admin_scope_and_is_disabled() {
+        let state = test_state();
+        let admin = state
+            .store
+            .create_user(NewUser {
+                email: "admin@example.com".to_string(),
+                username: "admin".to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(true),
+            })
+            .await
+            .unwrap();
+        let demoted = state
+            .store
+            .create_user(NewUser {
+                email: "demoted@example.com".to_string(),
+                username: "demoted".to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(true),
+            })
+            .await
+            .unwrap();
+        let (admin_key_id, admin_key_header) =
+            create_api_key(&state, demoted.id, vec![ApiKeyScope::Admin]).await;
+        let (mixed_key_id, mixed_key_header) = create_api_key(
+            &state,
+            demoted.id,
+            vec![ApiKeyScope::RunsRead, ApiKeyScope::SignalsSend],
+        )
+        .await;
+
+        let admin_header = make_auth_header(admin.id, true, &state);
+        let store = state.store.clone();
+        let app = Router::new()
+            .route("/{id}/role", patch(update_role))
+            .route("/probe", get(|_auth: Authenticated| async { "ok" }))
+            .with_state(state);
+
+        let demote = Request::builder()
+            .uri(format!("/{}/role", demoted.id))
+            .method("PATCH")
+            .header("content-type", "application/json")
+            .header("authorization", admin_header)
+            .body(Body::from(to_string(&json!({"is_admin": false})).unwrap()))
+            .unwrap();
+        let resp = app.clone().oneshot(demote).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let keys = store.list_api_keys_by_user(demoted.id).await.unwrap();
+        assert_eq!(keys.len(), 2);
+        for key in &keys {
+            assert!(ApiKeyScope::all_allowed_for_member(&key.scopes));
+            assert!(!key.scopes.contains(&ApiKeyScope::Admin));
+            assert!(!key.scopes.contains(&ApiKeyScope::SignalsSend));
+        }
+        let admin_key = keys.iter().find(|k| k.id == admin_key_id).unwrap();
+        assert!(admin_key.scopes.is_empty());
+        assert!(!admin_key.is_active);
+        let mixed_key = keys.iter().find(|k| k.id == mixed_key_id).unwrap();
+        assert_eq!(mixed_key.scopes, vec![ApiKeyScope::RunsRead]);
+        assert!(mixed_key.is_active);
+
+        let probe = |header: String| {
+            Request::builder()
+                .uri("/probe")
+                .header("authorization", header)
+                .body(Body::empty())
+                .unwrap()
+        };
+        let resp = app.clone().oneshot(probe(admin_key_header)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let resp = app.oneshot(probe(mixed_key_header)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }

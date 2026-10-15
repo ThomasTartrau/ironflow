@@ -4,15 +4,29 @@ use chrono::{DateTime, Utc};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::entities::{NewRefreshToken, NewUser, Page, User};
+use crate::entities::{ApiKeyScope, NewRefreshToken, NewUser, Page, User};
 use crate::error::StoreError;
 use crate::store::StoreFuture;
 use crate::user_store::UserStore;
 
 use super::PostgresStore;
+use super::api_key_store::scopes_to_strings;
 
 /// Advisory lock key serializing the "first user becomes admin" decision of create_user.
 const FIRST_USER_ADMIN_LOCK: &str = "ironflow:first_user_admin";
+
+/// Strips from a demoted user's API keys every scope outside `$2` (the member-allowed
+/// scopes) and deactivates the keys left with none. The `SET` expressions read the old
+/// row, so both see the scopes before the update; compliant keys are skipped.
+///
+/// Runtime-checked: the `.sqlx` offline cache is not regenerated for this query.
+const DEMOTE_API_KEYS_SQL: &str = r#"
+UPDATE iam.api_keys
+SET scopes     = ARRAY(SELECT s FROM unnest(scopes) AS s WHERE s = ANY($2)),
+    is_active  = is_active AND EXISTS (SELECT 1 FROM unnest(scopes) AS s WHERE s = ANY($2)),
+    updated_at = $3
+WHERE user_id = $1 AND NOT (scopes <@ $2)
+"#;
 
 /// Intermediate row struct matching the `iam.users` columns exactly.
 #[derive(FromRow)]
@@ -258,6 +272,16 @@ impl UserStore for PostgresStore {
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?
             .ok_or(StoreError::UserNotFound(id))?;
+
+            if !is_admin {
+                sqlx::query(DEMOTE_API_KEYS_SQL)
+                    .bind(id)
+                    .bind(scopes_to_strings(ApiKeyScope::member_allowed()))
+                    .bind(Utc::now())
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
 
             sqlx::query("DELETE FROM iam.refresh_tokens WHERE user_id = $1")
                 .bind(id)

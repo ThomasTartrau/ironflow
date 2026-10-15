@@ -2801,7 +2801,7 @@
           "signals"
         ],
         "summary": "Send a signal.",
-        "description": "The signal is stored, then every run waiting for its `(name, key)` with a\npayload schema it matches is resumed. A waiting run whose schema the\npayload does not match keeps waiting and is listed under `rejected`. The\nsignal is stored even when nobody waits for it yet, so a run that opens its\nwait later still finds it.\n\nSending again with the same `idempotency_id` returns 200 with\n`duplicate: true` and delivers nothing.\n\n# Errors\n\n- 400 if `name` or `key` is empty or longer than 255 characters, or if\n  `idempotency_id` is empty or longer than 255 characters\n- 401 if not authenticated\n- 403 if the caller is not an admin, or the API key lacks `signals_send`",
+        "description": "The signal is stored, then every run waiting for its `(name, key)` with a\npayload schema it matches is resumed. A waiting run whose schema the\npayload does not match keeps waiting and is listed under `rejected`. The\nsignal is stored even when nobody waits for it yet, so a run that opens its\nwait later still finds it.\n\nSending again with the same `idempotency_id` returns 200 with\n`duplicate: true` and delivers nothing.\n\n# Errors\n\n- 400 if `name` or `key` is empty or longer than 255 characters, or if\n  `idempotency_id` is empty or longer than 255 characters\n- 401 if not authenticated\n- 403 if the caller is not an admin, the API key lacks `signals_send`, or\n  its owner is not an admin",
         "operationId": "send_signal",
         "requestBody": {
           "description": "Signal to deliver",

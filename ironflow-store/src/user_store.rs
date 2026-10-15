@@ -38,6 +38,9 @@ pub trait UserStore: Send + Sync {
 
     /// Delete a user by ID.
     ///
+    /// Also deletes the user's API keys (a cascade in Postgres, explicit in the
+    /// in-memory store), so a key never outlives its owner.
+    ///
     /// # Errors
     ///
     /// Returns [`StoreError::UserNotFound`] if the user does not exist.
@@ -47,6 +50,13 @@ pub trait UserStore: Send + Sync {
     ///
     /// Also bumps [`User::token_version`] and deletes the user's refresh
     /// tokens, so tokens carrying the old role stop being accepted.
+    ///
+    /// When demoting (`is_admin == false`), also removes from the user's API
+    /// keys every scope outside [`ApiKeyScope::member_allowed`] and deactivates
+    /// the keys left with no scope, in the same atomic write as the role change.
+    /// Promoting never touches the keys: stripped scopes are not restored.
+    ///
+    /// [`ApiKeyScope::member_allowed`]: crate::entities::ApiKeyScope::member_allowed
     ///
     /// # Errors
     ///

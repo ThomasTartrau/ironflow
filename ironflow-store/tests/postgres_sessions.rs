@@ -16,7 +16,8 @@
 use std::env::var;
 
 use chrono::{Duration, Utc};
-use ironflow_store::entities::{NewRefreshToken, NewUser, User};
+use ironflow_store::api_key_store::ApiKeyStore;
+use ironflow_store::entities::{ApiKey, ApiKeyScope, NewApiKey, NewRefreshToken, NewUser, User};
 use ironflow_store::error::StoreError;
 use ironflow_store::postgres::PostgresStore;
 use ironflow_store::user_store::UserStore;
@@ -177,4 +178,69 @@ async fn deleting_a_user_cascades_to_refresh_tokens() {
     store.delete_user(alice.id).await.unwrap();
 
     assert_eq!(store.consume_refresh_token(&hash).await.unwrap(), None);
+}
+
+/// An API key of `user_id` with a unique prefix, so tests can share a database.
+async fn api_key(store: &PostgresStore, user_id: Uuid, scopes: Vec<ApiKeyScope>) -> ApiKey {
+    let suffix = Uuid::now_v7().simple().to_string();
+    store
+        .create_api_key(NewApiKey {
+            user_id,
+            name: format!("key-{suffix}"),
+            key_hash: "argon2hash".to_string(),
+            key_prefix: format!("t{}", &suffix[suffix.len() - 12..]),
+            scopes,
+            expires_at: None,
+            rate_limit_override: None,
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn demotion_strips_member_forbidden_scopes_from_api_keys() {
+    let store = store().await;
+    let admin = user(&store, true).await;
+    let other = user(&store, true).await;
+    let mixed = api_key(
+        &store,
+        admin.id,
+        vec![ApiKeyScope::RunsRead, ApiKeyScope::SignalsSend],
+    )
+    .await;
+    let admin_only = api_key(&store, admin.id, vec![ApiKeyScope::Admin]).await;
+    let others = api_key(&store, other.id, vec![ApiKeyScope::Admin]).await;
+
+    store.update_user_role(admin.id, false).await.unwrap();
+
+    let mixed = store.find_api_key_by_id(mixed.id).await.unwrap().unwrap();
+    assert_eq!(mixed.scopes, vec![ApiKeyScope::RunsRead]);
+    assert!(mixed.is_active);
+
+    let admin_only = store
+        .find_api_key_by_id(admin_only.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(admin_only.scopes.is_empty());
+    assert!(!admin_only.is_active);
+
+    let others = store.find_api_key_by_id(others.id).await.unwrap().unwrap();
+    assert_eq!(others.scopes, vec![ApiKeyScope::Admin]);
+    assert!(others.is_active);
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn promotion_keeps_api_keys_unchanged() {
+    let store = store().await;
+    let member = user(&store, false).await;
+    let key = api_key(&store, member.id, vec![ApiKeyScope::RunsRead]).await;
+
+    store.update_user_role(member.id, true).await.unwrap();
+
+    let found = store.find_api_key_by_id(key.id).await.unwrap().unwrap();
+    assert_eq!(found.scopes, vec![ApiKeyScope::RunsRead]);
+    assert!(found.is_active);
 }
