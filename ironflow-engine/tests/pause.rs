@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::spawn;
 use tokio::sync::Notify;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
 use ironflow_core::error::OperationError;
@@ -29,7 +29,10 @@ use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::{Engine, EnqueueOptions, ExecutionMode};
 use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
+use ironflow_engine::notify::{AuditLogSubscriber, Event};
 use ironflow_engine::operation::{Operation, OperationContext};
+use ironflow_store::audit_log_store::AuditLogStore;
+use ironflow_store::entities::{AuditLogEntry, AuditLogFilter, EventKind};
 use ironflow_store::error::StoreError;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{RunStatus, RunUpdate, StepStatus, TriggerKind};
@@ -706,10 +709,15 @@ async fn pause_workflow_holds_its_runs_until_resumed() {
         assert!(nothing_to_pick(&store).await);
         assert_eq!(status_of(&store, run_id).await, RunStatus::Pending);
 
-        assert!(engine.resume_workflow(WORKFLOW).await.expect("resume"));
+        assert!(
+            engine
+                .resume_workflow(WORKFLOW, None)
+                .await
+                .expect("resume")
+        );
         assert!(
             !engine
-                .resume_workflow(WORKFLOW)
+                .resume_workflow(WORKFLOW, None)
                 .await
                 .expect("resume again")
         );
@@ -751,7 +759,12 @@ async fn pause_workflow_holds_local_runs_until_resumed() {
         assert_eq!(op.calls(), 0);
         assert_eq!(status_of(&store, run_id).await, RunStatus::Pending);
 
-        assert!(engine.resume_workflow(WORKFLOW).await.expect("resume"));
+        assert!(
+            engine
+                .resume_workflow(WORKFLOW, None)
+                .await
+                .expect("resume")
+        );
         while status_of(&store, run_id).await != RunStatus::Completed {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
@@ -781,10 +794,126 @@ async fn pause_workflow_resume_in_local_mode_ignores_scheduled_future_runs() {
             .into_run()
             .id;
 
-        assert!(engine.resume_workflow(WORKFLOW).await.expect("resume"));
+        assert!(
+            engine
+                .resume_workflow(WORKFLOW, None)
+                .await
+                .expect("resume")
+        );
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(status_of(&store, run_id).await, RunStatus::Pending);
         assert_eq!(op.calls(), 0);
+    })
+    .await
+    .expect("test timed out");
+}
+
+/// The audit entries of `kind` recorded so far.
+async fn audit_entries(store: &InMemoryStore, kind: EventKind) -> Vec<AuditLogEntry> {
+    let filter = AuditLogFilter {
+        event_type: Some(kind),
+        ..AuditLogFilter::default()
+    };
+    store
+        .list_audit_logs(filter, 1, 20)
+        .await
+        .expect("list audit logs")
+        .items
+}
+
+/// Wait for the audit log to hold an entry of `kind`: subscribers run on a
+/// spawned task, so the entry lands shortly after the call returns.
+async fn await_audit_entry(store: &InMemoryStore, kind: EventKind) -> AuditLogEntry {
+    loop {
+        if let Some(entry) = audit_entries(store, kind).await.into_iter().next() {
+            return entry;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn pause_workflow_publishes_paused_and_resumed_events_with_the_actor() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let mut engine = new_engine(&store);
+        engine.register(single()).expect("register handler");
+        engine.subscribe(AuditLogSubscriber::new(store.clone()), Event::ALL);
+        let engine = Arc::new(engine);
+        let user_id = Uuid::now_v7();
+
+        // Resuming a workflow that is not paused changes nothing: no event.
+        assert!(
+            !engine
+                .resume_workflow(WORKFLOW, Some(user_id))
+                .await
+                .expect("resume running workflow")
+        );
+
+        engine
+            .pause_workflow(WORKFLOW, Some(user_id))
+            .await
+            .expect("pause");
+        let paused = await_audit_entry(&store, EventKind::WorkflowPaused).await;
+        assert_eq!(paused.user_id, Some(user_id));
+        assert_eq!(paused.payload["workflow_name"], WORKFLOW);
+        assert!(paused.run_id.is_none());
+
+        assert!(
+            engine
+                .resume_workflow(WORKFLOW, Some(user_id))
+                .await
+                .expect("resume")
+        );
+        let resumed = await_audit_entry(&store, EventKind::WorkflowResumed).await;
+        assert_eq!(resumed.user_id, Some(user_id));
+        assert_eq!(resumed.payload["workflow_name"], WORKFLOW);
+
+        // Only the resume of the paused workflow was recorded.
+        sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            audit_entries(&store, EventKind::WorkflowResumed)
+                .await
+                .len(),
+            1
+        );
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn pause_workflow_twice_records_both_pauses_in_the_audit_log() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let mut engine = new_engine(&store);
+        engine.register(single()).expect("register handler");
+        engine.subscribe(AuditLogSubscriber::new(store.clone()), Event::ALL);
+        let engine = Arc::new(engine);
+        let first = Uuid::now_v7();
+        let second = Uuid::now_v7();
+
+        engine
+            .pause_workflow(WORKFLOW, Some(first))
+            .await
+            .expect("pause");
+        engine
+            .pause_workflow(WORKFLOW, Some(second))
+            .await
+            .expect("pause again");
+
+        // Each pause request is a decision of its actor: both are recorded.
+        let mut entries = audit_entries(&store, EventKind::WorkflowPaused).await;
+        while entries.len() < 2 {
+            sleep(Duration::from_millis(10)).await;
+            entries = audit_entries(&store, EventKind::WorkflowPaused).await;
+        }
+        assert_eq!(entries.len(), 2);
+        let mut actors: Vec<Option<Uuid>> = entries.iter().map(|entry| entry.user_id).collect();
+        actors.sort();
+        let mut expected = vec![Some(first), Some(second)];
+        expected.sort();
+        assert_eq!(actors, expected);
     })
     .await
     .expect("test timed out");
@@ -802,7 +931,7 @@ async fn pause_unknown_workflow_is_rejected() {
             .expect_err("unknown workflow");
         assert!(matches!(err, EngineError::InvalidWorkflow(_)));
         let err = engine
-            .resume_workflow("no-such-workflow")
+            .resume_workflow("no-such-workflow", None)
             .await
             .expect_err("unknown workflow");
         assert!(matches!(err, EngineError::InvalidWorkflow(_)));

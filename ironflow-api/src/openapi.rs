@@ -44,8 +44,8 @@ use ironflow_engine::notify::{
     SignalReceivedEvent, StepCompletedEvent, StepFailedEvent, UserSignedInEvent,
     UserSignedOutEvent, UserSignedUpEvent, WorkflowAgentStepResumedEvent,
     WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent, WorkflowEvent,
-    WorkflowInputRequiredEvent, WorkflowStepCompletedEvent, WorkflowStepFailedEvent,
-    WorkflowStepStartedEvent,
+    WorkflowInputRequiredEvent, WorkflowPausedEvent, WorkflowResumedEvent,
+    WorkflowStepCompletedEvent, WorkflowStepFailedEvent, WorkflowStepStartedEvent,
 };
 use ironflow_store::entities::{
     AccountWindowStatus, ApprovalRequirement, AuditLogEntry, CatchupPolicy, LogEntry, LogStream,
@@ -269,6 +269,8 @@ mod with_signup {
                 SignalAwaitedEvent,
                 SignalReceivedEvent,
                 ScheduleOccurrencesMissedEvent,
+                WorkflowPausedEvent,
+                WorkflowResumedEvent,
             )
         ),
         tags(
@@ -484,6 +486,8 @@ mod without_signup {
                 SignalAwaitedEvent,
                 SignalReceivedEvent,
                 ScheduleOccurrencesMissedEvent,
+                WorkflowPausedEvent,
+                WorkflowResumedEvent,
             )
         ),
         tags(

@@ -1,14 +1,20 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::json;
 use tokio::sync::broadcast;
+use tokio::time::sleep;
+use uuid::Uuid;
 
 use ironflow_auth::jwt::{AccessToken, JwtConfig};
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::engine::Engine;
-use ironflow_engine::notify::Event;
-use ironflow_store::entities::{NewUser, Run, RunStatus, TriggerKind};
+use ironflow_engine::notify::{AuditLogSubscriber, Event};
+use ironflow_store::audit_log_store::AuditLogStore;
+use ironflow_store::entities::{
+    AuditLogEntry, AuditLogFilter, EventKind, NewUser, Run, RunStatus, TriggerKind,
+};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::NewRun;
 use ironflow_store::store::Store;
@@ -17,9 +23,29 @@ use crate::state::AppState;
 
 /// An `AppState` over an in-memory store, without artifact storage.
 pub(crate) fn test_state() -> AppState {
-    let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
-    let provider = Arc::new(ClaudeCodeProvider::new());
-    let engine = Arc::new(Engine::new(store.clone(), provider));
+    let store = Arc::new(InMemoryStore::new());
+    let engine = Engine::new(store.clone(), Arc::new(ClaudeCodeProvider::new()));
+    state_with_engine(store, engine, false)
+}
+
+/// An `AppState` whose engine persists every event to the store's audit log.
+pub(crate) fn test_state_with_audit_log(store: Arc<InMemoryStore>) -> AppState {
+    let engine = Engine::new(store.clone(), Arc::new(ClaudeCodeProvider::new()));
+    state_with_engine(store, engine, true)
+}
+
+/// An `AppState` over `store` and `engine`, without artifact storage.
+///
+/// When `audit_log` is set, the engine first subscribes an
+/// [`AuditLogSubscriber`] on every event, as the reference server does.
+pub(crate) fn state_with_engine(
+    store: Arc<InMemoryStore>,
+    mut engine: Engine,
+    audit_log: bool,
+) -> AppState {
+    if audit_log {
+        engine.subscribe(AuditLogSubscriber::new(store.clone()), Event::ALL);
+    }
     let jwt_config = Arc::new(JwtConfig {
         secret: "test-secret".to_string(),
         access_token_ttl_secs: 900,
@@ -31,11 +57,48 @@ pub(crate) fn test_state() -> AppState {
 
     AppState::new(
         store,
-        engine,
+        Arc::new(engine),
         jwt_config,
         "test-worker-token".to_string(),
         event_sender,
     )
+}
+
+/// The audit entries of `kind` recorded so far, for `run_id` when given.
+pub(crate) async fn audit_entries(
+    store: &InMemoryStore,
+    kind: EventKind,
+    run_id: Option<Uuid>,
+) -> Vec<AuditLogEntry> {
+    let filter = AuditLogFilter {
+        event_type: Some(kind),
+        run_id,
+        ..AuditLogFilter::default()
+    };
+    store
+        .list_audit_logs(filter, 1, 10)
+        .await
+        .expect("list audit logs")
+        .items
+}
+
+/// Wait for the audit log to hold an entry of `kind`, for `run_id` when
+/// given, and return it.
+///
+/// The engine publishes to its subscribers on a spawned task, so the entry
+/// lands shortly after the HTTP response.
+pub(crate) async fn await_audit_entry(
+    store: &InMemoryStore,
+    kind: EventKind,
+    run_id: Option<Uuid>,
+) -> AuditLogEntry {
+    for _ in 0..100 {
+        if let Some(entry) = audit_entries(store, kind, run_id).await.into_iter().next() {
+            return entry;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    panic!("no {kind} audit entry was recorded for run {run_id:?}");
 }
 
 /// A `Bearer` header for a non-admin user of this state.
