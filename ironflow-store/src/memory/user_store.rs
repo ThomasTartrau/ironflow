@@ -27,6 +27,8 @@ impl UserStore for InMemoryStore {
                 return Err(StoreError::DuplicateUsername(req.username));
             }
 
+            // Decided under the state write lock: concurrent sign-ups cannot both
+            // see an empty store.
             let is_admin = req.is_admin.unwrap_or(state.users.is_empty());
 
             let now = Utc::now();

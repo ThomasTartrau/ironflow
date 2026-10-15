@@ -44,6 +44,11 @@ and it decides who may resolve the gate:
 The assignee is matched to the caller by user ID, so an API key resolves its
 owner's gates whatever the key is named.
 
+A user assignee is bound to the account holding that username when the gate
+opens, or when it is reassigned. If no account has that name at that moment, the
+gate is admin-only, and an account created later under that name cannot resolve
+it. Create the assignee's account before the run reaches the gate.
+
 Everything past the message is optional. Without a deadline, the run waits
 indefinitely.
 

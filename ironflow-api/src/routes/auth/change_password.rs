@@ -7,6 +7,7 @@ use serde_json::json;
 
 use ironflow_auth::extractor::AuthenticatedUser;
 use ironflow_auth::password;
+use tracing::warn;
 
 use crate::entities::ChangePasswordRequest;
 use crate::error::ApiError;
@@ -53,7 +54,10 @@ pub async fn change_password(
     let valid = password::verify(&req.old_password, &stored_user.password_hash)
         .map_err(|_| ApiError::Internal("password verification failed".to_string()))?;
 
+    // Behind the credential rate limiter (`rate_limit_auth`), per user: guesses
+    // beyond the quota get 429 before reaching this handler.
     if !valid {
+        warn!(user_id = %user.user_id, "password change refused: wrong current password");
         return Err(ApiError::BadRequest("incorrect old password".to_string()));
     }
 
