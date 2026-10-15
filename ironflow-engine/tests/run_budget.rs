@@ -862,3 +862,29 @@ async fn the_cap_covers_every_attempt_of_a_run() {
         "no step of the new attempt may run on an exhausted cap"
     );
 }
+
+#[tokio::test]
+async fn check_monthly_quota_refuses_when_the_quota_is_met() {
+    let (dir, _guard) = fixtures_dir("monthly-check-met");
+    let store = Arc::new(InMemoryStore::new());
+    let engine = engine_with(store, &dir)
+        .with_budget_config(BudgetConfig::new().monthly_cost_limit_usd(Decimal::ZERO));
+
+    let err = engine
+        .check_monthly_quota("sequential-agents")
+        .await
+        .expect_err("a zero quota is always met");
+    assert!(matches!(err, EngineError::MonthlyBudgetExceeded { .. }));
+}
+
+#[tokio::test]
+async fn check_monthly_quota_passes_without_a_quota() {
+    let (dir, _guard) = fixtures_dir("monthly-check-unset");
+    let store = Arc::new(InMemoryStore::new());
+    let engine = engine_with(store, &dir);
+
+    engine
+        .check_monthly_quota("sequential-agents")
+        .await
+        .expect("no quota configured");
+}

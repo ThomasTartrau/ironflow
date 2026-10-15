@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
-use ironflow_engine::error::HANDLER_VERSION_MISMATCH_CODE;
+use ironflow_engine::error::{EngineError, HANDLER_VERSION_MISMATCH_CODE};
 use ironflow_engine::notify::{Event, RetryForcedEvent, RunCreatedEvent};
 use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
@@ -35,6 +35,8 @@ pub struct RetryQuery {
 /// changed since the original run (pass `?force=true` to override), and 409
 /// `CONCURRENCY_CONFLICT` if another active run took the original's
 /// concurrency key since.
+///
+/// Returns 429 `MONTHLY_BUDGET_EXCEEDED` if the global monthly cost quota is exhausted.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -51,7 +53,8 @@ pub struct RetryQuery {
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
             (status = 404, description = "Run not found"),
-            (status = 409, description = "Version mismatch, automatic retry already armed, or concurrency key held by an active run (CONCURRENCY_CONFLICT)")
+            (status = 409, description = "Version mismatch, automatic retry already armed, or concurrency key held by an active run (CONCURRENCY_CONFLICT)"),
+            (status = 429, description = "Monthly cost quota exhausted (MONTHLY_BUDGET_EXCEEDED)")
         ),
         security(("Bearer" = []))
     )
@@ -102,6 +105,17 @@ pub async fn retry_run(
             original.handler_version.as_deref().unwrap_or("unknown"),
         )));
     }
+
+    state
+        .engine
+        .check_monthly_quota(&original.workflow_name)
+        .await
+        .map_err(|e| match e {
+            EngineError::MonthlyBudgetExceeded { .. } => {
+                ApiError::MonthlyBudgetExceeded(e.to_string())
+            }
+            other => ApiError::Internal(other.to_string()),
+        })?;
 
     // When the handler is still registered, use its current version.
     // When unregistered (e.g. removed between deploys), preserve the
@@ -177,14 +191,15 @@ mod tests {
     use axum::response::Response;
     use axum::routing::post;
     use http_body_util::BodyExt;
-    use ironflow_auth::jwt::AccessToken;
+    use ironflow_auth::jwt::{AccessToken, JwtConfig};
     use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_engine::budget::BudgetConfig;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, NewUser, RunActor, RunStatus, TriggerKind};
+    use ironflow_store::models::{NewRun, NewUser, RunActor, RunFilter, RunStatus, TriggerKind};
     use ironflow_store::store::RunStore;
     use ironflow_store::user_store::UserStore;
     use rust_decimal::Decimal;
@@ -198,24 +213,7 @@ mod tests {
     use crate::routes::test_helpers::create_user_auth_header;
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
-        Arc::new(InMemoryStore::new());
-        let provider = Arc::new(ClaudeCodeProvider::new());
-        let engine = Arc::new(Engine::new(store.clone(), provider));
-        let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
-            secret: "test-secret".to_string(),
-            access_token_ttl_secs: 900,
-            refresh_token_ttl_secs: 604800,
-            cookie_domain: None,
-            cookie_secure: false,
-        });
-        let (event_sender, _) = broadcast::channel::<Event>(1);
-        AppState::new(
-            store,
-            engine,
-            jwt_config,
-            "test-worker-token".to_string(),
-            event_sender,
-        )
+        test_state_with_quota(store, BudgetConfig::new())
     }
 
     #[tokio::test]
@@ -1160,6 +1158,85 @@ mod tests {
             .body(Body::from("{}"))
             .unwrap();
         app.oneshot(req).await.unwrap()
+    }
+
+    fn test_state_with_quota(store: Arc<InMemoryStore>, budget: BudgetConfig) -> AppState {
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let engine = Engine::new(store.clone(), provider).with_budget_config(budget);
+        let jwt_config = Arc::new(JwtConfig {
+            secret: "test-secret".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
+        AppState::new(
+            store,
+            Arc::new(engine),
+            jwt_config,
+            "test-worker-token".to_string(),
+            event_sender,
+        )
+    }
+
+    #[tokio::test]
+    async fn retry_returns_429_when_monthly_quota_exhausted() {
+        let store = Arc::new(InMemoryStore::new());
+        let run_id = create_failed_run(&store, "test", None).await.id;
+
+        let budget = BudgetConfig::new().monthly_cost_limit_usd(Decimal::ZERO);
+        let resp = post_retry(test_state_with_quota(store.clone(), budget), run_id).await;
+        assert_eq!(resp.status(), HttpStatusCode::TOO_MANY_REQUESTS);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["error"]["code"], "MONTHLY_BUDGET_EXCEEDED");
+
+        let runs = store.list_runs(RunFilter::default(), 1, 50).await.unwrap();
+        assert_eq!(runs.total, 1);
+    }
+
+    #[tokio::test]
+    async fn retry_succeeds_when_monthly_quota_has_room() {
+        let store = Arc::new(InMemoryStore::new());
+        let run_id = create_failed_run(&store, "test", None).await.id;
+
+        let budget = BudgetConfig::new().monthly_cost_limit_usd(Decimal::new(10000, 2));
+        let resp = post_retry(test_state_with_quota(store, budget), run_id).await;
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn retry_with_exhausted_quota_still_returns_400_for_a_running_run() {
+        let store = Arc::new(InMemoryStore::new());
+        let running = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                priority: 0,
+                concurrency_limits: Vec::new(),
+                max_cost_usd: None,
+                worker_tags: Vec::new(),
+            })
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(running.id, RunStatus::Running)
+            .await
+            .unwrap();
+        let budget = BudgetConfig::new().monthly_cost_limit_usd(Decimal::ZERO);
+        let resp = post_retry(test_state_with_quota(store, budget), running.id).await;
+        assert_eq!(resp.status(), HttpStatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

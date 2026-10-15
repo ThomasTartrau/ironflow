@@ -6753,7 +6753,7 @@
     },
     "/api/v1/runs/{id}/replay": {
       "post": {
-        "description": "Creates a new `Pending` run with `TriggerKind::Replay` pointing to the\noriginal, always on the current handler version. The original run is not modified.",
+        "description": "Creates a new `Pending` run with `TriggerKind::Replay` pointing to the\noriginal, always on the current handler version. The original run is not modified.\n\nReturns 429 `MONTHLY_BUDGET_EXCEEDED` if the global monthly cost quota is exhausted.",
         "operationId": "replay_run",
         "parameters": [
           {
@@ -6789,6 +6789,9 @@
           },
           "404": {
             "description": "Run not found or workflow not registered"
+          },
+          "429": {
+            "description": "Monthly cost quota exhausted (MONTHLY_BUDGET_EXCEEDED)"
           }
         },
         "security": [
@@ -6855,7 +6858,7 @@
     },
     "/api/v1/runs/{id}/retry": {
       "post": {
-        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state, 409 if an\nautomatic retry is already armed, 409 if the handler version has\nchanged since the original run (pass `?force=true` to override), and 409\n`CONCURRENCY_CONFLICT` if another active run took the original's\nconcurrency key since.",
+        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state, 409 if an\nautomatic retry is already armed, 409 if the handler version has\nchanged since the original run (pass `?force=true` to override), and 409\n`CONCURRENCY_CONFLICT` if another active run took the original's\nconcurrency key since.\n\nReturns 429 `MONTHLY_BUDGET_EXCEEDED` if the global monthly cost quota is exhausted.",
         "operationId": "retry_run",
         "parameters": [
           {
@@ -6903,6 +6906,9 @@
           },
           "409": {
             "description": "Version mismatch, automatic retry already armed, or concurrency key held by an active run (CONCURRENCY_CONFLICT)"
+          },
+          "429": {
+            "description": "Monthly cost quota exhausted (MONTHLY_BUDGET_EXCEEDED)"
           }
         },
         "security": [
