@@ -5,7 +5,9 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 
+use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::routes::secrets::reject_provider_account_key;
 use crate::state::AppState;
@@ -37,9 +39,7 @@ pub async fn delete_secret(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
     reject_provider_account_key(&key)?;
 
     let deleted = state.store.delete_secret(&key).await?;

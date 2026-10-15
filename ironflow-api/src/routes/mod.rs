@@ -30,6 +30,8 @@ pub mod replay_run;
 pub mod retry_run;
 pub mod run_events;
 pub mod schedules;
+#[cfg(test)]
+mod scope_tests;
 pub mod secrets;
 pub mod signals;
 pub mod templates;

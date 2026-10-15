@@ -10,11 +10,13 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 #[cfg(feature = "openapi")]
 use ironflow_store::entities::LogEntry;
 use ironflow_store::entities::{LogFilter, LogStream};
 use ironflow_types::{ApiMeta, ApiResponse};
 
+use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -69,11 +71,12 @@ pub struct LogCursorMeta {
     )
 )]
 pub async fn get_run_logs(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(run_id): Path<Uuid>,
     Query(params): Query<GetRunLogsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsRead, false)?;
     state.get_run_or_404(run_id).await?;
 
     let limit = match params.limit {

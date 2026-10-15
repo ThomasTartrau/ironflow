@@ -7,11 +7,13 @@ use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::error::HANDLER_VERSION_MISMATCH_CODE;
 use ironflow_engine::notify::{Event, RetryForcedEvent, RunCreatedEvent};
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::actor::run_actor_of;
+use crate::authorization::AuthorizeExt;
 use crate::entities::RunResponse;
 use crate::error::ApiError;
 use crate::response::ok;
@@ -60,9 +62,7 @@ pub async fn retry_run(
     Path(id): Path<Uuid>,
     Query(query): Query<RetryQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::RunsManage, true)?;
 
     let original = state.get_run_or_404(id).await?;
 

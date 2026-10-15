@@ -140,6 +140,33 @@ Sign-up answers `204` without a session, whether the email was free or already
 registered: the dashboard signs in next with the same credentials. A taken username still
 answers `409 DUPLICATE_USERNAME`.
 
+### API key scopes
+
+A request authenticated with an API key (`Authorization: Bearer irfl_...`) must hold the
+scope of the route, otherwise it answers `403 INSUFFICIENT_SCOPE` before any lookup, so
+a key without the scope cannot tell whether a run or a secret exists. The `admin` scope
+implies every other scope. Paths below are relative to `/api/v1`.
+
+| Scope | Routes |
+|-------|--------|
+| `runs_read` | `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/logs`, `GET /runs/{id}/events`, `GET /runs/{id}/steps/{step_id}/artifacts/{name}`, `GET /events` |
+| `runs_write` | `POST /runs` |
+| `runs_manage` | `POST /runs/{id}/approve`, `/reject`, `/cancel`, `/retry`, `/replay`, `/pause`, `/resume`, `POST /runs/{id}/steps/{step_id}/input`, `/reject` |
+| `workflows_read` | `GET /workflows`, `GET /workflows/{name}`, `POST /workflows/{name}/plan` |
+| `stats_read` | `GET /stats`, `GET /stats/history` |
+| `admin` | `/secrets/*`, `/users/*`, `GET /audit-logs`, `POST /workflows/{name}/pause`, `POST /workflows/{name}/resume` |
+
+Routes that were admin-only stay so: `POST /runs`, cancel, retry, replay, pause and resume
+of a run, and every `admin` route also need the key's owner to be an admin, checked at
+request time, so demoting the owner takes effect at once (`403 FORBIDDEN`). Approving,
+rejecting and answering a gate keep their assignee and delegation rules on top of the
+scope. On `GET /events`, Provider Account events reach a key only when it holds the
+`admin` scope and its owner is an admin.
+
+Signals and Provider Accounts have their own scopes (`signals_send`, `accounts_read`,
+`accounts_manage`). Dashboard sessions (JWT) are not scope-checked: only the account's
+admin flag applies to them.
+
 ### Retention
 
 The example server starts a `RunPurger` built from these variables: it purges old runs,

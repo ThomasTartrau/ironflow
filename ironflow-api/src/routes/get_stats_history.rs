@@ -6,10 +6,12 @@ use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use chrono::{DateTime, Duration, Utc};
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::entities::{
     HistoryGranularity, HistoryPeriod, StatsHistoryBucket, StatsHistoryFilter,
 };
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{StatsHistoryBucketResponse, StatsHistoryQuery, StatsHistoryResponse};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -42,10 +44,11 @@ use crate::state::AppState;
     )
 )]
 pub async fn get_stats_history(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Query(params): Query<StatsHistoryQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::StatsRead, false)?;
     let period = params.period.unwrap_or_default();
     let granularity = params
         .granularity
