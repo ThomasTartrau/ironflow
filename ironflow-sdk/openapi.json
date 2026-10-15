@@ -5227,7 +5227,7 @@
             "description": "Unauthorized"
           },
           "403": {
-            "description": "Forbidden (member trying to assign forbidden scopes)"
+            "description": "Forbidden (member assigning forbidden scopes or a rate_limit_override)"
           }
         },
         "security": [

@@ -18,8 +18,10 @@
 //! - `DASHBOARD_DIR` (optional: overrides the embedded dashboard with a filesystem path)
 //! - `ALLOWED_ORIGINS` (comma-separated list; omit to allow same-origin only)
 //! - `TRUSTED_PROXIES` (optional: comma-separated IPs or CIDR ranges of the
-//!   reverse proxies whose `X-Forwarded-For` the rate limiters believe; unset,
+//!   reverse proxies whose forwarding header the rate limiters believe; unset,
 //!   the TCP peer is the client)
+//! - `TRUSTED_PROXY_HEADER` (default: `x-forwarded-for`; `x-real-ip` reads
+//!   only `X-Real-IP` from a trusted proxy, with no fallback between the two)
 //! - `WEBHOOK_URL` (optional: outbound webhook for run events)
 //! - `ARTIFACTS_DIR` (optional: filesystem root for step artifacts; unset
 //!   leaves artifacts disabled and the artifact routes answer `501`)

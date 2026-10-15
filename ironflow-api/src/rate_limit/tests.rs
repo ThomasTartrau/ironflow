@@ -58,6 +58,8 @@ fn test_app(ctx: RateLimitContext) -> Router {
     Router::new()
         .route("/test", get(ok_handler))
         .route("/echo", post(echo_handler))
+        .route("/sign-up", post(echo_handler))
+        .route("/sign-in", post(echo_handler))
         .layer(axum_mw::from_fn(rate_limit))
         .layer(Extension(ctx))
 }
@@ -88,10 +90,14 @@ fn header_request(peer: &str, name: &str, value: &str) -> Request<Body> {
 }
 
 fn email_request(peer: &str, body: &str) -> Request<Body> {
+    email_request_to("/echo", peer, body)
+}
+
+fn email_request_to(uri: &str, peer: &str, body: &str) -> Request<Body> {
     with_peer(
         Request::builder()
             .method("POST")
-            .uri("/echo")
+            .uri(uri)
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
             .unwrap(),
@@ -99,16 +105,31 @@ fn email_request(peer: &str, body: &str) -> Request<Body> {
     )
 }
 
+/// What a server built without connect info hands the middleware.
+fn no_peer_request() -> Request<Body> {
+    Request::builder().uri("/test").body(Body::empty()).unwrap()
+}
+
 async fn setup_api_key_in_store(
     store: &Arc<dyn Store>,
     rate_limit_override: Option<u32>,
+    owner_is_admin: bool,
+) -> (Uuid, String) {
+    setup_expiring_api_key_in_store(store, rate_limit_override, owner_is_admin, None).await
+}
+
+async fn setup_expiring_api_key_in_store(
+    store: &Arc<dyn Store>,
+    rate_limit_override: Option<u32>,
+    owner_is_admin: bool,
+    expires_at: Option<DateTime<Utc>>,
 ) -> (Uuid, String) {
     let user = store
         .create_user(NewUser {
             email: "rl-test@test.com".to_string(),
             username: "rl-test".to_string(),
             password_hash: password::hash("pass").unwrap(),
-            is_admin: Some(false),
+            is_admin: Some(owner_is_admin),
         })
         .await
         .unwrap();
@@ -124,7 +145,7 @@ async fn setup_api_key_in_store(
             key_hash,
             key_prefix: prefix.to_string(),
             scopes: vec![ApiKeyScope::RunsRead],
-            expires_at: None,
+            expires_at,
             rate_limit_override,
         })
         .await

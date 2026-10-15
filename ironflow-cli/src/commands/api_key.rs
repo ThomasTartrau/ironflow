@@ -38,7 +38,7 @@ pub enum ApiKeyCommands {
         #[arg(long)]
         expires_at: Option<DateTime<Utc>>,
         /// Per-key rate limit override (requests per minute). 0 disables
-        /// rate limiting for this key.
+        /// rate limiting for this key. Admin only.
         #[arg(long)]
         rate_limit_override: Option<u32>,
     },

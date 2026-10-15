@@ -1,11 +1,12 @@
 //! Client IP resolution for rate limiting.
 //!
 //! The client is the TCP peer, unless that peer is a trusted reverse proxy:
-//! then `X-Forwarded-For` is read from the right, each trusted hop skipped,
-//! and the first untrusted hop is the client. Hops further left were written
-//! by the client itself and are never read.
+//! then only the configured forwarding header is read. `X-Forwarded-For` is
+//! read from the right, each trusted hop skipped, and the first untrusted hop
+//! is the client; hops further left were written by the client itself and
+//! are never read. `X-Real-IP` is read as is.
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Once;
 
@@ -14,12 +15,64 @@ use ipnet::IpNet;
 use thiserror::Error;
 use tracing::warn;
 
-/// Reverse proxies whose `X-Forwarded-For` and `X-Real-IP` headers are
-/// believed.
+/// The forwarding header a trusted proxy reports the client IP in.
+///
+/// Only this header is read: falling back to another one would let a client
+/// write the header the proxy does not set.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_api::rate_limit::ClientIpHeader;
+///
+/// assert_eq!(ClientIpHeader::default(), ClientIpHeader::XForwardedFor);
+/// assert_eq!("X-Real-IP".parse::<ClientIpHeader>()?, ClientIpHeader::XRealIp);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClientIpHeader {
+    /// `X-Forwarded-For`, read from the right, trusted hops skipped.
+    #[default]
+    XForwardedFor,
+    /// `X-Real-IP`, a single address set by the proxy.
+    XRealIp,
+}
+
+/// A [`ClientIpHeader`] name that is neither `x-forwarded-for` nor
+/// `x-real-ip`.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_api::rate_limit::ClientIpHeader;
+///
+/// let err = "forwarded".parse::<ClientIpHeader>().unwrap_err();
+/// assert_eq!(err.0, "forwarded");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("invalid client IP header {0:?}: expected x-forwarded-for or x-real-ip")]
+pub struct InvalidClientIpHeader(pub String);
+
+impl FromStr for ClientIpHeader {
+    type Err = InvalidClientIpHeader;
+
+    /// Parse a header name, ignoring case and surrounding blanks.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "x-forwarded-for" => Ok(Self::XForwardedFor),
+            "x-real-ip" => Ok(Self::XRealIp),
+            _ => Err(InvalidClientIpHeader(s.to_string())),
+        }
+    }
+}
+
+/// Reverse proxies whose forwarding header is believed, and which header
+/// that is.
 ///
 /// Empty by default: the client IP is then always the TCP peer. Behind a
 /// reverse proxy, list its address (or range), otherwise every client shares
-/// the proxy's bucket.
+/// the proxy's bucket. Only the configured [`ClientIpHeader`] is read,
+/// `X-Forwarded-For` unless [`TrustedProxies::with_header`] says otherwise.
 ///
 /// Parsed from a comma-separated list of IP addresses and CIDR ranges.
 ///
@@ -36,7 +89,10 @@ use tracing::warn;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TrustedProxies(Vec<IpNet>);
+pub struct TrustedProxies {
+    nets: Vec<IpNet>,
+    header: ClientIpHeader,
+}
 
 impl TrustedProxies {
     /// Whether `ip` belongs to one of the trusted proxies.
@@ -54,7 +110,7 @@ impl TrustedProxies {
     /// ```
     pub fn contains(&self, ip: IpAddr) -> bool {
         let ip = ip.to_canonical();
-        self.0.iter().any(|net| net.contains(&ip))
+        self.nets.iter().any(|net| net.contains(&ip))
     }
 
     /// Whether no proxy is trusted.
@@ -67,7 +123,39 @@ impl TrustedProxies {
     /// assert!(TrustedProxies::default().is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.nets.is_empty()
+    }
+
+    /// Read the client IP from `header` instead of the default
+    /// `X-Forwarded-For`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_api::rate_limit::{ClientIpHeader, TrustedProxies};
+    ///
+    /// let proxies = "10.0.0.1"
+    ///     .parse::<TrustedProxies>()?
+    ///     .with_header(ClientIpHeader::XRealIp);
+    /// assert_eq!(proxies.header(), ClientIpHeader::XRealIp);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_header(mut self, header: ClientIpHeader) -> Self {
+        self.header = header;
+        self
+    }
+
+    /// The forwarding header read from a trusted proxy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_api::rate_limit::{ClientIpHeader, TrustedProxies};
+    ///
+    /// assert_eq!(TrustedProxies::default().header(), ClientIpHeader::XForwardedFor);
+    /// ```
+    pub fn header(&self) -> ClientIpHeader {
+        self.header
     }
 }
 
@@ -101,7 +189,10 @@ impl FromStr for TrustedProxies {
                     .map_err(|_| InvalidTrustedProxy(entry.to_string()))
             })
             .collect::<Result<Vec<_>, _>>()
-            .map(TrustedProxies)
+            .map(|nets| TrustedProxies {
+                nets,
+                header: ClientIpHeader::default(),
+            })
     }
 }
 
@@ -110,28 +201,43 @@ static MISSING_PEER_WARNING: Once = Once::new();
 /// The IP address a request is rate limited under.
 ///
 /// `peer` is the TCP peer, `None` when the server was not built with
-/// `into_make_service_with_connect_info`. Every such request then shares one
-/// bucket: limiting everyone together beats letting a header pick the
-/// bucket.
+/// `into_make_service_with_connect_info`. There is then no client IP and the
+/// IP limit is skipped: one bucket shared by every client would let any of
+/// them lock out all others, and a header cannot be believed without a
+/// trusted peer.
 pub(super) fn client_ip(
     peer: Option<IpAddr>,
     headers: &HeaderMap,
     trusted: &TrustedProxies,
-) -> IpAddr {
+) -> Option<IpAddr> {
     let Some(peer) = peer.map(|ip| ip.to_canonical()) else {
         MISSING_PEER_WARNING.call_once(|| {
             warn!(
-                "rate limiter cannot see the client address: serve the router with \
-                 into_make_service_with_connect_info::<SocketAddr>(); all clients \
-                 share one bucket until then"
+                "rate limiter cannot see the client address: the IP limit is skipped \
+                 until the router is served with \
+                 into_make_service_with_connect_info::<SocketAddr>()"
             );
         });
-        return IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+        return None;
     };
     if !trusted.contains(peer) {
-        return peer;
+        return Some(peer);
     }
 
+    let client = match trusted.header() {
+        ClientIpHeader::XForwardedFor => forwarded_for_client(peer, headers, trusted),
+        ClientIpHeader::XRealIp => headers
+            .get("x-real-ip")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<IpAddr>().ok())
+            .map_or(peer, |ip| ip.to_canonical()),
+    };
+    Some(client)
+}
+
+/// The client `X-Forwarded-For` names behind the trusted `peer`, or the peer
+/// itself when the header is absent.
+fn forwarded_for_client(peer: IpAddr, headers: &HeaderMap, trusted: &TrustedProxies) -> IpAddr {
     let hops: Vec<&str> = headers
         .get_all("x-forwarded-for")
         .iter()
@@ -139,14 +245,6 @@ pub(super) fn client_ip(
         .flat_map(|value| value.split(','))
         .map(str::trim)
         .collect();
-
-    if hops.is_empty() {
-        return headers
-            .get("x-real-ip")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.trim().parse::<IpAddr>().ok())
-            .map_or(peer, |ip| ip.to_canonical());
-    }
 
     let mut client = peer;
     for hop in hops.iter().rev() {
@@ -186,16 +284,24 @@ mod tests {
         s.parse().unwrap()
     }
 
+    fn real_ip_proxies(s: &str) -> TrustedProxies {
+        proxies(s).with_header(ClientIpHeader::XRealIp)
+    }
+
     #[test]
     fn untrusted_peer_ignores_forwarding_headers() {
         let h = headers(&[("x-forwarded-for", "9.9.9.9"), ("x-real-ip", "8.8.8.8")]);
         assert_eq!(
             client_ip(Some(ip("203.0.113.7")), &h, &TrustedProxies::default()),
-            ip("203.0.113.7")
+            Some(ip("203.0.113.7"))
         );
         assert_eq!(
             client_ip(Some(ip("203.0.113.7")), &h, &proxies("10.0.0.0/8")),
-            ip("203.0.113.7")
+            Some(ip("203.0.113.7"))
+        );
+        assert_eq!(
+            client_ip(Some(ip("203.0.113.7")), &h, &real_ip_proxies("10.0.0.0/8")),
+            Some(ip("203.0.113.7"))
         );
     }
 
@@ -204,7 +310,7 @@ mod tests {
         let h = headers(&[("x-forwarded-for", "6.6.6.6, 198.51.100.4")]);
         assert_eq!(
             client_ip(Some(ip("10.0.0.2")), &h, &proxies("10.0.0.0/8")),
-            ip("198.51.100.4")
+            Some(ip("198.51.100.4"))
         );
     }
 
@@ -213,7 +319,7 @@ mod tests {
         let h = headers(&[("x-forwarded-for", "6.6.6.6, 198.51.100.4, 10.0.0.9")]);
         assert_eq!(
             client_ip(Some(ip("10.0.0.2")), &h, &proxies("10.0.0.0/8")),
-            ip("198.51.100.4")
+            Some(ip("198.51.100.4"))
         );
     }
 
@@ -222,7 +328,7 @@ mod tests {
         let h = headers(&[("x-forwarded-for", "10.0.0.8, 10.0.0.9")]);
         assert_eq!(
             client_ip(Some(ip("10.0.0.2")), &h, &proxies("10.0.0.0/8")),
-            ip("10.0.0.8")
+            Some(ip("10.0.0.8"))
         );
     }
 
@@ -231,7 +337,7 @@ mod tests {
         let h = headers(&[("x-forwarded-for", "198.51.100.4, garbage, 10.0.0.9")]);
         assert_eq!(
             client_ip(Some(ip("10.0.0.2")), &h, &proxies("10.0.0.0/8")),
-            ip("10.0.0.9")
+            Some(ip("10.0.0.9"))
         );
     }
 
@@ -243,16 +349,51 @@ mod tests {
         ]);
         assert_eq!(
             client_ip(Some(ip("10.0.0.2")), &h, &proxies("10.0.0.0/8")),
-            ip("198.51.100.4")
+            Some(ip("198.51.100.4"))
         );
     }
 
     #[test]
-    fn trusted_peer_without_forwarded_for_uses_x_real_ip() {
+    fn x_forwarded_for_mode_ignores_x_real_ip() {
         let h = headers(&[("x-real-ip", "198.51.100.4")]);
         assert_eq!(
             client_ip(Some(ip("10.0.0.2")), &h, &proxies("10.0.0.0/8")),
-            ip("198.51.100.4")
+            Some(ip("10.0.0.2"))
+        );
+    }
+
+    #[test]
+    fn x_real_ip_mode_reads_x_real_ip() {
+        let h = headers(&[("x-real-ip", " 198.51.100.4 ")]);
+        assert_eq!(
+            client_ip(Some(ip("10.0.0.2")), &h, &real_ip_proxies("10.0.0.0/8")),
+            Some(ip("198.51.100.4"))
+        );
+    }
+
+    #[test]
+    fn x_real_ip_mode_ignores_x_forwarded_for() {
+        let h = headers(&[("x-forwarded-for", "198.51.100.4")]);
+        assert_eq!(
+            client_ip(Some(ip("10.0.0.2")), &h, &real_ip_proxies("10.0.0.0/8")),
+            Some(ip("10.0.0.2"))
+        );
+        let h = headers(&[
+            ("x-forwarded-for", "198.51.100.4"),
+            ("x-real-ip", "198.51.100.5"),
+        ]);
+        assert_eq!(
+            client_ip(Some(ip("10.0.0.2")), &h, &real_ip_proxies("10.0.0.0/8")),
+            Some(ip("198.51.100.5"))
+        );
+    }
+
+    #[test]
+    fn x_real_ip_mode_with_an_unparsable_value_gives_the_peer() {
+        let h = headers(&[("x-real-ip", "not-an-ip")]);
+        assert_eq!(
+            client_ip(Some(ip("10.0.0.2")), &h, &real_ip_proxies("10.0.0.0/8")),
+            Some(ip("10.0.0.2"))
         );
     }
 
@@ -264,7 +405,7 @@ mod tests {
                 &HeaderMap::new(),
                 &proxies("10.0.0.0/8")
             ),
-            ip("10.0.0.2")
+            Some(ip("10.0.0.2"))
         );
     }
 
@@ -273,7 +414,7 @@ mod tests {
         let h = headers(&[("x-forwarded-for", "198.51.100.4")]);
         assert_eq!(
             client_ip(Some(ip("::ffff:10.0.0.2")), &h, &proxies("10.0.0.2")),
-            ip("198.51.100.4")
+            Some(ip("198.51.100.4"))
         );
         assert_eq!(
             client_ip(
@@ -281,17 +422,15 @@ mod tests {
                 &h,
                 &TrustedProxies::default()
             ),
-            ip("203.0.113.7")
+            Some(ip("203.0.113.7"))
         );
     }
 
     #[test]
-    fn missing_peer_falls_back_to_one_shared_address() {
-        let h = headers(&[("x-forwarded-for", "9.9.9.9")]);
-        assert_eq!(
-            client_ip(None, &h, &proxies("0.0.0.0/0")),
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
-        );
+    fn missing_peer_has_no_client_ip() {
+        let h = headers(&[("x-forwarded-for", "9.9.9.9"), ("x-real-ip", "8.8.8.8")]);
+        assert_eq!(client_ip(None, &h, &proxies("0.0.0.0/0")), None);
+        assert_eq!(client_ip(None, &h, &real_ip_proxies("0.0.0.0/0")), None);
     }
 
     #[test]
@@ -301,6 +440,7 @@ mod tests {
         assert!(parsed.contains(ip("192.168.1.10")));
         assert!(!parsed.contains(ip("192.168.1.11")));
         assert!(parsed.contains(ip("fd12::1")));
+        assert_eq!(parsed.header(), ClientIpHeader::XForwardedFor);
     }
 
     #[test]
@@ -319,5 +459,27 @@ mod tests {
             "localhost".parse::<TrustedProxies>(),
             Err(InvalidTrustedProxy("localhost".to_string()))
         );
+    }
+
+    #[test]
+    fn client_ip_header_parses_case_insensitively() {
+        for (raw, expected) in [
+            ("x-forwarded-for", ClientIpHeader::XForwardedFor),
+            (" X-Forwarded-For ", ClientIpHeader::XForwardedFor),
+            ("x-real-ip", ClientIpHeader::XRealIp),
+            ("X-REAL-IP", ClientIpHeader::XRealIp),
+        ] {
+            assert_eq!(raw.parse::<ClientIpHeader>(), Ok(expected), "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn invalid_client_ip_header_is_reported() {
+        for raw in ["", "forwarded", "x-forwarded-for,x-real-ip"] {
+            assert_eq!(
+                raw.parse::<ClientIpHeader>(),
+                Err(InvalidClientIpHeader(raw.to_string()))
+            );
+        }
     }
 }
