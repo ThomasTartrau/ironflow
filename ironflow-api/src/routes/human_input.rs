@@ -335,7 +335,8 @@ mod tests {
 
     use super::*;
     use crate::routes::test_helpers::{
-        audit_entries, await_audit_entry, create_user_auth_header, test_state_with_audit_log,
+        audit_entries, await_audit_entry, create_user_auth_header, state_with_engine,
+        test_state_with_audit_log,
     };
 
     /// The answer type the test steps ask for.
