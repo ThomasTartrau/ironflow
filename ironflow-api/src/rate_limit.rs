@@ -345,8 +345,8 @@ pub async fn rate_limit(mut req: Request, next: Next) -> Response {
                 return payload_too_large();
             };
             // The layer only wraps matched static routes (`/sign-up`,
-            // `/sign-in`), so a client cannot mint new buckets through the
-            // path.
+            // `/sign-in`, `/password`), so a client cannot mint new buckets
+            // through the path.
             let account = account_key(parts.uri.path(), &bytes);
             let req = Request::from_parts(parts, Body::from(bytes));
             match account {

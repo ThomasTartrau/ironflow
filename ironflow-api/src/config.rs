@@ -16,7 +16,7 @@
 //! | `WEBHOOK_URL` | no | - | Outbound webhook URL for notifications |
 //! | `IRONFLOW_ENV` | no | unset (strict) | `production`, or `development` for explicit dev mode |
 //! | `IRONFLOW_INSECURE_COOKIES` | no | `false` | `1`/`true` drops the `Secure` flag from session cookies (local HTTP-only dev). Ignored in production |
-//! | `RATE_LIMIT_AUTH` | no | `10` | Auth rate limit (req/min/IP). `0` = disabled |
+//! | `RATE_LIMIT_AUTH` | no | `10` | Credential routes rate limit (sign-in, sign-up, password change), req/min per caller and per targeted email. `0` = disabled |
 //! | `RATE_LIMIT_GENERAL` | no | `60` | General rate limit (req/min/IP). `0` = disabled |
 //! | `SSE_MAX_CONNECTIONS_PER_PRINCIPAL` | no | `5` | Simultaneous SSE streams per user or API key owner. `0` = disabled |
 //! | `SSE_MAX_CONNECTIONS` | no | `1000` | Simultaneous SSE streams for the whole server. `0` = disabled |

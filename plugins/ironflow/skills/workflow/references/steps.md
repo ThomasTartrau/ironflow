@@ -361,7 +361,10 @@ survives an API or worker restart. `on_timeout` says what happens when it fires;
 without one, an expired deadline auto-rejects. `assigned_to` takes an `Assignee`
 (`Assignee::user("alice")` or `Assignee::group("sre-oncall")`) recording who is
 expected to answer; it shows up in the API, the dashboard and `ironflow-cli run steps`.
-The assignee is advisory (notification/audit), not an authorization check.
+It also decides who may resolve the gate: an admin, the user it is assigned to, or their
+delegate; a group or unassigned gate is admin-only. A user assignee is bound to the account
+holding that username when the gate opens, so create the account before the run reaches
+the gate: a username nobody held then leaves the gate admin-only.
 
 | `EscalationPolicy` | On expiry |
 |--------------------|-----------|

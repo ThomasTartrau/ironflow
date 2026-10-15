@@ -1554,6 +1554,13 @@ impl RunStore for PostgresStore {
             }
             push_set!("approval_stage", update.approval_stage);
             push_set!("approval_assignee", update.approval_assignee);
+            // Resolved here, in the server's store, so a gate opened by a worker is bound too.
+            if update.approval_assignee.is_some() {
+                sets.push(format!(
+                    "approval_assignee_user_id = (SELECT u.id FROM iam.users u WHERE u.username = ${bind_idx})"
+                ));
+                bind_idx += 1;
+            }
             let requirement_json = update
                 .approval_requirement
                 .as_ref()
@@ -1620,6 +1627,7 @@ impl RunStore for PostgresStore {
             }
             if let Some(ref assignee) = update.approval_assignee {
                 query = query.bind(assignee.to_string());
+                query = query.bind(assignee.is_user().then(|| assignee.name().to_string()));
             }
             if let Some(ref requirement) = requirement_json {
                 query = query.bind(requirement);

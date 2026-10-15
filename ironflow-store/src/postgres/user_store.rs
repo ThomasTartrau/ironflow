@@ -11,6 +11,9 @@ use crate::user_store::UserStore;
 
 use super::PostgresStore;
 
+/// Advisory lock key serializing the "first user becomes admin" decision of create_user.
+const FIRST_USER_ADMIN_LOCK: &str = "ironflow:first_user_admin";
+
 /// Intermediate row struct matching the `iam.users` columns exactly.
 #[derive(FromRow)]
 struct UserRow {
@@ -68,6 +71,16 @@ impl UserStore for PostgresStore {
             let is_admin = match req.is_admin {
                 Some(v) => v,
                 None => {
+                    // Serialize the first-admin decision until commit: under READ COMMITTED the
+                    // count below then sees every user committed before the lock was granted.
+                    sqlx::query_scalar!(
+                        r#"SELECT TRUE as "locked!" FROM (SELECT pg_advisory_xact_lock(hashtextextended($1, 0))) AS l"#,
+                        FIRST_USER_ADMIN_LOCK,
+                    )
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+
                     let count =
                         sqlx::query_scalar!("SELECT COUNT(*) as \"cnt!: i64\" FROM iam.users")
                             .fetch_one(&mut *tx)

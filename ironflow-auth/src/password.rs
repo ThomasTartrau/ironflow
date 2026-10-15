@@ -33,6 +33,13 @@ static COMMON_PASSWORDS: LazyLock<HashSet<String>> = LazyLock::new(|| {
         .collect()
 });
 
+/// Throwaway hash [`verify_dummy`] checks passwords against.
+///
+/// Built with [`hash`], hence the same Argon2 parameters as real account
+/// hashes: a verification against it costs exactly what a real one costs.
+static DUMMY_HASH: LazyLock<Result<String, AuthError>> =
+    LazyLock::new(|| hash("ironflow-dummy-password-for-unknown-accounts"));
+
 /// Why a password was refused by [`check_strength`].
 ///
 /// The messages are written for the person choosing the password.
@@ -116,6 +123,31 @@ pub fn verify(password: &str, hash: &str) -> Result<bool, AuthError> {
     Ok(argon2
         .verify_password(password.as_bytes(), &parsed_hash)
         .is_ok())
+}
+
+/// Run one Argon2id verification against a throwaway hash, for a request
+/// whose account does not exist, so it takes as long as one whose password is wrong.
+///
+/// The result of the comparison is discarded: only the time spent matters.
+///
+/// # Errors
+///
+/// Returns [`AuthError::PasswordHash`] if the throwaway hash could not be built.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_auth::error::AuthError;
+/// use ironflow_auth::password;
+///
+/// # fn example() -> Result<(), AuthError> {
+/// password::verify_dummy("whatever the caller sent")?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn verify_dummy(password: &str) -> Result<(), AuthError> {
+    let dummy = DUMMY_HASH.as_ref().map_err(|_| AuthError::PasswordHash)?;
+    verify(password, dummy).map(|_| ())
 }
 
 /// Check a new password against the strength policy.
@@ -365,5 +397,17 @@ mod tests {
     #[test]
     fn malformed_hash_returns_error() {
         assert!(verify("pw", "not-a-valid-hash").is_err());
+    }
+
+    #[test]
+    fn verify_dummy_succeeds_for_any_password() {
+        let long = "x".repeat(10_000);
+        for password in [
+            "",
+            "mot de passe \u{e9}\u{fc} \u{5bc6}\u{7801}",
+            long.as_str(),
+        ] {
+            assert!(verify_dummy(password).is_ok());
+        }
     }
 }

@@ -435,3 +435,19 @@ its ancestors records no vote on that gate, which then stays open.
   store.update_run_status(run_id, RunStatus::Running).await?;
   engine.resume_run(run_id).await?;
 ```
+
+## approval-assignee-bound-at-open
+- kind: behavior
+- since: ironflow-api after 2.52.3, ironflow-store after 2.47.1 (#199)
+- detect: `Assignee::user\(`
+
+A gate assigned to `Assignee::user(name)` is bound to the account holding `name` when the
+gate opens or is reassigned, and only that account (or its delegates) may resolve it. The
+user must have an account before the run reaches the gate: if no account has that username
+then, the gate stays admin-only, even once an account is created under that name.
+
+```diff
++ create_user(NewUser { username: "alice".into(), .. }).await?;
+  let run = start_run_with_gate_assigned_to(Assignee::user("alice")).await?;
+- create_user(NewUser { username: "alice".into(), .. }).await?;
+```

@@ -21,7 +21,7 @@ The repository includes a complete example server:
 | `WORKER_TOKEN` | -- | Shared secret for worker auth (same rules as `JWT_SECRET`; a generated one is logged at startup so a worker can use it) |
 | `PORT` | `3000` | HTTP listen port |
 | `ALLOWED_ORIGINS` | same-origin | Comma-separated CORS origins |
-| `RATE_LIMIT_AUTH` | `10` | Sign-in / sign-up requests per minute, per client IP and per targeted email (`0` disables) |
+| `RATE_LIMIT_AUTH` | `10` | Sign-in / sign-up / password change requests per minute, per caller (client IP, or user for a password change) and per targeted email (`0` disables) |
 | `RATE_LIMIT_GENERAL` | `60` | Other API requests per minute, per caller (`0` disables) |
 | `SSE_MAX_CONNECTIONS_PER_PRINCIPAL` | `5` | Simultaneous SSE streams (`/events`, `/runs/{id}/events`) per user or API key owner; beyond it the answer is `429` (`0` disables). A dashboard tab holds up to two |
 | `SSE_MAX_CONNECTIONS` | `1000` | Same cap for the whole server (`0` disables) |
@@ -141,6 +141,11 @@ Sign-in and sign-up are also counted per targeted email, so attempts on one acco
 over many addresses are limited too. The two routes have separate counters: a sign-up flood
 does not lock the account out of sign-in.
 
+Password change (`PATCH /api/v1/auth/password`) sits behind the same limiter, counted per
+signed-in user: guesses at the current password beyond `RATE_LIMIT_AUTH` per minute answer
+`429` before the password is checked, and each wrong current password is logged with the
+user id.
+
 ### Accounts and passwords
 
 A password chosen at sign-up, password change or admin user creation must be 12 to 128
@@ -151,6 +156,19 @@ Otherwise the request answers `400 WEAK_PASSWORD` with the rule it broke.
 Sign-up answers `204` without a session, whether the email was free or already
 registered: the dashboard signs in next with the same credentials. A taken username still
 answers `409 DUPLICATE_USERNAME`.
+
+The first account created on an empty database becomes admin. The decision is atomic:
+concurrent sign-ups on a fresh install cannot each see an empty table, so exactly one of them
+is admin.
+
+Sign-in on an unknown email runs one Argon2 verification against a throwaway hash, like a
+wrong password, so the answer time does not tell whether the email has an account. Both
+answer `401 INVALID_CREDENTIALS` and are logged without the email.
+
+Sign-up has no email verification, so it still tells whether an email has an account: a
+sign-up followed by a sign-in with the chosen password succeeds only if the email was free.
+When email enumeration matters, build the server without the `sign-up` feature in
+production and create accounts as an admin, or keep sign-up behind an invite flow.
 
 ### API key scopes
 
