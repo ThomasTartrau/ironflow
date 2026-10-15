@@ -1,7 +1,9 @@
 //! Middleware for internal route protection and HTTP security hardening.
 
+use std::net::SocketAddr;
+
 use axum::Json;
-use axum::extract::Request;
+use axum::extract::{ConnectInfo, Request, State};
 #[cfg(feature = "prometheus")]
 use axum::http::Method;
 use axum::http::header::{
@@ -13,6 +15,8 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 use subtle::ConstantTimeEq;
+
+use crate::rate_limit::TrustedProxies;
 
 /// Axum middleware that validates a static worker token.
 ///
@@ -143,19 +147,40 @@ pub async fn request_metrics(req: Request, next: Next) -> Response {
 /// to `Host`. Requests without `X-Forwarded-Proto` (probes, worker traffic) and
 /// requests with no usable host pass through untouched.
 ///
+/// Forwarding headers are client input unless a proxy overwrote them, so they
+/// are read only when the TCP peer is in [`TrustedProxies`]. The peer comes
+/// from `ConnectInfo<SocketAddr>`, so the router must be served with
+/// `into_make_service_with_connect_info::<SocketAddr>()`. A request from any
+/// other peer, or without connect info, passes through untouched: with an
+/// empty [`TrustedProxies`], nothing is ever redirected.
+///
 /// # Examples
 ///
 /// ```
 /// use axum::Router;
-/// use axum::middleware::from_fn;
+/// use axum::middleware::from_fn_with_state;
 /// use axum::routing::get;
 /// use ironflow_api::middleware::https_redirect;
+/// use ironflow_api::rate_limit::TrustedProxies;
 ///
 /// let app: Router = Router::new()
 ///     .route("/", get(|| async { "ok" }))
-///     .layer(from_fn(https_redirect));
+///     .layer(from_fn_with_state(TrustedProxies::default(), https_redirect));
 /// ```
-pub async fn https_redirect(req: Request, next: Next) -> Response {
+pub async fn https_redirect(
+    State(trusted): State<TrustedProxies>,
+    req: Request,
+    next: Next,
+) -> Response {
+    // Forwarding headers are client input unless a trusted proxy overwrote them.
+    let from_trusted_proxy = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .is_some_and(|ConnectInfo(addr)| trusted.contains(addr.ip()));
+    if !from_trusted_proxy {
+        return next.run(req).await;
+    }
+
     let is_http = req
         .headers()
         .get("x-forwarded-proto")
@@ -219,6 +244,7 @@ mod tests {
 
     use axum::Router;
     use axum::body::Body;
+    use axum::extract::ConnectInfo;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
@@ -227,6 +253,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use serde_json::Value as JsonValue;
     use std::fs::write;
+    use std::net::SocketAddr;
     use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::sync::broadcast;
@@ -319,18 +346,74 @@ mod tests {
         builder.body(Body::empty()).unwrap()
     }
 
+    /// Proxies trusted by the test routers.
+    const TRUSTED_NETWORK: &str = "10.0.0.0/8";
+
+    /// A peer inside [`TRUSTED_NETWORK`].
+    const TRUSTED_PEER: &str = "10.0.0.2";
+
+    /// What a real server attaches from the TCP socket.
+    fn from_peer(mut req: Request<Body>, peer: &str) -> Request<Body> {
+        let addr: SocketAddr = format!("{peer}:4000").parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(addr));
+        req
+    }
+
     fn enforcing_router() -> Router {
         let config = RouterConfig {
             enforce_https: true,
+            trusted_proxies: TRUSTED_NETWORK.parse().unwrap(),
             ..RouterConfig::default()
         };
         create_router(test_state(), config)
     }
 
+    /// A plain-HTTP request whose forwarding headers point elsewhere.
+    fn spoofed_request() -> Request<Body> {
+        Request::builder()
+            .uri("/api/v1/health-check")
+            .header("host", "example.com")
+            .header("x-forwarded-host", "evil.example")
+            .header("x-forwarded-proto", "http")
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn https_redirect_ignores_forwarded_host_from_an_untrusted_peer() {
+        let resp = enforcing_router()
+            .oneshot(from_peer(spoofed_request(), "203.0.113.7"))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(resp.headers().get("location").is_none());
+    }
+
+    #[tokio::test]
+    async fn https_redirect_ignores_forwarded_headers_without_peer_address() {
+        let req = spoofed_request();
+
+        let resp = enforcing_router().oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(resp.headers().get("location").is_none());
+    }
+
+    #[tokio::test]
+    async fn https_redirect_accepts_an_ipv4_mapped_trusted_peer() {
+        let resp = enforcing_router()
+            .oneshot(from_peer(spoofed_request(), "[::ffff:10.0.0.2]"))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+    }
+
     #[tokio::test]
     async fn https_redirect_redirects_plain_http() {
         let resp = enforcing_router()
-            .oneshot(https_request("GET", Some("http")))
+            .oneshot(from_peer(https_request("GET", Some("http")), TRUSTED_PEER))
             .await
             .unwrap();
 
@@ -345,7 +428,10 @@ mod tests {
     #[tokio::test]
     async fn https_redirect_uses_first_value_and_ignores_case() {
         let resp = enforcing_router()
-            .oneshot(https_request("GET", Some("HTTP, https")))
+            .oneshot(from_peer(
+                https_request("GET", Some("HTTP, https")),
+                TRUSTED_PEER,
+            ))
             .await
             .unwrap();
 
@@ -362,7 +448,10 @@ mod tests {
             .body(Body::empty())
             .unwrap();
 
-        let resp = enforcing_router().oneshot(req).await.unwrap();
+        let resp = enforcing_router()
+            .oneshot(from_peer(req, TRUSTED_PEER))
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
         assert_eq!(
@@ -374,7 +463,7 @@ mod tests {
     #[tokio::test]
     async fn https_redirect_passes_https_through() {
         let resp = enforcing_router()
-            .oneshot(https_request("GET", Some("https")))
+            .oneshot(from_peer(https_request("GET", Some("https")), TRUSTED_PEER))
             .await
             .unwrap();
 
@@ -384,7 +473,7 @@ mod tests {
     #[tokio::test]
     async fn https_redirect_passes_without_forwarded_proto() {
         let resp = enforcing_router()
-            .oneshot(https_request("GET", None))
+            .oneshot(from_peer(https_request("GET", None), TRUSTED_PEER))
             .await
             .unwrap();
 
@@ -399,7 +488,10 @@ mod tests {
             .body(Body::empty())
             .unwrap();
 
-        let resp = enforcing_router().oneshot(req).await.unwrap();
+        let resp = enforcing_router()
+            .oneshot(from_peer(req, TRUSTED_PEER))
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
     }
@@ -409,7 +501,7 @@ mod tests {
         let app = create_router(test_state(), RouterConfig::default());
 
         let resp = app
-            .oneshot(https_request("GET", Some("http")))
+            .oneshot(from_peer(https_request("GET", Some("http")), TRUSTED_PEER))
             .await
             .unwrap();
 
@@ -419,7 +511,7 @@ mod tests {
     #[tokio::test]
     async fn https_redirect_post_gets_308() {
         let resp = enforcing_router()
-            .oneshot(https_request("POST", Some("http")))
+            .oneshot(from_peer(https_request("POST", Some("http")), TRUSTED_PEER))
             .await
             .unwrap();
 
@@ -433,6 +525,7 @@ mod tests {
         write(dir.path().join("index.html"), "<!doctype html>").unwrap();
         let config = RouterConfig {
             enforce_https,
+            trusted_proxies: TRUSTED_NETWORK.parse().unwrap(),
             dashboard_dir: Some(dir.path().to_path_buf()),
             ..RouterConfig::default()
         };
@@ -451,7 +544,7 @@ mod tests {
             .body(Body::empty())
             .unwrap();
 
-        let resp = app.oneshot(req).await.unwrap();
+        let resp = app.oneshot(from_peer(req, TRUSTED_PEER)).await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
         assert_eq!(

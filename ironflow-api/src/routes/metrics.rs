@@ -9,6 +9,26 @@
 //! |--------|------|-------------|
 //! | `GET` | `/api/v1/metrics` | Returns metrics in Prometheus text format |
 //!
+//! # Authentication
+//!
+//! Metrics reveal workflow names, run volumes and agent costs, so the endpoint
+//! is not public. It answers an admin session, or an API key holding the
+//! `stats_read` (or `admin`) scope whose owner is an admin. An unauthenticated
+//! request gets `401`, any other caller `403`.
+//!
+//! Prometheus scrapes it with such an API key as a bearer token:
+//!
+//! ```yaml
+//! scrape_configs:
+//!   - job_name: ironflow
+//!     metrics_path: /api/v1/metrics
+//!     authorization:
+//!       type: Bearer
+//!       credentials_file: /etc/prometheus/ironflow-api-key
+//!     static_configs:
+//!       - targets: ["ironflow:3000"]
+//! ```
+//!
 //! # Metrics exposed
 //!
 //! All metrics defined in [`ironflow_core::metric_names`] are available,
@@ -118,33 +138,43 @@
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
+use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 use metrics_exporter_prometheus::PrometheusHandle;
+
+use crate::authorization::AuthorizeExt;
+use crate::error::ApiError;
 
 /// Handler for `GET /api/v1/metrics`.
 ///
-/// Returns all registered Prometheus metrics in text exposition format.
+/// Returns all registered Prometheus metrics in text exposition format, to an
+/// admin session or an admin-owned API key holding `stats_read`.
+///
+/// # Errors
+///
+/// - 401 if the request is not authenticated
+/// - 403 `INSUFFICIENT_SCOPE` if the API key lacks `stats_read`
+/// - 403 `FORBIDDEN` if the session user, or the API key owner, is not an admin
 ///
 /// # Examples
 ///
 /// ```no_run
 /// use axum::Router;
 /// use axum::routing::get;
-/// use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+/// use ironflow_api::routes::metrics::metrics;
+/// use ironflow_api::state::AppState;
 ///
-/// # fn example() {
-/// let handle = PrometheusBuilder::new()
-///     .install_recorder()
-///     .expect("failed to install recorder");
-///
-/// let app: Router<PrometheusHandle> = Router::new()
-///     .route("/metrics", get(ironflow_api::routes::metrics::metrics));
-/// # }
+/// let app: Router<AppState> = Router::new().route("/metrics", get(metrics));
 /// ```
-pub async fn metrics(State(handle): State<PrometheusHandle>) -> Response {
+pub async fn metrics(
+    auth: Authenticated,
+    State(handle): State<PrometheusHandle>,
+) -> Result<Response, ApiError> {
+    auth.require(ApiKeyScope::StatsRead, true)?;
     let body = handle.render();
-    (
+    Ok((
         [(CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
         body,
     )
-        .into_response()
+        .into_response())
 }

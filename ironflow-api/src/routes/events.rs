@@ -66,6 +66,35 @@ pub struct EventsQuery {
     pub types: Option<Vec<EventKind>>,
 }
 
+/// Whether a caller that is not an admin may receive `event`.
+///
+/// An allow-list of run events. The match has no wildcard, so a new event
+/// kind does not compile until it is classified here.
+fn visible_to_non_admin(event: &Event) -> bool {
+    match event {
+        Event::RunCreated(_)
+        | Event::RunStatusChanged(_)
+        | Event::RunFailed(_)
+        | Event::RunBudgetExceeded(_)
+        | Event::RetryForced(_)
+        | Event::StepCompleted(_)
+        | Event::StepFailed(_)
+        | Event::ApprovalRequested(_)
+        | Event::ApprovalGranted(_)
+        | Event::ApprovalRejected(_)
+        | Event::ApprovalEscalated(_)
+        | Event::LogLine(_)
+        | Event::SignalAwaited(_)
+        | Event::SignalReceived(_) => true,
+        Event::UserSignedIn(_)
+        | Event::UserSignedUp(_)
+        | Event::UserSignedOut(_)
+        | Event::ProviderAccountUpdated(_)
+        | Event::ProviderAccountUsageUpdated(_)
+        | Event::ScheduleOccurrencesMissed(_) => false,
+    }
+}
+
 /// `GET /api/v1/events` -- Server-Sent Events stream.
 ///
 /// Streams domain events in real time. Supports optional filtering:
@@ -78,8 +107,14 @@ pub struct EventsQuery {
 ///
 /// A keep-alive comment is sent every 30 seconds.
 ///
-/// Provider Account events reach an admin session, or an API key holding the
-/// `admin` scope whose owner is an admin.
+/// A caller that is not an admin (a member session, a key owned by a member,
+/// or any key without the `admin` scope) only receives run events:
+/// `run_created`, `run_status_changed`, `run_failed`, `run_budget_exceeded`,
+/// `retry_forced`, `step_completed`, `step_failed`, `approval_requested`,
+/// `approval_granted`, `approval_rejected`, `approval_escalated`, `log_line`,
+/// `signal_awaited` and `signal_received`. User sign-in, sign-up and sign-out,
+/// Provider Account and schedule events reach only an admin session, or an
+/// API key holding the `admin` scope whose owner is an admin.
 ///
 /// # Errors
 ///
@@ -96,9 +131,9 @@ pub async fn events(
     auth.require(ApiKeyScope::RunsRead, false)?;
     let connection = state.sse_limiter.try_acquire(auth.user_id)?;
     let receiver = state.event_sender.subscribe();
-    // Provider Account events describe admin-only resources, which an API
-    // key reaches only through the `admin` scope.
-    let sees_provider_account_events = auth.require(ApiKeyScope::Admin, true).is_ok();
+    // Account and user events describe admin-only resources: only an admin
+    // session, or an `admin`-scope key owned by an admin, sees them.
+    let sees_every_event = auth.require(ApiKeyScope::Admin, true).is_ok();
     let type_filter = query.types;
 
     let stream = BroadcastStream::new(receiver).filter_map(move |result: Result<Event, _>| {
@@ -107,12 +142,7 @@ pub async fn events(
         async move {
             let event = result.ok()?;
 
-            if !sees_provider_account_events
-                && matches!(
-                    event,
-                    Event::ProviderAccountUpdated(_) | Event::ProviderAccountUsageUpdated(_)
-                )
-            {
+            if !sees_every_event && !visible_to_non_admin(&event) {
                 return None;
             }
 
@@ -160,7 +190,7 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::{
         Event, ProviderAccountChange, ProviderAccountUpdatedEvent, RunStatusChangedEvent,
-        UserSignedInEvent,
+        UserSignedInEvent, UserSignedOutEvent, UserSignedUpEvent,
     };
     use ironflow_store::entities::{ApiKeyScope, NewApiKey, NewUser};
     use ironflow_store::memory::InMemoryStore;
@@ -172,7 +202,7 @@ mod tests {
     use tokio::time::{sleep, timeout};
     use uuid::Uuid;
 
-    use super::events;
+    use super::{events, visible_to_non_admin};
     use crate::routes::test_helpers::create_user_auth_header;
     use crate::sse_limiter::SseLimits;
     use crate::state::AppState;
@@ -216,6 +246,21 @@ mod tests {
         Event::UserSignedIn(UserSignedInEvent {
             user_id: Uuid::now_v7(),
             username: "alice".to_string(),
+            at: Utc::now(),
+        })
+    }
+
+    fn sample_user_signed_up_event() -> Event {
+        Event::UserSignedUp(UserSignedUpEvent {
+            user_id: Uuid::now_v7(),
+            username: "bob".to_string(),
+            at: Utc::now(),
+        })
+    }
+
+    fn sample_user_signed_out_event() -> Event {
+        Event::UserSignedOut(UserSignedOutEvent {
+            user_id: Uuid::now_v7(),
             at: Utc::now(),
         })
     }
@@ -388,9 +433,11 @@ mod tests {
     #[tokio::test]
     async fn sse_filters_by_event_type() {
         let state = test_state();
-        let (addr, sender, auth) = start_sse_server(state).await;
+        // User events only reach an admin.
+        let admin = create_user_auth_header(&state, "admin", true).await;
+        let (addr, sender, _member) = start_sse_server(state).await;
 
-        let mut reader = connect_sse(&addr, "?types=user_signed_in", &auth).await;
+        let mut reader = connect_sse(&addr, "?types=user_signed_in", &admin).await;
         wait_for_subscriber(&sender).await;
 
         let run_id = Uuid::now_v7();
@@ -500,6 +547,64 @@ mod tests {
         let text = read_until_contains(&mut reader, "\r\n", Duration::from_secs(5)).await;
 
         assert!(text.starts_with("HTTP/1.1 403"), "status line: {text}");
+    }
+
+    /// Stream the three user events, then a run event, to a client
+    /// authenticated with `auth`, and assert only the run event arrives.
+    async fn assert_user_events_hidden(state: AppState, auth: Option<&str>) {
+        let (addr, sender, member) = start_sse_server(state).await;
+        let mut reader = connect_sse(&addr, "", auth.unwrap_or(&member)).await;
+        wait_for_subscriber(&sender).await;
+
+        let run_id = Uuid::now_v7();
+        sender.send(sample_user_event()).unwrap();
+        sender.send(sample_user_signed_up_event()).unwrap();
+        sender.send(sample_user_signed_out_event()).unwrap();
+        sender.send(sample_run_event(run_id)).unwrap();
+
+        let text =
+            read_until_contains(&mut reader, &run_id.to_string(), Duration::from_secs(5)).await;
+
+        assert!(!text.contains("user_signed_in"), "stream: {text}");
+        assert!(!text.contains("user_signed_up"), "stream: {text}");
+        assert!(!text.contains("user_signed_out"), "stream: {text}");
+        assert!(text.contains("run_status_changed"));
+    }
+
+    #[tokio::test]
+    async fn sse_hides_user_sign_in_sign_up_and_sign_out_events_from_a_member() {
+        assert_user_events_hidden(test_state(), None).await;
+    }
+
+    #[tokio::test]
+    async fn sse_hides_user_events_from_a_runs_read_key_of_an_admin() {
+        let state = test_state();
+        let auth = api_key_header(&state, true, vec![ApiKeyScope::RunsRead]).await;
+        assert_user_events_hidden(state, Some(&auth)).await;
+    }
+
+    #[tokio::test]
+    async fn sse_streams_user_events_to_an_admin() {
+        let state = test_state();
+        let admin = create_user_auth_header(&state, "admin", true).await;
+        let (addr, sender, _member) = start_sse_server(state).await;
+        let mut reader = connect_sse(&addr, "", &admin).await;
+        wait_for_subscriber(&sender).await;
+
+        sender.send(sample_user_event()).unwrap();
+
+        let text = read_until_contains(&mut reader, "user_signed_in", Duration::from_secs(5)).await;
+
+        assert!(text.contains("user_signed_in"));
+    }
+
+    #[test]
+    fn visible_to_non_admin_allows_only_run_events() {
+        assert!(visible_to_non_admin(&sample_run_event(Uuid::now_v7())));
+        assert!(!visible_to_non_admin(&sample_user_event()));
+        assert!(!visible_to_non_admin(&sample_user_signed_up_event()));
+        assert!(!visible_to_non_admin(&sample_user_signed_out_event()));
+        assert!(!visible_to_non_admin(&sample_provider_account_event()));
     }
 
     /// Read the HTTP status line of a response.

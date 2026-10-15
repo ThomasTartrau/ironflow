@@ -155,7 +155,8 @@ pub struct ServerConfig {
     /// `TRUSTED_PROXIES` (comma-separated IPs or CIDR ranges), and that header
     /// from `TRUSTED_PROXY_HEADER` (`x-forwarded-for` by default, or
     /// `x-real-ip`; the other one is never read). Unset: none, the client IP
-    /// is the TCP peer.
+    /// is the TCP peer. The HTTPS redirect also reads `X-Forwarded-Proto` and
+    /// `X-Forwarded-Host` only from these proxies.
     pub trusted_proxies: TrustedProxies,
     /// Blob storage backend: `local` or `s3`.
     pub artifact_backend: String,

@@ -28,7 +28,7 @@ Optional parts of Ironflow are behind Cargo features, so a binary only compiles 
 | | `openapi` | utoipa schemas for stored entities |
 | `ironflow-api` | `dashboard` | Embed the built dashboard via `rust-embed` |
 | | `sign-up` | Expose the self-service sign-up route |
-| | `prometheus` | Expose `/metrics` |
+| | `prometheus` | Expose `/api/v1/metrics` (admin, `stats_read` scope) |
 | | `openapi` | Expose `/api/v1/openapi.json` |
 | | `opentelemetry` | Export traces over OTLP |
 | | `storage-s3` | S3 backend for [artifacts](../concepts/artifacts.md) |

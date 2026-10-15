@@ -218,3 +218,60 @@ status, and ends at once for a run already terminal.
 +         global: config.sse_max_connections.map(|n| n as usize),
 +     });
 ```
+
+## https-redirect-trusted-proxies
+- kind: behavior
+- since: ironflow-api after 2.52.4 (#204)
+- detect: `enforce_https`
+
+`RouterConfig::enforce_https` now believes `X-Forwarded-Proto` and `X-Forwarded-Host` only
+from a TCP peer listed in `TRUSTED_PROXIES`; from any other peer the request is served as
+is. A production server behind a proxy that is not listed stops redirecting HTTP to HTTPS
+(HSTS is still sent), and logs a warning at startup. A custom server that layers
+`https_redirect` itself must pass the trusted proxies as middleware state.
+
+```diff
+  # .env
++ TRUSTED_PROXIES=10.0.0.0/8
+
+  // a server that layers the middleware itself
+- app.layer(from_fn(https_redirect))
++ app.layer(from_fn_with_state(trusted_proxies, https_redirect))
+```
+
+## metrics-authenticated
+- kind: behavior
+- since: ironflow-api after 2.52.4 (#204)
+- detect: `/api/v1/metrics`
+
+`GET /api/v1/metrics` is no longer public. A scrape needs an admin session, or an API key
+with the `stats_read` (or `admin`) scope owned by an admin; an unauthenticated scrape gets
+`401`, any other caller `403`. Create the key with
+`ironflow-cli api-key create prometheus --scope stats_read` and give it to Prometheus as a
+bearer token.
+
+```diff
+  scrape_configs:
+    - job_name: ironflow
+      metrics_path: /api/v1/metrics
++     authorization:
++       type: Bearer
++       credentials_file: /etc/prometheus/ironflow-api-key
+```
+
+## sse-run-events-only-for-members
+- kind: behavior
+- since: ironflow-api after 2.52.4 (#204)
+- detect: `user_signed_(in|up|out)`
+
+On `GET /api/v1/events`, a member session, or an API key without the `admin` scope or
+owned by a member, now receives only run events (`run_*`, `step_*`, `approval_*`,
+`log_line`, `retry_forced`, `signal_*`). `user_signed_in`, `user_signed_up`,
+`user_signed_out`, Provider Account and `schedule_occurrences_missed` events reach only an
+admin session or an `admin`-scope key owned by an admin. A client that listens for them
+must authenticate as such.
+
+```diff
+- ironflow-cli api-key create audit-feed --scope runs_read
++ ironflow-cli api-key create audit-feed --scope admin
+```

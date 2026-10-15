@@ -201,7 +201,7 @@ fn rows(run_id: Uuid, step_id: Uuid, user_id: Uuid) -> Vec<Row> {
     let run = format!("/api/v1/runs/{run_id}");
     let step = format!("{run}/steps/{step_id}");
     let user = format!("/api/v1/users/{user_id}");
-    vec![
+    let mut rows = vec![
         // runs_read
         row("GET", "/api/v1/runs", ApiKeyScope::RunsRead),
         row("GET", run.clone(), ApiKeyScope::RunsRead),
@@ -289,7 +289,12 @@ fn rows(run_id: Uuid, step_id: Uuid, user_id: Uuid) -> Vec<Row> {
         row("GET", "/api/v1/audit-logs", ApiKeyScope::Admin),
         row("POST", "/api/v1/workflows/x/pause", ApiKeyScope::Admin),
         row("POST", "/api/v1/workflows/x/resume", ApiKeyScope::Admin),
-    ]
+    ];
+    // The route only exists in builds with the `prometheus` feature.
+    if cfg!(feature = "prometheus") {
+        rows.push(row("GET", "/api/v1/metrics", ApiKeyScope::StatsRead));
+    }
+    rows
 }
 
 /// The rows of [`rows`] for a fixture, with a fresh run and step id.

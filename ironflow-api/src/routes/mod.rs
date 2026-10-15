@@ -48,6 +48,7 @@ use axum::routing::{delete, get, patch, post, put};
 use ironflow_store::MAX_API_BODY_BYTES;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::{ServeDir, ServeFile};
+use tracing::warn;
 
 use crate::middleware::{WorkerToken, https_redirect, security_headers, worker_token_auth};
 use crate::rate_limit::{AccountLimit, RateLimitContext, TrustedProxies, per_minute, rate_limit};
@@ -99,11 +100,17 @@ pub struct RouterConfig {
     /// forwarding header chosen by [`TrustedProxies::header`]. Empty by
     /// default: the rate limiters key on the TCP peer, which requires serving
     /// the router with `into_make_service_with_connect_info::<SocketAddr>()`.
+    ///
+    /// The forwarding headers of these proxies are also the only ones the
+    /// HTTPS redirect of [`RouterConfig::enforce_https`] reads.
     pub trusted_proxies: TrustedProxies,
     /// When `true`, requests carrying `X-Forwarded-Proto: http` are answered
     /// with a `308` redirect to the HTTPS URL. Defaults to `false`.
     ///
-    /// Only enable behind a reverse proxy that sets `X-Forwarded-Proto`.
+    /// Only requests whose TCP peer is in [`RouterConfig::trusted_proxies`]
+    /// are redirected, so enable it behind a reverse proxy that sets
+    /// `X-Forwarded-Proto`, list that proxy in `trusted_proxies`, and serve
+    /// the router with `into_make_service_with_connect_info::<SocketAddr>()`.
     pub enforce_https: bool,
 }
 
@@ -460,7 +467,16 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
     };
 
     if config.enforce_https {
-        app = app.layer(axum_mw::from_fn(https_redirect));
+        if config.trusted_proxies.is_empty() {
+            warn!(
+                "enforce_https is set but TRUSTED_PROXIES is empty: X-Forwarded-Proto is never \
+                 believed, so no request is redirected to HTTPS"
+            );
+        }
+        app = app.layer(axum_mw::from_fn_with_state(
+            config.trusted_proxies.clone(),
+            https_redirect,
+        ));
     }
 
     app.layer(axum_mw::from_fn(security_headers))
