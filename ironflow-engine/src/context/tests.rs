@@ -524,6 +524,19 @@ async fn context_approval_replay_returns_ok() {
         .await
         .expect("failed to update step to AwaitingApproval");
 
+    // A replayed gate only completes once it carries its vote.
+    store
+        .record_step_approval(
+            step.id,
+            StepApproval {
+                user_id: Uuid::now_v7(),
+                approved_by: "tester".to_string(),
+                at: Utc::now(),
+            },
+        )
+        .await
+        .expect("failed to record vote");
+
     // Create context and load replay steps
     let mut ctx = WorkflowContext::new(created_run_id, "test".to_string(), store.clone(), provider);
     ctx.load_replay_steps()
