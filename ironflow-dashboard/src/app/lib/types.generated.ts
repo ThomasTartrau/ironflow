@@ -699,6 +699,8 @@ export interface paths {
 		 * Replay a finished run on the current handler version.
 		 * @description Creates a new `Pending` run with `TriggerKind::Replay` pointing to the
 		 *     original, always on the current handler version. The original run is not modified.
+		 *
+		 *     Returns 429 `MONTHLY_BUDGET_EXCEEDED` if the global monthly cost quota is exhausted.
 		 */
 		post: operations["replay_run"];
 		delete?: never;
@@ -749,6 +751,8 @@ export interface paths {
 		 *     changed since the original run (pass `?force=true` to override), and 409
 		 *     `CONCURRENCY_CONFLICT` if another active run took the original's
 		 *     concurrency key since.
+		 *
+		 *     Returns 429 `MONTHLY_BUDGET_EXCEEDED` if the global monthly cost quota is exhausted.
 		 */
 		post: operations["retry_run"];
 		delete?: never;
@@ -6830,6 +6834,13 @@ export interface operations {
 				};
 				content?: never;
 			};
+			/** @description Monthly cost quota exhausted (MONTHLY_BUDGET_EXCEEDED) */
+			429: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
 		};
 	};
 	resume_run: {
@@ -6937,6 +6948,13 @@ export interface operations {
 			};
 			/** @description Version mismatch, automatic retry already armed, or concurrency key held by an active run (CONCURRENCY_CONFLICT) */
 			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Monthly cost quota exhausted (MONTHLY_BUDGET_EXCEEDED) */
+			429: {
 				headers: {
 					[name: string]: unknown;
 				};
