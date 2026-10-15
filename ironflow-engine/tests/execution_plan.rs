@@ -850,6 +850,7 @@ impl Signal for Ping {
 #[derive(Debug, DecisionAnswers)]
 struct Urgency {
     #[noul("Does this convey urgency?")]
+    #[allow(dead_code)]
     urgent: f64,
 }
 
