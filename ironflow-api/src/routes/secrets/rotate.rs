@@ -7,8 +7,9 @@ use serde_json::json;
 use validator::Validate;
 
 use ironflow_auth::extractor::Authenticated;
-use ironflow_store::entities::{EventKind, NewAuditLogEntry, RotationRequest};
+use ironflow_store::entities::{ApiKeyScope, EventKind, NewAuditLogEntry, RotationRequest};
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{RotateSecretsRequest, RotateSecretsResponse};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -52,9 +53,7 @@ pub async fn rotate_secrets(
     State(state): State<AppState>,
     Json(req): Json<RotateSecretsRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
 
     req.validate()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;

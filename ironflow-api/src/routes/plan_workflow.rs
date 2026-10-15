@@ -9,10 +9,12 @@ use ironflow_engine::plan::{
     ConditionResult, DEFAULT_ESTIMATE_SAMPLE_RUNS, DEFAULT_PLAN_MAX_DEPTH, DEFAULT_PLAN_TIMEOUT,
     ExecutionPlan, PlanOptions, PlannedStep,
 };
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::entities::StepKind;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
@@ -196,11 +198,12 @@ impl From<ExecutionPlan> for ExecutionPlanResponse {
     )
 )]
 pub async fn plan_workflow(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(name): Path<String>,
     Json(req): Json<PlanWorkflowRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::WorkflowsRead, false)?;
     if !state.engine.handler_names().contains(&name.as_str()) {
         return Err(ApiError::WorkflowNotFound(name));
     }

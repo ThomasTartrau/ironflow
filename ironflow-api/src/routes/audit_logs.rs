@@ -7,10 +7,12 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 #[cfg(feature = "openapi")]
 use ironflow_store::entities::AuditLogEntry;
 use ironflow_store::entities::{AuditLogFilter, EventKind};
 
+use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::response::ok_paged;
 use crate::state::AppState;
@@ -57,9 +59,7 @@ pub async fn list_audit_logs(
     State(state): State<AppState>,
     Query(params): Query<ListAuditLogsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
 
     let page = params.page.unwrap_or(1).max(1);
     let per_page = params.per_page.unwrap_or(50).min(100);

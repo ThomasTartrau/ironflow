@@ -30,6 +30,8 @@ pub mod replay_run;
 pub mod retry_run;
 pub mod run_events;
 pub mod schedules;
+#[cfg(test)]
+mod scope_tests;
 pub mod secrets;
 pub mod signals;
 pub mod templates;
@@ -92,10 +94,10 @@ pub struct RouterConfig {
     /// Rate limit for general public API routes in requests per minute
     /// per IP. `None` disables the limiter.
     pub rate_limit_general: Option<u32>,
-    /// Reverse proxies allowed to report the client IP through
-    /// `X-Forwarded-For` / `X-Real-IP`. Empty by default: the rate limiters
-    /// key on the TCP peer, which requires serving the router with
-    /// `into_make_service_with_connect_info::<SocketAddr>()`.
+    /// Reverse proxies allowed to report the client IP through the
+    /// forwarding header chosen by [`TrustedProxies::header`]. Empty by
+    /// default: the rate limiters key on the TCP peer, which requires serving
+    /// the router with `into_make_service_with_connect_info::<SocketAddr>()`.
     pub trusted_proxies: TrustedProxies,
     /// When `true`, requests carrying `X-Forwarded-Proto: http` are answered
     /// with a `308` redirect to the HTTPS URL. Defaults to `false`.

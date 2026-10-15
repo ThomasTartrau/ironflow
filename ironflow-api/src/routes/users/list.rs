@@ -5,7 +5,9 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::UserResponse;
 use crate::error::ApiError;
 use crate::response::ok_paged;
@@ -46,9 +48,7 @@ pub async fn list_users(
     State(state): State<AppState>,
     Query(query): Query<ListUsersQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
 
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);

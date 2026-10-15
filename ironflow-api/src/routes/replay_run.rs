@@ -7,10 +7,12 @@ use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::notify::{Event, RunCreatedEvent};
 use ironflow_engine::replay_policy::is_run_replayable;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::models::{NewRun, TriggerKind, normalize_worker_tags};
 use uuid::Uuid;
 
 use crate::actor::run_actor_of;
+use crate::authorization::AuthorizeExt;
 use crate::entities::RunResponse;
 use crate::error::ApiError;
 use crate::response::ok;
@@ -42,9 +44,7 @@ pub async fn replay_run(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::RunsManage, true)?;
 
     let original = state.get_run_or_404(id).await?;
 

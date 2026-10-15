@@ -18,7 +18,7 @@ export interface paths {
 		 * Create a new API key for the authenticated user.
 		 * @description # Errors
 		 *
-		 *     - 400 if the name is empty or scopes are invalid
+		 *     - 400 if the name is empty or longer than 255 characters (after trimming), or scopes are invalid
 		 */
 		post: operations["create_api_key"];
 		delete?: never;
@@ -5375,7 +5375,7 @@ export interface operations {
 				};
 				content?: never;
 			};
-			/** @description Forbidden (member trying to assign forbidden scopes) */
+			/** @description Forbidden (member assigning forbidden scopes or a rate_limit_override) */
 			403: {
 				headers: {
 					[name: string]: unknown;

@@ -6,8 +6,10 @@ use axum::response::IntoResponse;
 use uuid::Uuid;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::error::StoreError;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{UpdateRoleRequest, UserResponse};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -46,9 +48,7 @@ pub async fn update_role(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateRoleRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
 
     if auth.user_id == id {
         return Err(ApiError::BadRequest(

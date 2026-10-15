@@ -8,6 +8,7 @@ use chrono::Utc;
 use ironflow_auth::extractor::{AuthMethod, Authenticated};
 use ironflow_engine::engine::ExecutionMode;
 use ironflow_engine::notify::{ApprovalGrantedEvent, ApprovalRejectedEvent, Event};
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::models::{
     Assignee, Run, RunStatus, RunUpdate, Step, StepApproval, StepKind, StepStatus, StepUpdate,
 };
@@ -15,6 +16,7 @@ use tokio::spawn;
 use tracing::error;
 use uuid::Uuid;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::RunResponse;
 use crate::error::ApiError;
 use crate::response::ok;
@@ -118,6 +120,8 @@ async fn authorize_approver(
 /// Decide whether the caller may resolve this gate, and under which name the
 /// decision is recorded.
 ///
+/// - An API key must hold the `runs_manage` scope (or `admin`), whatever the
+///   rules below say.
 /// - An admin resolves any gate under their own name.
 /// - When the gate's approval requirement lists approver groups, only members
 ///   of at least one of them may vote; the assignee and delegation rules below
@@ -140,14 +144,16 @@ async fn authorize_approver(
 ///
 /// # Errors
 ///
-/// Returns [`ApiError::Forbidden`] when the caller may not resolve the gate,
-/// and [`ApiError::Store`] when a lookup fails.
+/// Returns [`ApiError::InsufficientScope`] when an API key lacks `runs_manage`,
+/// [`ApiError::Forbidden`] when the caller may not resolve the gate, and
+/// [`ApiError::Store`] when a lookup fails.
 pub(crate) async fn authorize_gate(
     auth: &Authenticated,
     state: &AppState,
     run: &Run,
     gate: &Step,
 ) -> Result<String, ApiError> {
+    auth.require(ApiKeyScope::RunsManage, false)?;
     let caller = caller_name(auth);
 
     if auth.is_admin() {
@@ -246,6 +252,7 @@ async fn resolve_approval(
     target_status: RunStatus,
     verb: &str,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsManage, false)?;
     let run = state.get_run_or_404(id).await?;
 
     if !awaits_gate(&run) {
@@ -412,6 +419,7 @@ mod tests {
     use axum::routing::post;
     use chrono::TimeDelta;
     use http_body_util::BodyExt;
+    use ironflow_auth::extractor::{API_KEY_PREFIX, API_KEY_SUFFIX_LEN};
     use ironflow_auth::jwt::{AccessToken, JwtConfig};
     use ironflow_auth::password;
     use ironflow_core::provider::LABEL_ROOT_RUN_ID;
@@ -421,6 +429,7 @@ mod tests {
     use ironflow_engine::notify::{AuditLogSubscriber, Event};
     use ironflow_store::approval_delegation_store::ApprovalDelegationStore;
     use ironflow_store::audit_log_store::AuditLogStore;
+    use ironflow_store::entities::NewApiKey;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{
         ApprovalRequirement, AuditLogFilter, EventKind, NewApprovalDelegation, NewRun, NewStep,
@@ -1940,5 +1949,107 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), HttpStatusCode::NOT_FOUND);
+    }
+
+    // -- API key scopes --
+
+    /// A `Bearer` header for an API key holding `scopes`, owned by a fresh
+    /// admin.
+    async fn admin_key_header(state: &AppState, scopes: Vec<ApiKeyScope>) -> String {
+        let suffix = Uuid::now_v7().simple().to_string();
+        let owner = state
+            .store
+            .create_user(NewUser {
+                email: format!("key-owner-{suffix}@example.com"),
+                username: format!("key-owner-{suffix}"),
+                password_hash: "argon2hash".to_string(),
+                is_admin: Some(true),
+            })
+            .await
+            .unwrap();
+        let raw_key = format!("irfl_{}rest-of-secret-key", &suffix[24..]);
+        state
+            .store
+            .create_api_key(NewApiKey {
+                user_id: owner.id,
+                name: format!("key-{suffix}"),
+                key_hash: password::hash(&raw_key).unwrap(),
+                key_prefix: raw_key[..API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN].to_string(),
+                scopes,
+                expires_at: None,
+                rate_limit_override: None,
+            })
+            .await
+            .unwrap();
+        format!("Bearer {raw_key}")
+    }
+
+    /// An `Authenticated` API key caller holding `scopes`, owned by an admin.
+    fn admin_key_caller(scopes: Vec<ApiKeyScope>) -> Authenticated {
+        Authenticated {
+            user_id: Uuid::now_v7(),
+            method: AuthMethod::ApiKey {
+                key_id: Uuid::now_v7(),
+                key_name: "ci".to_string(),
+                scopes,
+                owner_is_admin: true,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn authorize_gate_scope_rejects_an_api_key_without_runs_manage() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_awaiting_approval_run(&store).await;
+        let state = test_state(store.clone());
+        let auth = admin_key_header(&state, vec![ApiKeyScope::RunsRead]).await;
+        let app = Router::new()
+            .route("/{id}/approve", post(approve_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/approve", run.id))
+            .header("authorization", auth)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::FORBIDDEN);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["error"]["code"], "INSUFFICIENT_SCOPE");
+
+        let after = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(after.status.state, RunStatus::AwaitingApproval);
+    }
+
+    #[tokio::test]
+    async fn authorize_gate_scope_accepts_an_api_key_with_runs_manage() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_awaiting_approval_run(&store).await;
+        let state = test_state(store.clone());
+        let auth = admin_key_header(&state, vec![ApiKeyScope::RunsManage]).await;
+
+        let status = resolve_as(state, &auth, run.id, "approve").await;
+
+        assert_eq!(status, HttpStatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn authorize_gate_scope_is_checked_before_the_admin_shortcut() {
+        let store = Arc::new(InMemoryStore::new());
+        let (run_id, step_id) = run_with_armed_gate(&store).await;
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        let gate = store.get_step(step_id).await.unwrap().unwrap();
+        let state = test_state(store);
+
+        let read_only = admin_key_caller(vec![ApiKeyScope::RunsRead]);
+        let result = authorize_gate(&read_only, &state, &run, &gate).await;
+        assert!(matches!(result, Err(ApiError::InsufficientScope)));
+
+        let manager = admin_key_caller(vec![ApiKeyScope::RunsManage]);
+        let actor = authorize_gate(&manager, &state, &run, &gate).await.unwrap();
+        assert_eq!(actor, "ci");
     }
 }

@@ -13,8 +13,10 @@ use axum::response::IntoResponse;
 use uuid::Uuid;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::error::StoreError;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{UpdateUserGroupsRequest, UserGroupsResponse};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -55,9 +57,7 @@ pub async fn get_user_groups(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
 
     if state.store.find_user_by_id(id).await?.is_none() {
         return Err(ApiError::UserNotFound(id));
@@ -107,9 +107,7 @@ pub async fn update_user_groups(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateUserGroupsRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
 
     let groups = normalize_groups(req.groups)?;
     let groups = state

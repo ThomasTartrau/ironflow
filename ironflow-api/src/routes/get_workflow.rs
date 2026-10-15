@@ -6,11 +6,13 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::{DateTime, Utc};
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::entities::{MAX_PRIORITY, MIN_PRIORITY};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
@@ -93,10 +95,11 @@ pub struct WorkflowDetailResponse {
     )
 )]
 pub async fn get_workflow(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::WorkflowsRead, false)?;
     let info = state
         .engine
         .handler_info(&name)

@@ -6,8 +6,10 @@ use axum::response::IntoResponse;
 use uuid::Uuid;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::error::StoreError;
 
+use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -42,9 +44,7 @@ pub async fn delete_user(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_admin() {
-        return Err(ApiError::Forbidden);
-    }
+    auth.require(ApiKeyScope::Admin, true)?;
 
     if auth.user_id == id {
         return Err(ApiError::BadRequest(
