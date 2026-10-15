@@ -180,9 +180,9 @@ implies every other scope. Paths below are relative to `/api/v1`.
 | Scope | Routes |
 |-------|--------|
 | `runs_read` | `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/logs`, `GET /runs/{id}/events`, `GET /runs/{id}/steps/{step_id}/artifacts/{name}`, `GET /events` |
-| `runs_write` | `POST /runs` |
-| `runs_manage` | `POST /runs/{id}/approve`, `/reject`, `/cancel`, `/retry`, `/replay`, `/pause`, `/resume`, `POST /runs/{id}/steps/{step_id}/input`, `/reject` |
-| `workflows_read` | `GET /workflows`, `GET /workflows/{name}`, `POST /workflows/{name}/plan` |
+| `runs_write` | `POST /runs`, `POST /schedules`, `DELETE /schedules/{id}`, `POST /schedules/{id}/pause`, `/resume`, `/trigger` |
+| `runs_manage` | `POST /runs/{id}/approve`, `/reject`, `/cancel`, `/retry`, `/replay`, `/pause`, `/resume`, `POST /runs/{id}/steps/{step_id}/input`, `/reject`, `GET /approval-delegations`, `POST /approval-delegations`, `DELETE /approval-delegations/{id}` |
+| `workflows_read` | `GET /workflows`, `GET /workflows/{name}`, `POST /workflows/{name}/plan`, `GET /schedules`, `GET /schedules/{id}`, `GET /templates/registry` |
 | `stats_read` | `GET /stats`, `GET /stats/history` |
 | `admin` | `/secrets/*`, `/users/*`, `GET /audit-logs`, `POST /workflows/{name}/pause`, `POST /workflows/{name}/resume` |
 
@@ -193,9 +193,36 @@ rejecting and answering a gate keep their assignee and delegation rules on top o
 scope. On `GET /events`, Provider Account events reach a key only when it holds the
 `admin` scope and its owner is an admin.
 
+Schedule, template and delegation routes are not admin-only: a key owned by a member reaches
+them exactly as that member's dashboard session does. Revoking a delegation still needs to
+be its delegator or an admin, and listing still shows a non-admin only the delegations they
+are part of.
+
 Signals and Provider Accounts have their own scopes (`signals_send`, `accounts_read`,
 `accounts_manage`). Dashboard sessions (JWT) are not scope-checked: only the account's
 admin flag applies to them.
+
+### Audit log
+
+The example server records every engine event in the audit log read by
+`GET /audit-logs` (and the Audit page of the dashboard) through `AuditLogSubscriber`.
+A custom server must subscribe it itself, otherwise the audit log stays empty:
+
+```rust,ignore
+engine.subscribe(AuditLogSubscriber::new(store.clone()), Event::ALL);
+```
+
+Log lines and Provider Account events do not go through the engine publisher, so they
+are neither recorded nor duplicated. Who acted is the entry's `user_id`, also present in
+the payload of `approval_granted`, `approval_rejected` (a gate decision or a human input
+rejection, with its `reason`), `workflow_paused` and `workflow_resumed`. For an API key it
+is the key's owner; the event keeps the key name as its label (`approved_by`,
+`rejected_by`). A decision taken by the SLA timer (`system:timeout`) has no `user_id`. A
+pause is recorded on every request, a resume only when the workflow was paused.
+
+`GET /events` sends a `lagged` event, whatever its filters, to a client that read slower
+than events were published: `data: {"missed": n}` counts the events it lost. Its view
+is stale; reload it.
 
 ### Retention
 

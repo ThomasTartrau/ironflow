@@ -8,9 +8,11 @@ use validator::Validate;
 
 use ironflow_auth::extractor::Authenticated;
 use ironflow_store::entities::{
-    MAX_PRIORITY, MIN_PRIORITY, NewSchedule, SchedulePolicy, ScheduleSource, validate_priority,
+    ApiKeyScope, MAX_PRIORITY, MIN_PRIORITY, NewSchedule, SchedulePolicy, ScheduleSource,
+    validate_priority,
 };
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{CreateScheduleRequest, ScheduleResponse};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -50,6 +52,7 @@ pub async fn create_schedule(
     State(state): State<AppState>,
     Json(req): Json<CreateScheduleRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsWrite, false)?;
     req.validate()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 

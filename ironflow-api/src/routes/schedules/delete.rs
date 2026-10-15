@@ -6,8 +6,9 @@ use axum::response::IntoResponse;
 use uuid::Uuid;
 
 use ironflow_auth::extractor::Authenticated;
-use ironflow_store::entities::ScheduleSource;
+use ironflow_store::entities::{ApiKeyScope, ScheduleSource};
 
+use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -38,10 +39,11 @@ use crate::state::AppState;
     )
 )]
 pub async fn delete_schedule(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsWrite, false)?;
     let schedule = state
         .store
         .find_schedule_by_id(id)

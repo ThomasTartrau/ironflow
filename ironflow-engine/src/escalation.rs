@@ -434,6 +434,9 @@ impl ApprovalEscalator {
                 run_id: step.run_id,
                 step_id: Some(step.id),
                 approved_by: SYSTEM_TIMEOUT_ACTOR.to_string(),
+                // No human decided: the deadline did. The audit log keeps the
+                // `SYSTEM_TIMEOUT_ACTOR` label and no user.
+                user_id: None,
                 approvals_received: step.approvals.len() as u32,
                 approvals_required: step
                     .approval_requirement
@@ -502,6 +505,10 @@ impl ApprovalEscalator {
                 run_id: step.run_id,
                 step_id: Some(step.id),
                 rejected_by: SYSTEM_TIMEOUT_ACTOR.to_string(),
+                // No human decided: the deadline did. The audit log keeps the
+                // `SYSTEM_TIMEOUT_ACTOR` label and no user.
+                user_id: None,
+                reason: None,
                 requirement: step.approval_requirement.clone(),
                 at: now,
             }));

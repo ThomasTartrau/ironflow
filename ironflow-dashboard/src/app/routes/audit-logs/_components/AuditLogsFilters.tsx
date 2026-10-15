@@ -32,6 +32,8 @@ const EVENT_KINDS: EventKind[] = [
 	"signal_awaited",
 	"signal_received",
 	"schedule_occurrences_missed",
+	"workflow_paused",
+	"workflow_resumed",
 ];
 
 interface FilterValues {

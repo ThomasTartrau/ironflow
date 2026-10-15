@@ -8,8 +8,9 @@ use chrono::Utc;
 use validator::Validate;
 
 use ironflow_auth::extractor::Authenticated;
-use ironflow_store::entities::{NewApprovalDelegation, validate_workflow_filter};
+use ironflow_store::entities::{ApiKeyScope, NewApprovalDelegation, validate_workflow_filter};
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{ApprovalDelegationResponse, CreateApprovalDelegationRequest};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -45,6 +46,7 @@ pub async fn create_approval_delegation(
     State(state): State<AppState>,
     Json(req): Json<CreateApprovalDelegationRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsManage, false)?;
     req.validate()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
