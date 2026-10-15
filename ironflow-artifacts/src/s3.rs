@@ -10,21 +10,38 @@ use aws_config::Region;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Builder;
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_smithy_types::byte_stream::ByteStream as SdkByteStream;
+use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use futures_util::stream::unfold;
 use sha2::{Digest, Sha256};
+use tracing::warn;
 
 use crate::blob_store::{BlobDigest, BlobFuture, BlobStore, ByteStream};
 use crate::error::ArtifactError;
 use crate::local::DEFAULT_MAX_ARTIFACT_BYTES;
 
+/// Size of one multipart part. S3 requires at least 5 MiB for every part but the last.
+const PART_SIZE: usize = 8 * 1024 * 1024;
+
+/// S3 hard limit on the number of parts of one multipart upload.
+const MAX_PARTS: usize = 10_000;
+
 /// S3-compatible [`BlobStore`].
 ///
 /// Blobs are stored as objects under `{prefix}/{key}` in the configured bucket.
-/// SHA-256 is computed while reading the upload, which is buffered up to the
-/// size limit before `PutObject`. Downloads are streamed chunk by chunk from
-/// the S3 response body, never buffered whole in memory.
+/// SHA-256 is computed chunk by chunk while reading the upload. An upload
+/// smaller than one part (8 MiB) is sent with a single `PutObject`; a larger one
+/// uses a multipart upload with 8 MiB parts, sent sequentially. Memory per
+/// upload is therefore bounded by one part, not by the size limit. The
+/// multipart upload is aborted on error or when the size limit is exceeded.
+/// Downloads are streamed chunk by chunk from the S3 response body, never
+/// buffered whole in memory.
+///
+/// An abort cannot run if the upload future is dropped mid-way (for example on
+/// a process crash). Configure a bucket lifecycle rule
+/// `AbortIncompleteMultipartUpload` so orphaned parts do not accumulate.
 ///
 /// # Credentials
 ///
@@ -201,40 +218,216 @@ impl S3BlobStore {
     }
 }
 
-impl BlobStore for S3BlobStore {
-    fn put<'a>(&'a self, key: &'a str, mut content: ByteStream) -> BlobFuture<'a, BlobDigest> {
-        Box::pin(async move {
-            let full_key = self.full_key(key);
-            let mut hasher = Sha256::new();
-            let mut size_bytes: u64 = 0;
-            let mut body = Vec::new();
+impl S3BlobStore {
+    /// Upload `content`, aborting the multipart upload if one was started and
+    /// the upload failed. The original error is always the one returned.
+    async fn put_stream(
+        &self,
+        key: &str,
+        content: ByteStream,
+    ) -> Result<BlobDigest, ArtifactError> {
+        let full_key = self.full_key(key);
+        let mut upload = None;
+        let result = self.upload_parts(&full_key, &mut upload, content).await;
+        // No abort if the future is dropped: the bucket lifecycle rule is the safety net.
+        if let (Err(_), Some(upload_id)) = (&result, &upload) {
+            self.abort_multipart(&full_key, upload_id).await;
+        }
+        result
+    }
 
-            while let Some(chunk) = content.next().await {
-                let bytes = chunk?;
-                size_bytes += bytes.len() as u64;
-                if size_bytes > self.max_bytes {
-                    return Err(ArtifactError::TooLarge {
-                        limit_bytes: self.max_bytes,
-                    });
-                }
-                hasher.update(&bytes);
-                body.extend_from_slice(&bytes);
+    /// Read `content` chunk by chunk, sending one part at a time.
+    ///
+    /// `upload` receives the multipart upload id as soon as it is created, so
+    /// the caller can abort it on error.
+    async fn upload_parts(
+        &self,
+        full_key: &str,
+        upload: &mut Option<String>,
+        mut content: ByteStream,
+    ) -> Result<BlobDigest, ArtifactError> {
+        let mut hasher = Sha256::new();
+        let mut size_bytes: u64 = 0;
+        let mut buf = PartBuffer::new(PART_SIZE);
+        let mut parts: Vec<CompletedPart> = Vec::new();
+
+        while let Some(chunk) = content.next().await {
+            let bytes = chunk?;
+            size_bytes += bytes.len() as u64;
+            // Checked before buffering so an oversized chunk is never held.
+            if size_bytes > self.max_bytes {
+                return Err(ArtifactError::TooLarge {
+                    limit_bytes: self.max_bytes,
+                });
             }
+            hasher.update(&bytes);
+            buf.push(&bytes);
 
-            self.client
-                .put_object()
-                .bucket(&self.bucket)
-                .key(&full_key)
-                .body(SdkByteStream::from(body))
-                .send()
-                .await
-                .map_err(|err| ArtifactError::Io(format!("S3 PutObject failed: {err}")))?;
+            while let Some(part) = buf.next_part() {
+                let upload_id = match upload.clone() {
+                    Some(id) => id,
+                    None => {
+                        let id = self.create_multipart(full_key).await?;
+                        *upload = Some(id.clone());
+                        id
+                    }
+                };
+                self.upload_part(full_key, &upload_id, &mut parts, part)
+                    .await?;
+            }
+        }
 
-            Ok(BlobDigest {
-                size_bytes,
-                sha256: hex::encode(hasher.finalize()),
-            })
+        let rest = buf.into_rest();
+        match upload.clone() {
+            None => {
+                // Also covers empty content: CompleteMultipartUpload needs at least one part.
+                self.client
+                    .put_object()
+                    .bucket(&self.bucket)
+                    .key(full_key)
+                    .body(SdkByteStream::from(rest))
+                    .send()
+                    .await
+                    .map_err(|err| ArtifactError::Io(format!("S3 PutObject failed: {err}")))?;
+            }
+            Some(upload_id) => {
+                if !rest.is_empty() {
+                    self.upload_part(full_key, &upload_id, &mut parts, rest)
+                        .await?;
+                }
+                self.client
+                    .complete_multipart_upload()
+                    .bucket(&self.bucket)
+                    .key(full_key)
+                    .upload_id(&upload_id)
+                    .multipart_upload(
+                        CompletedMultipartUpload::builder()
+                            .set_parts(Some(parts))
+                            .build(),
+                    )
+                    .send()
+                    .await
+                    .map_err(|err| {
+                        ArtifactError::Io(format!("S3 CompleteMultipartUpload failed: {err}"))
+                    })?;
+            }
+        }
+
+        Ok(BlobDigest {
+            size_bytes,
+            sha256: hex::encode(hasher.finalize()),
         })
+    }
+
+    /// Start a multipart upload and return its id.
+    async fn create_multipart(&self, full_key: &str) -> Result<String, ArtifactError> {
+        let resp = self
+            .client
+            .create_multipart_upload()
+            .bucket(&self.bucket)
+            .key(full_key)
+            .send()
+            .await
+            .map_err(|err| ArtifactError::Io(format!("S3 CreateMultipartUpload failed: {err}")))?;
+        resp.upload_id().map(String::from).ok_or_else(|| {
+            ArtifactError::Io("S3 CreateMultipartUpload returned no upload id".to_string())
+        })
+    }
+
+    /// Send one part and record its ETag in `parts`.
+    async fn upload_part(
+        &self,
+        full_key: &str,
+        upload_id: &str,
+        parts: &mut Vec<CompletedPart>,
+        part: Bytes,
+    ) -> Result<(), ArtifactError> {
+        if parts.len() >= MAX_PARTS {
+            return Err(ArtifactError::Io(format!(
+                "S3 multipart uploads are limited to {MAX_PARTS} parts: the artifact is too large"
+            )));
+        }
+        let part_number = i32::try_from(parts.len() + 1)
+            .map_err(|err| ArtifactError::Io(format!("S3 part number out of range: {err}")))?;
+
+        let resp = self
+            .client
+            .upload_part()
+            .bucket(&self.bucket)
+            .key(full_key)
+            .upload_id(upload_id)
+            .part_number(part_number)
+            .body(SdkByteStream::from(part))
+            .send()
+            .await
+            .map_err(|err| ArtifactError::Io(format!("S3 UploadPart failed: {err}")))?;
+        let e_tag = resp.e_tag().ok_or_else(|| {
+            ArtifactError::Io(format!("S3 UploadPart {part_number} returned no ETag"))
+        })?;
+
+        parts.push(
+            CompletedPart::builder()
+                .part_number(part_number)
+                .e_tag(e_tag)
+                .build(),
+        );
+        Ok(())
+    }
+
+    /// Abort a multipart upload, logging (never returning) a failure so the
+    /// error that caused the abort is not masked.
+    async fn abort_multipart(&self, full_key: &str, upload_id: &str) {
+        let result = self
+            .client
+            .abort_multipart_upload()
+            .bucket(&self.bucket)
+            .key(full_key)
+            .upload_id(upload_id)
+            .send()
+            .await;
+        if let Err(err) = result {
+            warn!(key = full_key, upload_id, error = %err, "S3 AbortMultipartUpload failed");
+        }
+    }
+}
+
+/// Accumulates upload chunks and hands them out as fixed-size parts, so at most
+/// one part (plus one incoming chunk) is held in memory.
+struct PartBuffer {
+    buf: BytesMut,
+    part_size: usize,
+}
+
+impl PartBuffer {
+    fn new(part_size: usize) -> Self {
+        Self {
+            buf: BytesMut::new(),
+            part_size,
+        }
+    }
+
+    fn push(&mut self, chunk: &[u8]) {
+        self.buf.extend_from_slice(chunk);
+    }
+
+    /// Take one full part off the front, without copying, if enough is buffered.
+    fn next_part(&mut self) -> Option<Bytes> {
+        if self.buf.len() >= self.part_size {
+            Some(self.buf.split_to(self.part_size).freeze())
+        } else {
+            None
+        }
+    }
+
+    /// What remains, shorter than one part once drained.
+    fn into_rest(self) -> Bytes {
+        self.buf.freeze()
+    }
+}
+
+impl BlobStore for S3BlobStore {
+    fn put<'a>(&'a self, key: &'a str, content: ByteStream) -> BlobFuture<'a, BlobDigest> {
+        Box::pin(self.put_stream(key, content))
     }
 
     fn get<'a>(&'a self, key: &'a str) -> BlobFuture<'a, ByteStream> {
@@ -392,6 +585,74 @@ mod tests {
         }
     }
 
+    fn drain(buf: &mut PartBuffer) -> Vec<Bytes> {
+        let mut parts = Vec::new();
+        while let Some(part) = buf.next_part() {
+            parts.push(part);
+        }
+        parts
+    }
+
+    #[test]
+    fn part_buffer_splits_oversized_chunk_into_full_parts() {
+        let input: Vec<u8> = (0..10u8).collect();
+        let mut buf = PartBuffer::new(4);
+        buf.push(&input);
+
+        let parts = drain(&mut buf);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].len(), 4);
+        assert_eq!(parts[1].len(), 4);
+
+        let rest = buf.into_rest();
+        assert_eq!(rest.len(), 2);
+
+        let mut joined = Vec::new();
+        for part in &parts {
+            joined.extend_from_slice(part);
+        }
+        joined.extend_from_slice(&rest);
+        assert_eq!(joined, input);
+    }
+
+    #[test]
+    fn part_buffer_holds_less_than_one_part_after_draining() {
+        let mut buf = PartBuffer::new(4);
+        let mut held = 0;
+        for i in 0..50usize {
+            let chunk = vec![0u8; (i % 3) + 1];
+            held += chunk.len();
+            buf.push(&chunk);
+            held -= drain(&mut buf).iter().map(Bytes::len).sum::<usize>();
+            assert!(buf.buf.len() < 4);
+            assert_eq!(buf.buf.len(), held);
+        }
+    }
+
+    #[test]
+    fn part_buffer_exact_multiple_leaves_empty_rest() {
+        let mut buf = PartBuffer::new(4);
+        buf.push(&[1u8; 8]);
+        assert_eq!(drain(&mut buf).len(), 2);
+        assert!(buf.into_rest().is_empty());
+    }
+
+    #[test]
+    fn part_buffer_empty_input_yields_nothing() {
+        let mut buf = PartBuffer::new(4);
+        buf.push(&[]);
+        assert!(buf.next_part().is_none());
+        assert!(buf.into_rest().is_empty());
+    }
+
+    #[test]
+    fn part_buffer_below_part_size_yields_no_part() {
+        let mut buf = PartBuffer::new(4);
+        buf.push(&[1, 2, 3]);
+        assert!(buf.next_part().is_none());
+        assert_eq!(buf.into_rest().as_ref(), &[1, 2, 3]);
+    }
+
     #[test]
     fn s3_blob_store_construction_with_valid_config() {
         let store = S3BlobStore::from_credentials("my-bucket", "AKID", "SECRET", "eu-west-1", None)
@@ -465,5 +726,27 @@ mod tests {
         let debug = format!("{store:?}");
         assert!(!debug.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(!debug.contains("wJalrXUtnFEMI"));
+    }
+
+    #[tokio::test]
+    async fn s3_upload_part_rejects_part_number_beyond_s3_limit() {
+        let store =
+            S3BlobStore::from_credentials("b", "AK", "SK", "eu-west-1", None).expect("build");
+        let mut parts: Vec<CompletedPart> = (1..=MAX_PARTS)
+            .map(|n| {
+                CompletedPart::builder()
+                    .part_number(i32::try_from(n).expect("part number fits"))
+                    .e_tag("etag")
+                    .build()
+            })
+            .collect();
+
+        let err = store
+            .upload_part("key", "UP1", &mut parts, Bytes::from_static(b"x"))
+            .await
+            .expect_err("part limit");
+
+        assert!(matches!(&err, ArtifactError::Io(msg) if msg.contains("10000")));
+        assert_eq!(parts.len(), MAX_PARTS);
     }
 }
