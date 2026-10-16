@@ -52,7 +52,9 @@ for the whole deployment with the worker's `IRONFLOW_HTTP_ALLOWED_HOSTS`
 
 A shell step reads back through `stdout()`, `stderr()` and `exit_code()`, an
 HTTP step through `status()` and `body()`. A step tolerated with
-`allow_failure()` that failed reads back its message through `error()`. Files a shell step declares with
+`allow_failure()` that failed reads back its message through `error()`. When the
+run resumes, for instance after a signal, a tolerated failure is replayed with the
+same `{"error": ...}` output and the step is not executed again. Files a shell step declares with
 `.output("target/*.log")` are handed to later steps through a handle:
 `build.artifact("build.log")?`, passed to `ShellConfig::input(&handle)` or
 `ctx.get_artifact(&handle)`. A name the step did not declare fails with

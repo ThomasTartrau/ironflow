@@ -9,6 +9,7 @@ use serde_json::{Value, json, to_value};
 
 use ironflow_core::error::{AgentError, OperationError};
 use ironflow_core::retry::is_retryable;
+use ironflow_store::models::Step;
 
 use crate::error::EngineError;
 use crate::executor::{ERROR_KEY, StepArtifacts, StepOutput};
@@ -72,6 +73,22 @@ pub(super) fn allowed_failure_output(
         account_id: None,
         environment_id: None,
     }
+}
+
+/// Rebuild the output an `allow_failure` step handed to the handler, from the
+/// failed step stored by the first execution.
+///
+/// Mirrors [`allowed_failure_output`]: the stored raw response when there is
+/// one, `{ERROR_KEY: error}` otherwise. Returns `None` when the step has no
+/// error message, so a failure without a message runs again.
+pub(super) fn replayed_failure_output(step: &Step) -> Option<StepOutput> {
+    let error = step.error.as_deref()?;
+    let mut output = StepOutput::from(step);
+    output.output = step
+        .output
+        .clone()
+        .unwrap_or_else(|| json!({ (ERROR_KEY): error }));
+    Some(output)
 }
 
 /// Extract debug messages from an engine error, if it wraps a schema validation

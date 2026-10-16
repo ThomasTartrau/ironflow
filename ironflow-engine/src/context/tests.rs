@@ -13,10 +13,10 @@ use ironflow_store::models::{
     Assignee, NewRun, NewStep, Run, RunActor, RunFilter, RunStatus, StepApproval, StepKind,
     StepStatus, StepUpdate, TriggerKind, step_trace_id,
 };
-use ironflow_store::store::RunStore;
+use ironflow_store::store::{RunStore, STEP_INTERRUPTED_ERROR};
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -27,6 +27,7 @@ use crate::config::delay::DelayConfig;
 use crate::config::{ApprovalConfig, DecisionConfig, HumanInputConfig, ShellConfig, StepConfig};
 use crate::decision::DecisionAnswers;
 use crate::error::EngineError;
+use crate::executor::ERROR_KEY;
 use crate::handler::TypedWorkflow;
 use crate::plan::PlanRecorder;
 use crate::testing::{MockInterceptor, MockShellOutput};
@@ -655,6 +656,198 @@ async fn context_load_replay_steps_loads_completed_steps() {
     assert_eq!(ctx.replay_steps.len(), 1);
     assert!(ctx.replay_steps.contains_key(&0));
     assert!(!ctx.replay_steps.contains_key(&1));
+}
+
+/// Create a run and a failed shell step at `position` 0 carrying `error`,
+/// then load it as a resumed context would.
+async fn context_with_failed_step(error: &str) -> WorkflowContext {
+    context_with_failed_step_input(error, None).await
+}
+
+/// Same as [`context_with_failed_step`], with the stored config of the step.
+async fn context_with_failed_step_input(error: &str, input: Option<Value>) -> WorkflowContext {
+    let store = Arc::new(InMemoryStore::new());
+    let provider = create_test_provider();
+    let run = store
+        .create_run(NewRun {
+            created_by: None,
+            workflow_name: "test".to_string(),
+            trigger: TriggerKind::Manual,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: Default::default(),
+            scheduled_at: None,
+            idempotency_key: None,
+            concurrency_key: None,
+            priority: 0,
+            concurrency_limits: Vec::new(),
+            max_cost_usd: None,
+            worker_tags: Vec::new(),
+        })
+        .await
+        .expect("failed to create run")
+        .into_run();
+    let step = store
+        .create_step(NewStep {
+            run_id: run.id,
+            trace_id: step_trace_id(run.id, "flaky", 0),
+            name: "flaky".to_string(),
+            kind: StepKind::Shell,
+            position: 0,
+            input,
+            is_error_handler: false,
+        })
+        .await
+        .expect("failed to create step");
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                status: Some(StepStatus::Running),
+                started_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("failed to start step");
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                status: Some(StepStatus::Failed),
+                error: Some(error.to_string()),
+                completed_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("failed to fail step");
+
+    let mut ctx = WorkflowContext::new(run.id, "test".to_string(), store, provider);
+    ctx.load_replay_steps()
+        .await
+        .expect("failed to load replay steps");
+    ctx
+}
+
+#[tokio::test]
+async fn a_failed_step_without_allow_failure_keeps_running_again_on_resume() {
+    let mut ctx = context_with_failed_step("boom").await;
+
+    let replayed = ctx
+        .try_replay_step(0, "flaky", &StepKind::Shell, false)
+        .expect("identity matches");
+    assert!(replayed.is_none());
+    assert!(!ctx.has_allowed_failure);
+
+    let output = ctx
+        .try_replay_step(0, "flaky", &StepKind::Shell, true)
+        .expect("identity matches")
+        .expect("a tolerated failure is replayed");
+    assert_eq!(output.output, json!({ (ERROR_KEY): "boom" }));
+    assert!(ctx.has_allowed_failure);
+}
+
+#[tokio::test]
+async fn a_replayed_failure_hands_back_the_stored_raw_response() {
+    let ctx = context_with_failed_step("schema mismatch").await;
+    let mut step = ctx
+        .replay_steps
+        .get(&0)
+        .expect("failed step is loaded")
+        .clone();
+    step.output = Some(json!("raw agent text"));
+
+    let output = super::failure::replayed_failure_output(&step).expect("error is stored");
+    assert_eq!(output.output, json!("raw agent text"));
+
+    step.error = None;
+    assert!(super::failure::replayed_failure_output(&step).is_none());
+}
+
+#[tokio::test]
+async fn an_interrupted_step_is_never_replayed_even_with_allow_failure() {
+    let mut ctx = context_with_failed_step(STEP_INTERRUPTED_ERROR).await;
+
+    assert!(ctx.replay_steps.is_empty());
+    let replayed = ctx
+        .try_replay_step(0, "flaky", &StepKind::Shell, true)
+        .expect("no step recorded, no divergence");
+    assert!(replayed.is_none());
+}
+
+#[tokio::test]
+async fn a_failed_step_with_declared_inputs_is_never_replayed() {
+    let config = json!({
+        "kind": "shell",
+        "command": "cat in.txt",
+        "inputs": [{ "step": "a", "name": "b" }]
+    });
+    let mut ctx = context_with_failed_step_input("boom", Some(config)).await;
+
+    assert!(ctx.replay_steps.is_empty());
+    let replayed = ctx
+        .try_replay_step(0, "flaky", &StepKind::Shell, true)
+        .expect("no step recorded, no divergence");
+    assert!(replayed.is_none());
+}
+
+#[tokio::test]
+async fn a_replayed_tolerated_failure_skips_the_positions_of_its_error_handlers() {
+    let mut ctx = context_with_failed_step("boom").await;
+    let after = ctx
+        .store
+        .create_step(NewStep {
+            run_id: ctx.run_id,
+            trace_id: step_trace_id(ctx.run_id, "after", 2),
+            name: "after".to_string(),
+            kind: StepKind::Shell,
+            position: 2,
+            input: None,
+            is_error_handler: false,
+        })
+        .await
+        .expect("failed to create step");
+    ctx.store
+        .update_step(
+            after.id,
+            StepUpdate {
+                status: Some(StepStatus::Running),
+                started_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("failed to start step");
+    ctx.store
+        .update_step(
+            after.id,
+            StepUpdate {
+                status: Some(StepStatus::Completed),
+                output: Some(json!({ "stdout": "done" })),
+                completed_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("failed to complete step");
+    ctx.load_replay_steps()
+        .await
+        .expect("failed to reload replay steps");
+
+    ctx.on_error("cleanup", ShellConfig::new("true"));
+    ctx.position = 1;
+    ctx.try_replay_step(0, "flaky", &StepKind::Shell, true)
+        .expect("identity matches")
+        .expect("a tolerated failure is replayed");
+
+    assert_eq!(ctx.position, 2);
+    assert!(ctx.error_handlers.is_empty());
+    let replayed = ctx
+        .try_replay_step(2, "after", &StepKind::Shell, false)
+        .expect("identity matches");
+    assert!(replayed.is_some());
 }
 
 #[tokio::test]
