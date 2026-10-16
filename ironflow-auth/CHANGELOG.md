@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.4.77](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-auth-v2.4.76...ironflow-auth-v2.4.77) - 2026-10-16
+
+### Fixed
+
+- #203 propagate rights revocation to API keys and SSE streams
+
 ## [2.4.75](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-auth-v2.4.74...ironflow-auth-v2.4.75) - 2026-10-15
 
 ### Fixed
