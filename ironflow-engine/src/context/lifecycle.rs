@@ -39,9 +39,40 @@ use super::WorkflowContext;
 use super::failure::{
     allowed_failure_output, extract_debug_messages_from_error, extract_partial_usage_from_error,
     extract_raw_response_from_error, is_step_retryable, record_retry_metric,
+    replayed_failure_output,
 };
 use super::session::retry_in_session;
 use super::steps::sub_workflow::recorded_child_run_id;
+
+/// Whether a failed step may be replayed when the handler tolerates its failure.
+///
+/// Interrupted and capacity-parked steps are markers for "execute again", and
+/// only shell, HTTP and agent steps carry an `allow_failure` output. A step
+/// with declared inputs is not replayed: its failure may come from the input
+/// preparation, which neither fires error handlers nor reaches a wave result,
+/// and the stored step cannot tell the two causes apart.
+fn is_replayable_failure(step: &Step) -> bool {
+    step.status.state == StepStatus::Failed
+        && !step.is_error_handler
+        && !has_declared_inputs(step)
+        && matches!(
+            step.kind,
+            StepKind::Shell | StepKind::Http | StepKind::Agent
+        )
+        && step
+            .error
+            .as_deref()
+            .is_some_and(|err| err != STEP_INTERRUPTED_ERROR && err != CAPACITY_WAIT_STEP_ERROR)
+}
+
+/// Whether the stored config of `step` declares artifact inputs.
+fn has_declared_inputs(step: &Step) -> bool {
+    step.input
+        .as_ref()
+        .and_then(|config| config.get("inputs"))
+        .and_then(|inputs| inputs.as_array())
+        .is_some_and(|inputs| !inputs.is_empty())
+}
 
 /// Error recorded on an agent step parked by a capacity wait.
 ///
@@ -173,6 +204,12 @@ impl WorkflowContext {
     /// A step of the current attempt left `Skipped` by [`skip`](Self::skip) is
     /// replayed as well, so a resumed run never records the same skip twice.
     ///
+    /// A `Shell`, `Http` or `Agent` step of the current attempt left `Failed`
+    /// is loaded too: when the handler configures it with `allow_failure`, the
+    /// tolerated failure is replayed with its stored output instead of being
+    /// executed again. Steps interrupted or parked for capacity are executed
+    /// again.
+    ///
     /// A run requeued after its worker lost the lease stays in the same
     /// attempt, so it resumes the same way: its finished steps are replayed and
     /// the step that was running, marked `Failed` with
@@ -223,7 +260,8 @@ impl WorkflowContext {
                     | StepStatus::AwaitingApproval
                     | StepStatus::Skipped
             );
-            if !dominated {
+            let replayable_failure = step.attempt == self.attempt && is_replayable_failure(&step);
+            if !dominated && !replayable_failure {
                 continue;
             }
 
@@ -270,6 +308,10 @@ impl WorkflowContext {
     /// Returns `Some(StepOutput)` if a completed step exists at the given
     /// position, `None` otherwise.
     ///
+    /// A step that failed under `allow_failure` is replayed as well, with the
+    /// output the handler received the first time. A failed step without
+    /// `allow_failure`, interrupted or parked by a capacity wait, runs again.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineError::ReplayDivergence`] when the step recorded at
@@ -279,11 +321,34 @@ impl WorkflowContext {
         position: u32,
         name: &str,
         kind: &StepKind,
+        allow_failure: bool,
     ) -> Result<Option<StepOutput>, EngineError> {
         let Some(step) = self.replay_steps.get(&position) else {
             return Ok(None);
         };
         check_replay_identity(step, position, name, kind)?;
+        if step.status.state == StepStatus::Failed {
+            if !allow_failure {
+                return Ok(None);
+            }
+            let Some(output) = replayed_failure_output(step) else {
+                return Ok(None);
+            };
+            let step_id = step.id;
+            let step_name = step.name.clone();
+            self.has_allowed_failure = true;
+            // Cost is not added, see the completed branch below.
+            self.total_duration_ms += output.duration_ms;
+            self.last_step_ids = vec![step_id];
+            self.skip_fired_error_handlers();
+            info!(
+                run_id = %self.run_id,
+                step = %step_name,
+                position,
+                "tolerated failure replayed from previous execution"
+            );
+            return Ok(Some(output));
+        }
         if step.status.state != StepStatus::Completed {
             return Ok(None);
         }
@@ -378,7 +443,7 @@ impl WorkflowContext {
         self.position += 1;
 
         // Replay: if this step already completed in a prior execution, return cached output.
-        if let Some(output) = self.try_replay_step(position, name, &kind)? {
+        if let Some(output) = self.try_replay_step(position, name, &kind, config.allow_failure())? {
             return Ok(output);
         }
 

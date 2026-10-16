@@ -18,7 +18,7 @@ use crate::config::StepConfig;
 use crate::context::WorkflowContext;
 use crate::context::failure::{
     allowed_failure_output, extract_debug_messages_from_error, extract_partial_usage_from_error,
-    extract_raw_response_from_error,
+    extract_raw_response_from_error, replayed_failure_output,
 };
 use crate::context::lifecycle::check_replay_identity;
 use crate::error::EngineError;
@@ -555,7 +555,8 @@ impl WorkflowContext {
     /// execution of the current attempt.
     ///
     /// Returns one slot per entry of `steps`, in order: `Some` holds the
-    /// replayed result of a step that completed at `position`, `None` marks a
+    /// replayed result of a step that completed, or failed under
+    /// `allow_failure`, at `position`, `None` marks a
     /// step that must run. `last_step_ids` is left untouched, so the steps
     /// launched next still depend on the steps before the wave.
     fn replay_wave(
@@ -570,12 +571,21 @@ impl WorkflowContext {
                 continue;
             };
             check_replay_identity(step, position, name, &config.kind())?;
-            if step.status.state != StepStatus::Completed {
-                slots.push(None);
-                continue;
-            }
-
-            let mut output = StepOutput::from(step);
+            let mut output = match step.status.state {
+                StepStatus::Completed => StepOutput::from(step),
+                StepStatus::Failed if config.allow_failure() => {
+                    let Some(output) = replayed_failure_output(step) else {
+                        slots.push(None);
+                        continue;
+                    };
+                    self.has_allowed_failure = true;
+                    output
+                }
+                _ => {
+                    slots.push(None);
+                    continue;
+                }
+            };
             let step_id = step.id;
             // Cost is not added: `carry_over_run_totals` seeded
             // `total_cost_usd` from the run totals persisted before the

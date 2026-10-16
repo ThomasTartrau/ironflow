@@ -51,6 +51,13 @@ impl WorkflowContext {
         });
     }
 
+    /// Drain the registered handlers and consume the positions they took in the
+    /// first execution, when a tolerated failure is replayed.
+    pub(super) fn skip_fired_error_handlers(&mut self) {
+        let fired = take(&mut self.error_handlers);
+        self.position += u32::try_from(fired.len()).unwrap_or(u32::MAX);
+    }
+
     /// Remove all registered error handlers.
     ///
     /// # Examples

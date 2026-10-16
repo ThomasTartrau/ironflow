@@ -85,7 +85,7 @@ impl WorkflowContext {
         // Replay: if this step already completed in a prior execution of the
         // current attempt, return its cached output without calling
         // `op.execute` or creating a new step.
-        if let Some(mut output) = self.try_replay_step(position, name, &kind)? {
+        if let Some(mut output) = self.try_replay_step(position, name, &kind, false)? {
             let step_id = self.last_step_ids.last().copied();
             output.artifacts = StepArtifacts::new(name, step_id, &[]);
             return Ok(output);
