@@ -126,11 +126,12 @@ impl WorkflowHandler for WaveWorkflow {
                     false,
                 )
                 .await?;
-            let mut seen = self.seen.lock().expect("seen lock");
-            for result in results {
-                seen.push(json!({ "name": result.name, "output": result.output.output }));
+            {
+                let mut seen = self.seen.lock().expect("seen lock");
+                for result in results {
+                    seen.push(json!({ "name": result.name, "output": result.output.output }));
+                }
             }
-            drop(seen);
             wait_for_pipeline(ctx).await?;
             Ok(())
         })
@@ -170,7 +171,7 @@ async fn start_waiting(engine: &Engine, workflow: &str) -> Uuid {
 }
 
 /// Deliver the signal and wait for the resumed run to end as `Warning`.
-async fn resume_with_signal(engine: &Engine, store: &InMemoryStore, run_id: Uuid) {
+async fn resume_with_signal(engine: &Arc<Engine>, store: &InMemoryStore, run_id: Uuid) {
     let delivery = engine
         .send_signal(
             &PipelineFinished {
