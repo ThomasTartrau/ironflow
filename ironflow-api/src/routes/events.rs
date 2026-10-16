@@ -2,25 +2,32 @@
 
 use std::convert::Infallible;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Query, State};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
-use futures_util::stream::{Stream, StreamExt};
+use chrono::Utc;
+use futures_util::stream::{Stream, StreamExt, unfold};
 use serde::Deserialize;
 use serde::de::{self, Deserializer};
-use serde_json::json;
+use serde_json::{json, to_string};
+use tokio::select;
 use tokio::sync::broadcast;
+use tokio::time::{Instant, Interval, MissedTickBehavior, interval_at};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::authorization::AuthorizeExt;
 use crate::error::ApiError;
 use crate::state::AppState;
-use ironflow_auth::extractor::Authenticated;
+use ironflow_auth::extractor::{AuthMethod, Authenticated};
 use ironflow_engine::notify::Event;
 use ironflow_store::entities::ApiKeyScope;
+use ironflow_store::error::StoreError;
+use ironflow_store::store::Store;
 
 pub use ironflow_store::entities::EventKind;
 
@@ -126,6 +133,12 @@ fn visible_to_non_admin(event: &Event) -> bool {
 /// `data: {"missed": n}`: the number of events it missed. Its view is stale
 /// and it should reload its state.
 ///
+/// The principal is revalidated every 30 seconds. The stream is closed when
+/// the API key is revoked, disabled, expired or lacks `runs_read`, or when
+/// the user or the key owner is deleted, and it falls back to the non-admin
+/// event filter when the user is demoted or the key loses its `admin` scope.
+/// Within the interval, a revocation still lets events through.
+///
 /// # Errors
 ///
 /// - 401 if the request is not authenticated
@@ -143,65 +156,221 @@ pub async fn events(
     let receiver = state.event_sender.subscribe();
     // Account and user events describe admin-only resources: only an admin
     // session, or an `admin`-scope key owned by an admin, sees them.
-    let sees_every_event = auth.require(ApiKeyScope::Admin, true).is_ok();
-    let stream = event_stream(receiver, query.run_id, query.types, sees_every_event);
-    // The stream owns the slot: axum drops it when the client disconnects.
+    let access = if auth.require(ApiKeyScope::Admin, true).is_ok() {
+        Access::Admin
+    } else {
+        Access::Member
+    };
+    let revalidation = Revalidation {
+        store: state.store.clone(),
+        principal: Principal::of(&auth),
+        every: REVALIDATE_INTERVAL,
+    };
+    let stream = event_stream(receiver, query.run_id, query.types, access, revalidation);
+    // The stream owns the slot: axum drops it when the client disconnects,
+    // or when the stream ends because its principal lost access.
     let stream = stream.map(move |item| {
         let _held = &connection;
         item
     });
 
-    let sse = Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)));
+    let sse = Sse::new(stream).keep_alive(KeepAlive::new().interval(REVALIDATE_INTERVAL));
     Ok(sse)
 }
 
+/// How often an open stream sends a keep-alive and re-reads its principal's rights.
+const REVALIDATE_INTERVAL: Duration = Duration::from_secs(30);
+
 /// SSE event name sent to a client that fell behind and missed events.
 const LAGGED_EVENT: &str = "lagged";
+
+/// What an open stream's principal may still see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Access {
+    /// The principal lost access: the stream ends.
+    Closed,
+    /// Only the events [`visible_to_non_admin`] lets through.
+    Member,
+    /// Every event.
+    Admin,
+}
+
+/// Who owns an open stream, enough to re-read their rights from the store.
+#[derive(Debug, Clone)]
+enum Principal {
+    /// A JWT session of `user_id`.
+    Session { user_id: Uuid },
+    /// The API key `key_id`, whose owner is read from the key itself.
+    ApiKey { key_id: Uuid },
+}
+
+impl Principal {
+    /// The principal behind `auth`.
+    fn of(auth: &Authenticated) -> Self {
+        match &auth.method {
+            AuthMethod::Jwt { .. } => Principal::Session {
+                user_id: auth.user_id,
+            },
+            AuthMethod::ApiKey { key_id, .. } => Principal::ApiKey { key_id: *key_id },
+        }
+    }
+
+    /// What the principal may see now, read from `store`.
+    ///
+    /// Mirrors the connect-time checks: a key that was deleted, disabled,
+    /// has expired or no longer holds `runs_read`, or whose owner (or the
+    /// session's user) was deleted, closes the stream. Admin events need an
+    /// admin user, and for a key the `admin` scope as well.
+    async fn access(&self, store: &dyn Store) -> Result<Access, StoreError> {
+        match self {
+            Principal::Session { user_id } => {
+                let access = match store.find_user_by_id(*user_id).await? {
+                    None => Access::Closed,
+                    Some(user) if user.is_admin => Access::Admin,
+                    Some(_) => Access::Member,
+                };
+                Ok(access)
+            }
+            Principal::ApiKey { key_id } => {
+                let Some(key) = store.find_api_key_by_id(*key_id).await? else {
+                    return Ok(Access::Closed);
+                };
+                let expired = key.expires_at.is_some_and(|at| at < Utc::now());
+                if !key.is_active
+                    || expired
+                    || !ApiKeyScope::has_permission(&key.scopes, &ApiKeyScope::RunsRead)
+                {
+                    return Ok(Access::Closed);
+                }
+                let Some(owner) = store.find_user_by_id(key.user_id).await? else {
+                    return Ok(Access::Closed);
+                };
+                let admin_scope = ApiKeyScope::has_permission(&key.scopes, &ApiKeyScope::Admin);
+                if owner.is_admin && admin_scope {
+                    Ok(Access::Admin)
+                } else {
+                    Ok(Access::Member)
+                }
+            }
+        }
+    }
+}
+
+/// How an open stream re-reads its principal's rights.
+struct Revalidation {
+    /// Where the principal's rights are read from.
+    store: Arc<dyn Store>,
+    /// Whose rights are read.
+    principal: Principal,
+    /// Time between two reads. The first one happens one interval after connect.
+    every: Duration,
+}
+
+/// The state [`event_stream`] carries from one item to the next.
+struct StreamState {
+    receiver: BroadcastStream<Event>,
+    run_id_filter: Option<Uuid>,
+    type_filter: Option<Vec<EventKind>>,
+    access: Access,
+    revalidation: Revalidation,
+    ticker: Interval,
+}
+
+impl StreamState {
+    /// Re-read the principal's rights. Returns `false` when the stream must end.
+    ///
+    /// A store error closes the stream too: the client's `EventSource`
+    /// reconnects and is authenticated again.
+    async fn revalidate(&mut self) -> bool {
+        let store = self.revalidation.store.as_ref();
+        match self.revalidation.principal.access(store).await {
+            Ok(Access::Closed) => false,
+            Ok(access) => {
+                self.access = access;
+                true
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to revalidate SSE principal, closing the stream");
+                false
+            }
+        }
+    }
+
+    /// The SSE message for `result`, or `None` when the filters drop it.
+    fn render(&self, result: Result<Event, BroadcastStreamRecvError>) -> Option<SseEvent> {
+        let event = match result {
+            Ok(event) => event,
+            Err(BroadcastStreamRecvError::Lagged(missed)) => {
+                let data = json!({ "missed": missed }).to_string();
+                return Some(SseEvent::default().event(LAGGED_EVENT).data(data));
+            }
+        };
+
+        if self.access != Access::Admin && !visible_to_non_admin(&event) {
+            return None;
+        }
+
+        if let Some(ref rid) = self.run_id_filter
+            && event.run_id() != Some(*rid)
+        {
+            return None;
+        }
+
+        if let Some(ref kinds) = self.type_filter {
+            let event_type = event.event_type();
+            if !kinds.iter().any(|k| k.as_str() == event_type) {
+                return None;
+            }
+        }
+
+        let data = to_string(&event).ok()?;
+        Some(SseEvent::default().event(event.event_type()).data(data))
+    }
+}
 
 /// Turn the broadcast `receiver` into the SSE stream a client asked for.
 ///
 /// A receiver that falls behind the channel capacity loses the oldest
 /// events: the client gets a [`LAGGED_EVENT`] carrying how many it missed.
 /// That event bypasses the filters, since which events were lost is unknown.
+///
+/// The principal's rights are re-read every `revalidation.every`: the stream
+/// ends when they are gone, and `access` follows a demotion or a promotion.
 fn event_stream(
     receiver: broadcast::Receiver<Event>,
     run_id_filter: Option<Uuid>,
     type_filter: Option<Vec<EventKind>>,
-    sees_every_event: bool,
+    access: Access,
+    revalidation: Revalidation,
 ) -> impl Stream<Item = Result<SseEvent, Infallible>> {
-    BroadcastStream::new(receiver).filter_map(move |result: Result<Event, _>| {
-        let type_filter = type_filter.clone();
-        async move {
-            let event = match result {
-                Ok(event) => event,
-                Err(BroadcastStreamRecvError::Lagged(missed)) => {
-                    let data = json!({ "missed": missed }).to_string();
-                    let sse_event = SseEvent::default().event(LAGGED_EVENT).data(data);
-                    return Some(Ok(sse_event));
+    let mut ticker = interval_at(Instant::now() + revalidation.every, revalidation.every);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let state = StreamState {
+        receiver: BroadcastStream::new(receiver),
+        run_id_filter,
+        type_filter,
+        access,
+        revalidation,
+        ticker,
+    };
+
+    unfold(state, |mut state| async move {
+        loop {
+            // Biased so a due revalidation runs before the next event is
+            // delivered; the ticker fires once per interval, so events never starve.
+            select! {
+                biased;
+                _ = state.ticker.tick() => {
+                    if !state.revalidate().await {
+                        return None;
+                    }
                 }
-            };
-
-            if !sees_every_event && !visible_to_non_admin(&event) {
-                return None;
-            }
-
-            if let Some(ref rid) = run_id_filter
-                && event.run_id() != Some(*rid)
-            {
-                return None;
-            }
-
-            if let Some(ref kinds) = type_filter {
-                let event_type = event.event_type();
-                if !kinds.iter().any(|k| k.as_str() == event_type) {
-                    return None;
+                result = state.receiver.next() => {
+                    if let Some(sse_event) = state.render(result?) {
+                        return Some((Ok::<_, Infallible>(sse_event), state));
+                    }
                 }
             }
-
-            let data = serde_json::to_string(&event).ok()?;
-            let sse_event = SseEvent::default().event(event.event_type()).data(data);
-
-            Some(Ok::<_, Infallible>(sse_event))
         }
     })
 }
@@ -227,7 +396,7 @@ mod tests {
         Event, ProviderAccountChange, ProviderAccountUpdatedEvent, RunStatusChangedEvent,
         UserSignedInEvent, UserSignedOutEvent, UserSignedUpEvent,
     };
-    use ironflow_store::entities::{ApiKeyScope, NewApiKey, NewUser};
+    use ironflow_store::entities::{ApiKeyScope, ApiKeyUpdate, NewApiKey, NewUser, User};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::RunStatus;
     use rust_decimal::Decimal;
@@ -237,7 +406,10 @@ mod tests {
     use tokio::time::{sleep, timeout};
     use uuid::Uuid;
 
-    use super::{EventKind, event_stream, events, visible_to_non_admin};
+    use super::{
+        Access, EventKind, Principal, REVALIDATE_INTERVAL, Revalidation, event_stream, events,
+        visible_to_non_admin,
+    };
     use crate::routes::test_helpers::create_user_auth_header;
     use crate::sse_limiter::SseLimits;
     use crate::state::AppState;
@@ -319,33 +491,9 @@ mod tests {
         owner_is_admin: bool,
         scopes: Vec<ApiKeyScope>,
     ) -> String {
-        let suffix = Uuid::now_v7().simple().to_string();
-        let owner = state
-            .store
-            .create_user(NewUser {
-                email: format!("owner-{suffix}@example.com"),
-                username: format!("owner-{suffix}"),
-                password_hash: "argon2hash".to_string(),
-                is_admin: Some(owner_is_admin),
-            })
-            .await
-            .unwrap();
-        let raw_key = format!("irfl_{}rest-of-secret-key", &suffix[24..]);
-        let prefix = &raw_key[..API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN];
-        state
-            .store
-            .create_api_key(NewApiKey {
-                user_id: owner.id,
-                name: format!("key-{suffix}"),
-                key_hash: password::hash(&raw_key).unwrap(),
-                key_prefix: prefix.to_string(),
-                scopes,
-                expires_at: None,
-                rate_limit_override: None,
-            })
-            .await
-            .unwrap();
-        format!("Bearer {raw_key}")
+        let owner = stored_user(state, owner_is_admin).await;
+        let (_, header) = stored_key(state, &owner, scopes).await;
+        header
     }
 
     /// Start a real TCP server and return (address, sender, auth header).
@@ -673,10 +821,23 @@ mod tests {
         accumulated
     }
 
+    /// A revalidation of a principal no store knows, every
+    /// [`REVALIDATE_INTERVAL`]: it never fires within a test.
+    fn idle_revalidation() -> Revalidation {
+        Revalidation {
+            store: test_state().store,
+            principal: Principal::Session {
+                user_id: Uuid::now_v7(),
+            },
+            every: REVALIDATE_INTERVAL,
+        }
+    }
+
     #[tokio::test]
     async fn lagged_event_is_sent_when_the_subscriber_falls_behind() {
         let (sender, receiver) = lagging_receiver();
-        let response = Sse::new(event_stream(receiver, None, None, false)).into_response();
+        let stream = event_stream(receiver, None, None, Access::Member, idle_revalidation());
+        let response = Sse::new(stream).into_response();
         let mut body = response.into_body();
 
         let text = read_body_until(&mut body, "\"missed\"").await;
@@ -697,13 +858,283 @@ mod tests {
             receiver,
             Some(Uuid::now_v7()),
             Some(vec![EventKind::UserSignedIn]),
-            false,
+            Access::Member,
+            idle_revalidation(),
         );
         let mut body = Sse::new(stream).into_response().into_body();
 
         let text = read_body_until(&mut body, "\"missed\"").await;
         assert!(text.contains("lagged"), "got {text}");
         assert!(!text.contains("run_status_changed"), "got {text}");
+    }
+
+    /// Revalidation period of the stream tests: short, so no test waits 30 s.
+    const FAST_REVALIDATION: Duration = Duration::from_millis(50);
+
+    /// Store a user, admin when `is_admin` is set.
+    async fn stored_user(state: &AppState, is_admin: bool) -> User {
+        let suffix = Uuid::now_v7().simple().to_string();
+        state
+            .store
+            .create_user(NewUser {
+                email: format!("user-{suffix}@example.com"),
+                username: format!("user-{suffix}"),
+                password_hash: "argon2hash".to_string(),
+                is_admin: Some(is_admin),
+            })
+            .await
+            .unwrap()
+    }
+
+    /// Store an API key of `owner` holding `scopes`, returning its ID and a
+    /// `Bearer` header for it.
+    async fn stored_key(
+        state: &AppState,
+        owner: &User,
+        scopes: Vec<ApiKeyScope>,
+    ) -> (Uuid, String) {
+        let suffix = Uuid::now_v7().simple().to_string();
+        let raw_key = format!("irfl_{}rest-of-secret-key", &suffix[24..]);
+        let prefix = &raw_key[..API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN];
+        let key = state
+            .store
+            .create_api_key(NewApiKey {
+                user_id: owner.id,
+                name: format!("key-{suffix}"),
+                key_hash: password::hash(&raw_key).unwrap(),
+                key_prefix: prefix.to_string(),
+                scopes,
+                expires_at: None,
+                rate_limit_override: None,
+            })
+            .await
+            .unwrap();
+        (key.id, format!("Bearer {raw_key}"))
+    }
+
+    /// The SSE body of a stream opened by `principal` with `access`,
+    /// revalidated every [`FAST_REVALIDATION`].
+    fn revalidated_body(state: &AppState, access: Access, principal: Principal) -> Body {
+        let revalidation = Revalidation {
+            store: state.store.clone(),
+            principal,
+            every: FAST_REVALIDATION,
+        };
+        let receiver = state.event_sender.subscribe();
+        let stream = event_stream(receiver, None, None, access, revalidation);
+        Sse::new(stream).into_response().into_body()
+    }
+
+    /// Send a run event and read it back, proving the stream is open.
+    async fn assert_stream_open(state: &AppState, body: &mut Body) {
+        let run_id = Uuid::now_v7();
+        state.event_sender.send(sample_run_event(run_id)).unwrap();
+        read_body_until(body, &run_id.to_string()).await;
+    }
+
+    /// Wait until the stream ends, or fail after 5 seconds.
+    async fn assert_stream_ends(body: &mut Body) {
+        let ended = timeout(Duration::from_secs(5), async {
+            while let Some(frame) = body.frame().await {
+                frame.unwrap();
+            }
+        })
+        .await;
+        assert!(ended.is_ok(), "the stream is still open");
+    }
+
+    /// Send a user event then a run event, and return what the stream
+    /// delivers up to the run event.
+    async fn user_then_run_event(state: &AppState, body: &mut Body) -> String {
+        let run_id = Uuid::now_v7();
+        state.event_sender.send(sample_user_event()).unwrap();
+        state.event_sender.send(sample_run_event(run_id)).unwrap();
+        read_body_until(body, &run_id.to_string()).await
+    }
+
+    #[tokio::test]
+    async fn sse_stream_closes_when_the_api_key_is_revoked() {
+        let state = test_state();
+        let owner = stored_user(&state, true).await;
+        let (key_id, _) = stored_key(&state, &owner, vec![ApiKeyScope::RunsRead]).await;
+        let mut body = revalidated_body(&state, Access::Member, Principal::ApiKey { key_id });
+        assert_stream_open(&state, &mut body).await;
+
+        state.store.delete_api_key(key_id).await.unwrap();
+
+        assert_stream_ends(&mut body).await;
+    }
+
+    #[tokio::test]
+    async fn sse_stream_closes_when_the_api_key_is_disabled() {
+        let state = test_state();
+        let owner = stored_user(&state, true).await;
+        let (key_id, _) = stored_key(&state, &owner, vec![ApiKeyScope::RunsRead]).await;
+        let mut body = revalidated_body(&state, Access::Member, Principal::ApiKey { key_id });
+        assert_stream_open(&state, &mut body).await;
+
+        state
+            .store
+            .update_api_key(
+                key_id,
+                ApiKeyUpdate {
+                    is_active: Some(false),
+                    ..ApiKeyUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_stream_ends(&mut body).await;
+    }
+
+    #[tokio::test]
+    async fn sse_stream_closes_when_the_api_key_expires() {
+        let state = test_state();
+        let owner = stored_user(&state, true).await;
+        let (key_id, _) = stored_key(&state, &owner, vec![ApiKeyScope::RunsRead]).await;
+        let mut body = revalidated_body(&state, Access::Member, Principal::ApiKey { key_id });
+        assert_stream_open(&state, &mut body).await;
+
+        state
+            .store
+            .update_api_key(
+                key_id,
+                ApiKeyUpdate {
+                    expires_at: Some(Some(Utc::now())),
+                    ..ApiKeyUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_stream_ends(&mut body).await;
+    }
+
+    #[tokio::test]
+    async fn sse_stream_closes_when_the_api_key_loses_runs_read() {
+        let state = test_state();
+        let owner = stored_user(&state, true).await;
+        let (key_id, _) = stored_key(&state, &owner, vec![ApiKeyScope::RunsRead]).await;
+        let mut body = revalidated_body(&state, Access::Member, Principal::ApiKey { key_id });
+        assert_stream_open(&state, &mut body).await;
+
+        state
+            .store
+            .update_api_key(
+                key_id,
+                ApiKeyUpdate {
+                    scopes: Some(vec![ApiKeyScope::StatsRead]),
+                    ..ApiKeyUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_stream_ends(&mut body).await;
+    }
+
+    #[tokio::test]
+    async fn sse_stream_closes_when_the_owner_is_deleted() {
+        let state = test_state();
+        let owner = stored_user(&state, true).await;
+        let (key_id, _) = stored_key(&state, &owner, vec![ApiKeyScope::RunsRead]).await;
+        let mut body = revalidated_body(&state, Access::Member, Principal::ApiKey { key_id });
+        assert_stream_open(&state, &mut body).await;
+
+        state.store.delete_user(owner.id).await.unwrap();
+
+        assert_stream_ends(&mut body).await;
+    }
+
+    #[tokio::test]
+    async fn sse_stream_closes_when_the_session_user_is_deleted() {
+        let state = test_state();
+        let user = stored_user(&state, false).await;
+        let mut body = revalidated_body(
+            &state,
+            Access::Member,
+            Principal::Session { user_id: user.id },
+        );
+        assert_stream_open(&state, &mut body).await;
+
+        state.store.delete_user(user.id).await.unwrap();
+
+        assert_stream_ends(&mut body).await;
+    }
+
+    #[tokio::test]
+    async fn sse_stream_of_a_demoted_admin_falls_back_to_member_filtering() {
+        let state = test_state();
+        let admin = stored_user(&state, true).await;
+        let mut body = revalidated_body(
+            &state,
+            Access::Admin,
+            Principal::Session { user_id: admin.id },
+        );
+        let text = user_then_run_event(&state, &mut body).await;
+        assert!(text.contains("user_signed_in"), "stream: {text}");
+
+        state.store.update_user_role(admin.id, false).await.unwrap();
+        sleep(FAST_REVALIDATION * 3).await;
+
+        let text = user_then_run_event(&state, &mut body).await;
+        assert!(!text.contains("user_signed_in"), "stream: {text}");
+        assert!(text.contains("run_status_changed"), "stream: {text}");
+    }
+
+    #[tokio::test]
+    async fn sse_stream_of_a_demoted_admin_key_falls_back_to_member_filtering() {
+        let state = test_state();
+        let admin = stored_user(&state, true).await;
+        let (key_id, _) = stored_key(
+            &state,
+            &admin,
+            vec![ApiKeyScope::RunsRead, ApiKeyScope::Admin],
+        )
+        .await;
+        let mut body = revalidated_body(&state, Access::Admin, Principal::ApiKey { key_id });
+        let text = user_then_run_event(&state, &mut body).await;
+        assert!(text.contains("user_signed_in"), "stream: {text}");
+
+        // The demotion strips the `admin` scope and keeps `runs_read`.
+        state.store.update_user_role(admin.id, false).await.unwrap();
+        sleep(FAST_REVALIDATION * 3).await;
+
+        let text = user_then_run_event(&state, &mut body).await;
+        assert!(!text.contains("user_signed_in"), "stream: {text}");
+        assert!(text.contains("run_status_changed"), "stream: {text}");
+    }
+
+    #[tokio::test]
+    async fn sse_stream_of_a_demoted_admin_with_an_admin_only_key_is_closed() {
+        let state = test_state();
+        let admin = stored_user(&state, true).await;
+        let (key_id, _) = stored_key(&state, &admin, vec![ApiKeyScope::Admin]).await;
+        let mut body = revalidated_body(&state, Access::Admin, Principal::ApiKey { key_id });
+        assert_stream_open(&state, &mut body).await;
+
+        // Left without any scope, the key is disabled.
+        state.store.update_user_role(admin.id, false).await.unwrap();
+
+        assert_stream_ends(&mut body).await;
+    }
+
+    #[tokio::test]
+    async fn sse_stream_keeps_flowing_while_the_principal_is_unchanged() {
+        let state = test_state();
+        let admin = stored_user(&state, true).await;
+        let mut body = revalidated_body(
+            &state,
+            Access::Admin,
+            Principal::Session { user_id: admin.id },
+        );
+
+        for _ in 0..3 {
+            sleep(FAST_REVALIDATION * 2).await;
+            let text = user_then_run_event(&state, &mut body).await;
+            assert!(text.contains("user_signed_in"), "stream: {text}");
+        }
     }
 
     /// Read the HTTP status line of a response.

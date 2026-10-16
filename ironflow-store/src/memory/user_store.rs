@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::entities::{NewRefreshToken, NewUser, Page, User};
+use crate::entities::{ApiKeyScope, NewRefreshToken, NewUser, Page, User};
 use crate::error::StoreError;
 use crate::store::StoreFuture;
 use crate::user_store::UserStore;
@@ -114,6 +114,8 @@ impl UserStore for InMemoryStore {
                 .ok_or(StoreError::UserNotFound(id))?;
             state.user_groups.remove(&id);
             state.refresh_tokens.retain(|_, t| t.user_id != id);
+            // Mirrors the `ON DELETE CASCADE` of `iam.api_keys.user_id` in Postgres.
+            state.api_keys.retain(|_, k| k.user_id != id);
             Ok(())
         })
     }
@@ -130,6 +132,20 @@ impl UserStore for InMemoryStore {
             user.updated_at = Utc::now();
             let user = user.clone();
             state.refresh_tokens.retain(|_, t| t.user_id != id);
+            if !is_admin {
+                let now = Utc::now();
+                let allowed = ApiKeyScope::member_allowed();
+                for key in state.api_keys.values_mut().filter(|k| k.user_id == id) {
+                    let before = key.scopes.len();
+                    key.scopes.retain(|s| allowed.contains(s));
+                    if key.scopes.len() != before {
+                        if key.scopes.is_empty() {
+                            key.is_active = false;
+                        }
+                        key.updated_at = now;
+                    }
+                }
+            }
             Ok(user)
         })
     }
@@ -229,6 +245,9 @@ impl UserStore for InMemoryStore {
 #[cfg(test)]
 mod tests {
     use chrono::Duration;
+
+    use crate::api_key_store::ApiKeyStore;
+    use crate::entities::NewApiKey;
 
     use super::*;
 
@@ -783,5 +802,150 @@ mod tests {
         store.delete_user(user.id).await.unwrap();
 
         assert!(store.list_user_groups(user.id).await.unwrap().is_empty());
+    }
+
+    fn new_key(user_id: Uuid, prefix: &str, scopes: Vec<ApiKeyScope>) -> NewApiKey {
+        NewApiKey {
+            user_id,
+            name: format!("key-{prefix}"),
+            key_hash: "argon2hash".to_string(),
+            key_prefix: prefix.to_string(),
+            scopes,
+            expires_at: None,
+            rate_limit_override: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn update_user_role_demote_strips_non_member_scopes_from_api_keys() {
+        let store = InMemoryStore::new();
+        let admin = store
+            .create_user(new_user("admin@example.com", "admin"))
+            .await
+            .unwrap();
+        let key = store
+            .create_api_key(new_key(
+                admin.id,
+                "irfl_aaaa",
+                vec![
+                    ApiKeyScope::RunsRead,
+                    ApiKeyScope::SignalsSend,
+                    ApiKeyScope::Admin,
+                ],
+            ))
+            .await
+            .unwrap();
+
+        store.update_user_role(admin.id, false).await.unwrap();
+
+        let found = store.find_api_key_by_id(key.id).await.unwrap().unwrap();
+        assert_eq!(found.scopes, vec![ApiKeyScope::RunsRead]);
+        assert!(found.is_active);
+        assert!(ApiKeyScope::all_allowed_for_member(&found.scopes));
+    }
+
+    #[tokio::test]
+    async fn update_user_role_demote_deactivates_api_keys_left_without_scope() {
+        let store = InMemoryStore::new();
+        let admin = store
+            .create_user(new_user("admin@example.com", "admin"))
+            .await
+            .unwrap();
+        let key = store
+            .create_api_key(new_key(admin.id, "irfl_bbbb", vec![ApiKeyScope::Admin]))
+            .await
+            .unwrap();
+
+        store.update_user_role(admin.id, false).await.unwrap();
+
+        let found = store.find_api_key_by_id(key.id).await.unwrap().unwrap();
+        assert!(found.scopes.is_empty());
+        assert!(!found.is_active);
+        assert!(
+            store
+                .find_api_key_by_prefix("irfl_bbbb")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn update_user_role_demote_leaves_other_users_keys_untouched() {
+        let store = InMemoryStore::new();
+        let admin = store
+            .create_user(new_user("admin@example.com", "admin"))
+            .await
+            .unwrap();
+        let other = store
+            .create_user(NewUser {
+                is_admin: Some(true),
+                ..new_user("other@example.com", "other")
+            })
+            .await
+            .unwrap();
+        let other_key = store
+            .create_api_key(new_key(other.id, "irfl_cccc", vec![ApiKeyScope::Admin]))
+            .await
+            .unwrap();
+
+        store.update_user_role(admin.id, false).await.unwrap();
+
+        let found = store
+            .find_api_key_by_id(other_key.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.scopes, vec![ApiKeyScope::Admin]);
+        assert!(found.is_active);
+        assert_eq!(found.updated_at, other_key.updated_at);
+    }
+
+    #[tokio::test]
+    async fn update_user_role_promote_keeps_api_keys_unchanged() {
+        let store = InMemoryStore::new();
+        let _admin = store
+            .create_user(new_user("admin@example.com", "admin"))
+            .await
+            .unwrap();
+        let member = store
+            .create_user(new_user("member@example.com", "member"))
+            .await
+            .unwrap();
+        let key = store
+            .create_api_key(new_key(member.id, "irfl_dddd", vec![ApiKeyScope::RunsRead]))
+            .await
+            .unwrap();
+
+        store.update_user_role(member.id, true).await.unwrap();
+
+        let found = store.find_api_key_by_id(key.id).await.unwrap().unwrap();
+        assert_eq!(found.scopes, vec![ApiKeyScope::RunsRead]);
+        assert!(found.is_active);
+        assert_eq!(found.updated_at, key.updated_at);
+    }
+
+    #[tokio::test]
+    async fn delete_user_drops_api_keys() {
+        let store = InMemoryStore::new();
+        let user = store
+            .create_user(new_user("alice@example.com", "alice"))
+            .await
+            .unwrap();
+        let key = store
+            .create_api_key(new_key(user.id, "irfl_eeee", vec![ApiKeyScope::RunsRead]))
+            .await
+            .unwrap();
+
+        store.delete_user(user.id).await.unwrap();
+
+        assert!(store.find_api_key_by_id(key.id).await.unwrap().is_none());
+        assert!(
+            store
+                .list_api_keys_by_user(user.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

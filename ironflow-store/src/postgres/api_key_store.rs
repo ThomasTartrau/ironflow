@@ -17,7 +17,7 @@ fn parse_scopes(raw: Vec<String>) -> Result<Vec<ApiKeyScope>, StoreError> {
         .collect()
 }
 
-fn scopes_to_strings(scopes: &[ApiKeyScope]) -> Vec<String> {
+pub(super) fn scopes_to_strings(scopes: &[ApiKeyScope]) -> Vec<String> {
     scopes.iter().map(|s| s.to_string()).collect()
 }
 

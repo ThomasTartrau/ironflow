@@ -188,7 +188,8 @@ pub struct ApiKeyAuth {
     pub key_name: String,
     /// Scopes granted to this key.
     pub scopes: Vec<ApiKeyScope>,
-    /// Whether the key owner is an admin (checked at request time).
+    /// Whether the key owner is an admin (checked at request time). A key
+    /// whose owner no longer exists is rejected before this is built.
     pub owner_is_admin: bool,
 }
 
@@ -296,8 +297,8 @@ where
             });
         }
 
-        let _ = store.touch_api_key(api_key.id).await;
-
+        // A key never outlives its owner: a missing owner is a revoked key,
+        // not a non-admin one.
         let owner = store
             .find_user_by_id(api_key.user_id)
             .await
@@ -305,15 +306,21 @@ where
                 status: StatusCode::INTERNAL_SERVER_ERROR,
                 code: "INTERNAL_ERROR",
                 message: "Failed to look up API key owner",
+            })?
+            .ok_or(ApiKeyRejection {
+                status: StatusCode::UNAUTHORIZED,
+                code: "TOKEN_REVOKED",
+                message: "API key owner no longer exists",
             })?;
-        let owner_is_admin = owner.map(|u| u.is_admin).unwrap_or(false);
+
+        let _ = store.touch_api_key(api_key.id).await;
 
         Ok(ApiKeyAuth {
             key_id: api_key.id,
             user_id: api_key.user_id,
             key_name: api_key.name,
             scopes: api_key.scopes,
-            owner_is_admin,
+            owner_is_admin: owner.is_admin,
         })
     }
 }
@@ -677,6 +684,80 @@ mod tests {
         assert_eq!(json["user_id"], user_id.to_string());
         assert_eq!(json["key_name"], "test-key");
         assert_eq!(json["owner_is_admin"], true);
+    }
+
+    /// An API key whose `user_id` points to no stored user.
+    async fn setup_orphan_api_key(store: &Arc<dyn Store>) -> String {
+        let raw_key = "irfl_orphan12rest-of-secret-key";
+        let key_hash = password::hash(raw_key).unwrap();
+        let prefix = &raw_key[..API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN];
+
+        store
+            .create_api_key(NewApiKey {
+                user_id: Uuid::now_v7(),
+                name: "orphan-key".to_string(),
+                key_hash,
+                key_prefix: prefix.to_string(),
+                scopes: vec![ApiKeyScope::Admin],
+                expires_at: None,
+                rate_limit_override: None,
+            })
+            .await
+            .unwrap();
+
+        raw_key.to_string()
+    }
+
+    #[tokio::test]
+    async fn api_key_extractor_rejects_key_of_deleted_owner() {
+        let state = test_state();
+        let (user_id, raw_key) = setup_api_key(&state.store).await;
+        state.store.delete_user(user_id).await.unwrap();
+
+        let app = Router::new()
+            .route("/check", get(|_key: ApiKeyAuth| async { "ok" }))
+            .with_state(state);
+
+        let resp = app.oneshot(bearer("/check", &raw_key)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_key_extractor_rejects_key_whose_owner_is_missing() {
+        let state = test_state();
+        let raw_key = setup_orphan_api_key(&state.store).await;
+
+        let app = Router::new()
+            .route("/check", get(|_key: ApiKeyAuth| async { "ok" }))
+            .with_state(state.clone());
+
+        let resp = app.oneshot(bearer("/check", &raw_key)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "TOKEN_REVOKED");
+
+        // A rejected key is not recorded as used.
+        let key = state
+            .store
+            .find_api_key_by_prefix("irfl_orphan12")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(key.last_used_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn api_key_dual_auth_rejects_key_whose_owner_is_missing() {
+        let state = test_state();
+        let raw_key = setup_orphan_api_key(&state.store).await;
+
+        let app = Router::new()
+            .route("/check", get(|_auth: Authenticated| async { "ok" }))
+            .with_state(state);
+
+        let resp = app.oneshot(bearer("/check", &raw_key)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

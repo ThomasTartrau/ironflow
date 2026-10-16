@@ -4,10 +4,11 @@ use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
 
-use ironflow_auth::extractor::{AuthMethod, Authenticated};
+use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::error::EngineError;
 use ironflow_store::entities::{ApiKeyScope, NewSignal};
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{SendSignalRequest, SignalDeliveryResponse};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -19,21 +20,10 @@ const MAX_SIGNAL_FIELD_LEN: usize = 255;
 /// Check that the caller may send signals.
 ///
 /// A JWT session must belong to an admin. An API key must carry the
-/// `signals_send` (or `admin`) scope.
+/// `signals_send` (or `admin`) scope and be owned by an admin, read at request
+/// time so a demotion takes effect immediately.
 fn authorize(auth: &Authenticated) -> Result<(), ApiError> {
-    match &auth.method {
-        AuthMethod::Jwt { is_admin, .. } => {
-            if !is_admin {
-                return Err(ApiError::Forbidden);
-            }
-        }
-        AuthMethod::ApiKey { scopes, .. } => {
-            if !ApiKeyScope::has_permission(scopes, &ApiKeyScope::SignalsSend) {
-                return Err(ApiError::InsufficientScope);
-            }
-        }
-    }
-    Ok(())
+    auth.require(ApiKeyScope::SignalsSend, true)
 }
 
 /// Reject an empty or oversized signal field.
@@ -65,7 +55,8 @@ fn validate_field(field: &str, value: &str) -> Result<(), ApiError> {
 /// - 400 if `name` or `key` is empty or longer than 255 characters, or if
 ///   `idempotency_id` is empty or longer than 255 characters
 /// - 401 if not authenticated
-/// - 403 if the caller is not an admin, or the API key lacks `signals_send`
+/// - 403 if the caller is not an admin, the API key lacks `signals_send`, or
+///   its owner is not an admin
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -237,5 +228,82 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(second["data"]["duplicate"], true);
         assert_eq!(second["data"]["signal_id"], first["data"]["signal_id"]);
+    }
+
+    /// Number of signals stored so far.
+    async fn stored_signals(state: &AppState) -> u64 {
+        state
+            .store
+            .list_signals(SignalFilter::default(), 1, 20)
+            .await
+            .expect("list")
+            .total
+    }
+
+    #[tokio::test]
+    async fn send_signal_api_key_of_member_with_signals_send_returns_403() {
+        let (state, _admin, member) = test_state().await;
+        let auth = api_key_header(&member, vec![ApiKeyScope::SignalsSend], &state).await;
+
+        let (status, _) = post_signal(&state, Some(&auth), demo_signal()).await;
+
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(stored_signals(&state).await, 0);
+    }
+
+    #[tokio::test]
+    async fn send_signal_api_key_of_demoted_admin_returns_403() {
+        let (state, admin, _member) = test_state().await;
+        let auth = api_key_header(
+            &admin,
+            vec![ApiKeyScope::RunsRead, ApiKeyScope::SignalsSend],
+            &state,
+        )
+        .await;
+        state
+            .store
+            .update_user_role(admin.id, false)
+            .await
+            .expect("demote");
+
+        let (status, body) = post_signal(&state, Some(&auth), demo_signal()).await;
+
+        // The demotion stripped `signals_send` from the key.
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"]["code"], "INSUFFICIENT_SCOPE");
+        assert_eq!(stored_signals(&state).await, 0);
+    }
+
+    #[tokio::test]
+    async fn send_signal_api_key_with_only_signals_send_of_demoted_admin_is_refused() {
+        let (state, admin, _member) = test_state().await;
+        let auth = api_key_header(&admin, vec![ApiKeyScope::SignalsSend], &state).await;
+        state
+            .store
+            .update_user_role(admin.id, false)
+            .await
+            .expect("demote");
+
+        let (status, _) = post_signal(&state, Some(&auth), demo_signal()).await;
+
+        // Left without any scope, the key is disabled.
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(stored_signals(&state).await, 0);
+    }
+
+    #[tokio::test]
+    async fn send_signal_api_key_with_admin_scope_of_demoted_admin_is_refused() {
+        let (state, admin, _member) = test_state().await;
+        let auth = api_key_header(&admin, vec![ApiKeyScope::Admin], &state).await;
+        state
+            .store
+            .update_user_role(admin.id, false)
+            .await
+            .expect("demote");
+
+        let (status, _) = post_signal(&state, Some(&auth), demo_signal()).await;
+
+        assert_ne!(status, StatusCode::OK);
+        assert_eq!(stored_signals(&state).await, 0);
     }
 }

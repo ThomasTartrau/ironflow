@@ -192,8 +192,12 @@ implies every other scope. Paths below are relative to `/api/v1`.
 | `admin` | `/secrets/*`, `/users/*`, `GET /audit-logs`, `POST /workflows/{name}/pause`, `POST /workflows/{name}/resume` |
 
 Routes that were admin-only stay so: `POST /runs`, cancel, retry, replay, pause and resume
-of a run, `GET /metrics`, and every `admin` route also need the key's owner to be an admin,
-checked at request time, so demoting the owner takes effect at once (`403 FORBIDDEN`).
+of a run, `POST /signals`, `GET /metrics`, and every `admin` route also need the key's owner
+to be an admin, checked at request time, so demoting the owner takes effect at once
+(`403 FORBIDDEN`). Demoting a user also removes from each of their keys every scope a member
+may not hold (only `workflows_read`, `runs_read` and `stats_read` remain) and disables the
+keys left with no scope; promoting them again does not restore those scopes. Deleting a
+user deletes their keys, and a key whose owner no longer exists answers `401 TOKEN_REVOKED`.
 Approving, rejecting and answering a gate keep their assignee and delegation rules on top
 of the scope.
 
@@ -201,7 +205,10 @@ On `GET /events`, a member session, or a key without the `admin` scope or owned 
 member, only receives run events (`run_*`, `step_*`, `approval_*`, `log_line`,
 `retry_forced`, `signal_*`). User sign-in, sign-up and sign-out, Provider Account,
 schedule and workflow pause/resume events reach only an admin session or an `admin`-scope
-key owned by an admin.
+key owned by an admin. An open `GET /events` stream re-reads these rights every 30 seconds:
+it is closed when its key is revoked, disabled, expired or loses `runs_read`, or when its
+user or key owner is deleted, and it falls back to run events only when the user is demoted
+or the key loses its `admin` scope. Within those 30 seconds, events still go through.
 
 Schedule, template and delegation routes are not admin-only: a key owned by a member reaches
 them exactly as that member's dashboard session does. Revoking a delegation still needs to

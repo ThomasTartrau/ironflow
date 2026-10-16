@@ -1151,7 +1151,8 @@ export interface paths {
 		 *     - 400 if `name` or `key` is empty or longer than 255 characters, or if
 		 *       `idempotency_id` is empty or longer than 255 characters
 		 *     - 401 if not authenticated
-		 *     - 403 if the caller is not an admin, or the API key lacks `signals_send`
+		 *     - 403 if the caller is not an admin, the API key lacks `signals_send`, or
+		 *       its owner is not an admin
 		 */
 		post: operations["send_signal"];
 		delete?: never;
