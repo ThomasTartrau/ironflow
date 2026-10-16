@@ -42,6 +42,7 @@ use crate::metric_names;
 use crate::provider::{
     AgentConfig, AgentOutput, AgentProvider, DebugMessage, LogSink, assert_environment_id_valid,
 };
+use crate::providers::claude::is_session_not_found;
 use crate::retry::RetryPolicy;
 use crate::trace_context::WorkflowTraceContext;
 
@@ -706,7 +707,8 @@ impl Agent {
     /// an automatic retry policy of 2 retries is applied to handle
     /// non-deterministic `structured_output: null` responses from the CLI.
     /// Deterministic errors (prompt too large) are returned immediately
-    /// without retry.
+    /// without retry, and so is the loss of the session passed to
+    /// [`resume`](Agent::resume): replaying it cannot succeed.
     ///
     /// # Errors
     ///
@@ -738,6 +740,19 @@ impl Agent {
         }
 
         let result = self.invoke_once(provider).await;
+
+        // Replaying a `--resume` of a missing session cannot succeed and each
+        // replay spawns a pod: hand the error back so the caller restarts from
+        // scratch.
+        if self.config.resume_session_id.is_some()
+            && let Err(OperationError::Agent(ref err)) = result
+            && is_session_not_found(err)
+        {
+            warn!(
+                "session to resume not found, not retrying: the caller must restart from scratch"
+            );
+            return result;
+        }
 
         let default_schema_retry = RetryPolicy::new(2);
         let policy = match &self.retry_policy {
@@ -1881,6 +1896,111 @@ mod tests {
         assert!(result.is_err());
         // auto-retry(2) : 1 initial + 2 retries = 3 total
         assert_eq!(call_count.load(Ordering::SeqCst), 3);
+    }
+
+    struct ResumeSchemaFail {
+        count: Arc<AtomicU32>,
+        got: &'static str,
+    }
+    impl AgentProvider for ResumeSchemaFail {
+        fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Err(AgentError::SchemaValidation {
+                    expected: "object".to_string(),
+                    got: self.got.to_string(),
+                    debug_messages: Vec::new(),
+                    partial_usage: Box::default(),
+                    raw_response: None,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_with_missing_session_is_not_retried_with_json_schema() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let provider = ResumeSchemaFail {
+            count: call_count.clone(),
+            got: "null (error_during_execution after 0 turns: the session to resume was not found)",
+        };
+        let result = Agent::new()
+            .prompt("x")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .resume("sid")
+            .run(&provider)
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn resume_failing_with_num_turns_is_still_retried() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let provider = ResumeSchemaFail {
+            count: call_count.clone(),
+            got: "null",
+        };
+        let result = Agent::new()
+            .prompt("x")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .resume("sid")
+            .run(&provider)
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(call_count.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn resume_with_missing_session_is_not_retried_with_explicit_retry() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let provider = ResumeSchemaFail {
+            count: call_count.clone(),
+            got: "null (error_during_execution after 0 turns: the session to resume was not found)",
+        };
+        let result = Agent::new()
+            .prompt("x")
+            .resume("sid")
+            .retry(3)
+            .run(&provider)
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    struct SessionNotFoundStderr {
+        count: Arc<AtomicU32>,
+    }
+    impl AgentProvider for SessionNotFoundStderr {
+        fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Err(AgentError::ProcessFailed {
+                    exit_code: 1,
+                    stderr: "No conversation found with session ID: sid".to_string(),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_with_missing_session_stderr_is_not_retried_with_explicit_retry() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let provider = SessionNotFoundStderr {
+            count: call_count.clone(),
+        };
+        let result = Agent::new()
+            .prompt("x")
+            .resume("sid")
+            .retry(3)
+            .run(&provider)
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

@@ -115,6 +115,8 @@ pub struct ClaudeJsonOutput {
     pub total_cost_usd: Option<f64>,
     /// Wall-clock duration in milliseconds.
     pub duration_ms: Option<u64>,
+    /// Number of agentic turns the CLI ran; `0` when it failed before the first turn.
+    pub num_turns: Option<u64>,
     /// Per-model token usage keyed by model identifier.
     #[serde(rename = "modelUsage")]
     pub model_usage: Option<Map<String, Value>>,
@@ -256,7 +258,17 @@ fn push_session_args(args: &mut Vec<String>, config: &AgentConfig) {
 /// cannot find on disk.
 const SESSION_NOT_FOUND_MESSAGE: &str = "No conversation found with session ID";
 
+/// Marker [`parse_response`] puts in the `got` of a [`AgentError::SchemaValidation`]
+/// when a resume ended in a 0-turn `error_during_execution`. With a json_schema
+/// the CLI answers a `--resume` of a missing session with that result, not with
+/// the stderr message of [`SESSION_NOT_FOUND_MESSAGE`].
+const SESSION_ZERO_TURN_MESSAGE: &str = "error_during_execution after 0 turns";
+
 /// Whether `err` reports that the session passed to `--resume` does not exist.
+///
+/// Two signals count: the stderr message of the CLI, and the 0-turn
+/// `error_during_execution` result a json_schema resume of a missing session
+/// ends with.
 ///
 /// The session lives under `~/.claude/projects/<cwd-slug>` of the machine
 /// that ran it: an ephemeral HOME, another machine or another working
@@ -274,8 +286,26 @@ const SESSION_NOT_FOUND_MESSAGE: &str = "No conversation found with session ID";
 /// };
 /// assert!(is_session_not_found(&err));
 /// ```
+///
+/// ```
+/// use ironflow_core::error::AgentError;
+/// use ironflow_core::providers::claude::is_session_not_found;
+///
+/// let err = AgentError::SchemaValidation {
+///     expected: "structured_output field".to_string(),
+///     got: "null (error_during_execution after 0 turns: the session to resume was not found)"
+///         .to_string(),
+///     debug_messages: Vec::new(),
+///     partial_usage: Default::default(),
+///     raw_response: None,
+/// };
+/// assert!(is_session_not_found(&err));
+/// ```
 pub fn is_session_not_found(err: &AgentError) -> bool {
-    err.to_string().contains(SESSION_NOT_FOUND_MESSAGE)
+    match err {
+        AgentError::SchemaValidation { got, .. } if got.contains(SESSION_ZERO_TURN_MESSAGE) => true,
+        _ => err.to_string().contains(SESSION_NOT_FOUND_MESSAGE),
+    }
 }
 
 /// Refuse a tool profile: the Claude CLI has no notion of one, and ignoring
@@ -684,15 +714,20 @@ pub fn parse_response(
             }
             let usage = partial_usage(&parsed);
 
-            let hint = match parsed.subtype.as_deref() {
+            let hint: String = match parsed.subtype.as_deref() {
                 Some("error_max_turns") => {
-                    " (max turns reached before structured output was generated - use max_turns >= 2 with structured output)"
+                    " (max turns reached before structured output was generated - use max_turns >= 2 with structured output)".to_string()
+                }
+                Some("error_during_execution")
+                    if parsed.num_turns == Some(0) && config.resume_session_id.is_some() =>
+                {
+                    format!(" ({SESSION_ZERO_TURN_MESSAGE}: the session to resume was not found)")
                 }
                 Some(sub) => {
                     warn!(subtype = sub, "claude returned no structured_output");
-                    ""
+                    String::new()
                 }
-                None => "",
+                None => String::new(),
             };
             let raw_response = extract_raw_response_text(&parsed, stdout);
 
@@ -2564,5 +2599,55 @@ mod tests {
             limit: Duration::from_secs(1),
         };
         assert!(!is_session_not_found(&timeout));
+    }
+
+    fn zero_turn_stdout(num_turns: &str) -> String {
+        format!(
+            r#"{{"type":"result","subtype":"error_during_execution","is_error":true{num_turns},"total_cost_usd":0.0,"duration_ms":12}}"#
+        )
+    }
+
+    #[test]
+    fn is_session_not_found_matches_zero_turn_error_of_json_schema_resume() {
+        let config: AgentConfig = AgentConfig::new("test")
+            .resume("sid")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+        let err = parse_response(&zero_turn_stdout(r#","num_turns":0"#), &config, 0).unwrap_err();
+        assert!(matches!(err, AgentError::SchemaValidation { .. }));
+        assert!(is_session_not_found(&err));
+    }
+
+    #[test]
+    fn is_session_not_found_rejects_error_during_execution_with_turns() {
+        let config: AgentConfig = AgentConfig::new("test")
+            .resume("sid")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+        let err = parse_response(&zero_turn_stdout(r#","num_turns":3"#), &config, 0).unwrap_err();
+        assert!(matches!(err, AgentError::SchemaValidation { .. }));
+        assert!(!is_session_not_found(&err));
+    }
+
+    #[test]
+    fn is_session_not_found_rejects_zero_turn_error_without_resume() {
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+        let err = parse_response(&zero_turn_stdout(r#","num_turns":0"#), &config, 0).unwrap_err();
+        assert!(matches!(err, AgentError::SchemaValidation { .. }));
+        assert!(!is_session_not_found(&err));
+    }
+
+    #[test]
+    fn is_session_not_found_rejects_null_structured_output_without_error_subtype() {
+        let stdout = r#"{"session_id":"s1","subtype":"success","result":null,"structured_output":null,"total_cost_usd":0.1,"duration_ms":10}"#;
+        let config: AgentConfig = AgentConfig::new("test")
+            .resume("sid")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+        let err = parse_response(stdout, &config, 0).unwrap_err();
+        assert!(matches!(err, AgentError::SchemaValidation { .. }));
+        assert!(!is_session_not_found(&err));
     }
 }
