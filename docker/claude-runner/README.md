@@ -20,9 +20,10 @@ job and pushed to
   `check-runner-models` CI job runs it on merge requests that change
   `IMAGE_TAG` or the `Model` constants.
 - `<n>` is the image revision for that version: bump it after any other change
-  to the Dockerfile, the base image digest included.
+  to the Dockerfile, the base image digest and a baked tool included.
 
-The build fails if the installed CLI does not report `<claude-code-version>`.
+The build fails if the installed CLI does not report `<claude-code-version>`,
+or if `chrome-devtools-mcp --version` does not print the pinned version.
 On merge requests, the `check-claude-runner-image` job builds the image
 without pushing it, and fails when the Dockerfile changes without a new
 `IMAGE_TAG`, so a merge never overwrites a published tag.
@@ -54,6 +55,25 @@ The image runs as uid/gid `10001` (`claude`), matching the provider's
 
 The root filesystem is read-only in the sandbox: anything the agent writes
 goes to `HOME`, `/tmp` or a volume.
+
+## Baked tools
+
+- `chrome-devtools-mcp@1.10.1`, installed globally next to the Claude CLI, at an
+  exact version.
+- It is a stdio MCP server started by the Claude CLI inside the agent pod. The
+  image has no Chromium: the server connects to a remote browser running in
+  another pod with `chrome-devtools-mcp --browser-url http://<pod-ip>:9223`.
+- There is no `npx` at runtime: the `runtime` egress profile has no access to
+  the npm registry.
+
+Example MCP configuration:
+
+```json
+{"mcpServers":{"chrome-devtools":{"command":"chrome-devtools-mcp","args":["--browser-url","http://<pod-ip>:9223"]}}}
+```
+
+To bump it, change the version in the Dockerfile (both the install and the
+check) and bump `<n>` in `IMAGE_TAG`.
 
 ## Baked defaults
 

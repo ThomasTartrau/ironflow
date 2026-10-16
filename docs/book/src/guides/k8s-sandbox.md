@@ -11,7 +11,8 @@ The official image
 `registry.gitlab.com/thomastartrau/ironflow/ironflow-claude-runner:<claude-code-version>-<n>`
 is built from `docker/claude-runner/` by the `build-claude-runner-image` CI job.
 The current tag is in `docker/claude-runner/IMAGE_TAG`. There is no `latest`
-tag: pin the full tag.
+tag: pin the full tag. The image also bundles `chrome-devtools-mcp` at a pinned
+version, with no browser, for agents that drive a remote Chromium.
 
 | Path | Content |
 |------|---------|

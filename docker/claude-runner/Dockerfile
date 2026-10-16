@@ -36,6 +36,16 @@ RUN : "${CLAUDE_CODE_VERSION:?pass --build-arg CLAUDE_CODE_VERSION=<version>}" \
     && npm cache clean --force \
     && test "$(claude --version | cut -d' ' -f1)" = "${CLAUDE_CODE_VERSION}"
 
+# chrome-devtools-mcp: stdio MCP server the Claude CLI starts in the agent pod,
+# driving a browser that runs in another pod (--browser-url
+# http://<pod-ip>:9223). No Chromium here. Installed at an exact version because
+# the agent pod has no egress to the npm registry, so `npx` at startup cannot work
+# and a floating download is not reproducible. Fails the build when the
+# installed server reports another version.
+RUN PUPPETEER_SKIP_DOWNLOAD=1 npm install -g chrome-devtools-mcp@1.10.1 \
+    && npm cache clean --force \
+    && test "$(chrome-devtools-mcp --version)" = "1.10.1"
+
 RUN groupadd -g 10001 claude \
     && useradd -u 10001 -g 10001 -m -d /home/claude claude
 
