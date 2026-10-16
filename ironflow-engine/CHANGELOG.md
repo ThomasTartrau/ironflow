@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.52.8](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.52.7...ironflow-engine-v2.52.8) - 2026-10-16
+
+### Fixed
+
+- #211 restart a resumed json_schema agent from scratch when its session is gone
+
 ## [2.52.7](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.52.6...ironflow-engine-v2.52.7) - 2026-10-16
 
 ### Fixed
