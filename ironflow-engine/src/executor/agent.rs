@@ -66,7 +66,8 @@ impl<'a> AgentExecutor<'a> {
     /// Resume `session_id` with `resume_prompt`. When the session does not
     /// exist anymore (ephemeral HOME, other machine, other `cwd`), run the
     /// original prompt from scratch in a session of the same id: the step
-    /// never fails because its session is gone.
+    /// never fails because its session is gone. This also covers a json_schema
+    /// agent whose resume fails at 0 turns.
     async fn resume(
         &self,
         provider: &Arc<dyn AgentProvider>,
@@ -261,18 +262,33 @@ mod tests {
         }
     }
 
+    /// How [`SessionProvider`] fails a resume.
+    enum ResumeFailure {
+        /// The CLI exits with this stderr.
+        Stderr(String),
+        /// A json_schema run ends with a schema validation error carrying this `got`.
+        Schema(String),
+    }
+
     /// Provider recording every config it receives, failing a resume with
     /// `resume_error` when set.
     struct SessionProvider {
         seen: Mutex<Vec<AgentConfig>>,
-        resume_error: Option<String>,
+        resume_error: Option<ResumeFailure>,
     }
 
     impl SessionProvider {
         fn new(resume_error: Option<&str>) -> Arc<Self> {
             Arc::new(Self {
                 seen: Mutex::new(Vec::new()),
-                resume_error: resume_error.map(String::from),
+                resume_error: resume_error.map(|s| ResumeFailure::Stderr(s.to_string())),
+            })
+        }
+
+        fn failing_schema(got: &str) -> Arc<Self> {
+            Arc::new(Self {
+                seen: Mutex::new(Vec::new()),
+                resume_error: Some(ResumeFailure::Schema(got.to_string())),
             })
         }
 
@@ -286,10 +302,21 @@ mod tests {
             Box::pin(async move {
                 self.seen.lock().unwrap().push(config.clone());
                 match (&config.resume_session_id, &self.resume_error) {
-                    (Some(_), Some(stderr)) => Err(AgentError::ProcessFailed {
-                        exit_code: 1,
-                        stderr: stderr.clone(),
-                    }),
+                    (Some(_), Some(ResumeFailure::Stderr(stderr))) => {
+                        Err(AgentError::ProcessFailed {
+                            exit_code: 1,
+                            stderr: stderr.clone(),
+                        })
+                    }
+                    (Some(_), Some(ResumeFailure::Schema(got))) => {
+                        Err(AgentError::SchemaValidation {
+                            expected: "structured_output field".to_string(),
+                            got: got.clone(),
+                            debug_messages: Vec::new(),
+                            partial_usage: Box::default(),
+                            raw_response: None,
+                        })
+                    }
                     _ => {
                         let mut output = AgentOutput::new(json!("ok"));
                         output.cost_usd = Some(0.02);
@@ -341,6 +368,63 @@ mod tests {
             assert_eq!(seen[1].prompt, "hi");
             assert_eq!(seen[1].resume_session_id, None);
             assert_eq!(seen[1].session_id.as_deref(), Some(SID));
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn agent_resume_executor_restarts_json_schema_agent_when_session_is_missing() {
+        timeout(Duration::from_secs(10), async {
+            let recorder = SessionProvider::failing_schema(
+                "null (error_during_execution after 0 turns: the session to resume was not found)",
+            );
+            let provider: Arc<dyn AgentProvider> = recorder.clone();
+            let config: AgentConfig = budget_config()
+                .resume(SID)
+                .resume_prompt("go on")
+                .output_schema_raw(r#"{"type":"object"}"#)
+                .into();
+
+            AgentExecutor::new(&config)
+                .execute(&provider)
+                .await
+                .expect("a missing session never fails the step");
+
+            let seen = recorder.seen();
+            assert_eq!(seen.len(), 2, "the resume is not retried");
+            assert_eq!(seen[0].prompt, "go on");
+            assert_eq!(seen[1].prompt, "hi");
+            assert_eq!(seen[1].resume_session_id, None);
+            assert_eq!(seen[1].session_id.as_deref(), Some(SID));
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn agent_resume_executor_keeps_schema_failure_with_turns() {
+        timeout(Duration::from_secs(10), async {
+            let recorder = SessionProvider::failing_schema("null");
+            let provider: Arc<dyn AgentProvider> = recorder.clone();
+            let config: AgentConfig = budget_config()
+                .resume(SID)
+                .resume_prompt("go on")
+                .output_schema_raw(r#"{"type":"object"}"#)
+                .into();
+
+            AgentExecutor::new(&config)
+                .execute(&provider)
+                .await
+                .expect_err("a schema failure of a live session is not masked");
+
+            assert!(
+                recorder
+                    .seen()
+                    .iter()
+                    .all(|c| c.resume_session_id.is_some()),
+                "no fresh run"
+            );
         })
         .await
         .expect("test timed out");
