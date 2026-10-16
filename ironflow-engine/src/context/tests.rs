@@ -813,6 +813,17 @@ async fn a_replayed_tolerated_failure_skips_the_positions_of_its_error_handlers(
         .update_step(
             after.id,
             StepUpdate {
+                status: Some(StepStatus::Running),
+                started_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("failed to start step");
+    ctx.store
+        .update_step(
+            after.id,
+            StepUpdate {
                 status: Some(StepStatus::Completed),
                 output: Some(json!({ "stdout": "done" })),
                 completed_at: Some(Utc::now()),
