@@ -324,7 +324,7 @@ impl RemoteDefaultBranch {
             let connection =
                 remote.connect_auth(Direction::Fetch, Some(credentials_callbacks(creds)), None)?;
             let default = connection.default_branch()?;
-            let name = default.as_str().map(String::from);
+            let name = default.as_str().ok().map(String::from);
             Ok(RemoteDefaultBranchOutput {
                 remote: remote_name,
                 default_branch: name,

@@ -65,7 +65,10 @@ impl BlameFile {
                     commit_id: hunk.final_commit_id().to_string(),
                     start_line: hunk.final_start_line(),
                     lines: hunk.lines_in_hunk(),
-                    author: hunk.final_signature().name().unwrap_or("").to_string(),
+                    author: hunk
+                        .final_signature()
+                        .map(|sig| sig.name().unwrap_or("").to_string())
+                        .unwrap_or_default(),
                 })
                 .collect();
             Ok(BlameOutput {

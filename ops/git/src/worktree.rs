@@ -198,7 +198,7 @@ impl WorktreeList {
             let worktrees = repo.worktrees()?;
             let list = worktrees
                 .iter()
-                .filter_map(|w| w.map(String::from))
+                .filter_map(|w| w.ok().flatten().map(String::from))
                 .collect();
             Ok(WorktreeListOutput { worktrees: list })
         })
@@ -384,7 +384,10 @@ impl WorktreeRemove {
         let name = self.name.clone();
         blocking(move || {
             let repo = Repository::open(&repo_path)?;
-            let exists = repo.worktrees()?.iter().flatten().any(|n| n == name);
+            let exists = repo
+                .worktrees()?
+                .iter()
+                .any(|n| n.ok().flatten() == Some(name.as_str()));
             if !exists {
                 return Ok(WorktreeRemoveOutput {
                     name,

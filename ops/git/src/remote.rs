@@ -225,7 +225,7 @@ impl RemoteRename {
             let problems = repo.remote_rename(&old, &new)?;
             let issues: Vec<String> = problems
                 .iter()
-                .filter_map(|s| s.map(String::from))
+                .filter_map(|s| s.ok().flatten().map(String::from))
                 .collect();
             Ok(RemoteRenameOutput {
                 old_name: old,
@@ -355,11 +355,11 @@ impl RemoteList {
             let list: Vec<RemoteEntry> = remotes
                 .iter()
                 .filter_map(|name| {
-                    let name = name?;
+                    let name = name.ok().flatten()?;
                     let remote = repo.find_remote(name).ok()?;
                     Some(RemoteEntry {
                         name: name.to_string(),
-                        url: redact_url(remote.url().unwrap_or("")),
+                        url: redact_url(remote.url().ok().unwrap_or("")),
                     })
                 })
                 .collect();
@@ -420,8 +420,8 @@ impl RemoteLookup {
             let remote = repo.find_remote(&name)?;
             Ok(RemoteLookupOutput {
                 name,
-                url: redact_url(remote.url().unwrap_or("")),
-                pushurl: remote.pushurl().map(redact_url),
+                url: redact_url(remote.url().ok().unwrap_or("")),
+                pushurl: remote.pushurl().ok().flatten().map(redact_url),
             })
         })
         .await

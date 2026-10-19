@@ -1,16 +1,26 @@
 //! Integration tests for ironflow-ops-git.
 
 use std::fs;
+#[cfg(unix)]
+use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
-use git2::{Repository, Signature};
+use git2::{Repository, Signature, Version};
 use ironflow_core::operation::{NoopSecretResolver, Operation, OperationContext};
+use ironflow_ops_git::blame::BlameFile;
 use ironflow_ops_git::branch::{BranchCheckout, BranchCreate, BranchList};
+use ironflow_ops_git::config::ConfigList;
 use ironflow_ops_git::diff::DiffIndexToWorkdir;
 use ironflow_ops_git::index::IndexAdd;
+use ironflow_ops_git::reflog::{ReflogAppend, ReflogRead};
+use ironflow_ops_git::remote::{RemoteList, RemoteLookup};
 use ironflow_ops_git::status::StatusList;
+use ironflow_ops_git::submodule::{SubmoduleList, SubmoduleLookup};
 use ironflow_ops_git::tag::{TagCreateLightweight, TagList};
+use ironflow_ops_git::worktree::{WorktreeAdd, WorktreeList, WorktreeRemove};
 
 fn ctx() -> OperationContext {
     OperationContext::new(Arc::new(NoopSecretResolver))
@@ -158,4 +168,209 @@ async fn ops_provide_input() {
     let input = commit.input().unwrap();
     assert_eq!(input["message"], "msg");
     assert!(input["author"].is_string());
+}
+
+#[test]
+fn libgit2_is_built_with_ssh_and_https() {
+    let version = Version::get();
+    assert!(version.ssh());
+    assert!(version.https());
+}
+
+#[cfg(unix)]
+fn append_to_git_config(repo_path: &Path, bytes: &[u8]) {
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(repo_path.join(".git").join("config"))
+        .unwrap();
+    file.write_all(bytes).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn config_list_skips_entries_with_non_utf8_value() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo_with_commit(tmp.path());
+    append_to_git_config(tmp.path(), b"[x]\n\ty = \xFF\n\tz = valid\n");
+
+    let result = ConfigList::new(tmp.path()).run(&ctx()).await.unwrap();
+    assert!(
+        result
+            .entries
+            .iter()
+            .any(|e| e.name == "x.z" && e.value == "valid")
+    );
+    assert!(result.entries.iter().all(|e| e.name != "x.y"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn remote_list_returns_empty_url_when_url_is_not_utf8() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo_with_commit(tmp.path());
+    append_to_git_config(tmp.path(), b"[remote \"bad\"]\n\turl = \xFF\n");
+
+    let list = RemoteList::new(tmp.path()).run(&ctx()).await.unwrap();
+    let bad = list.remotes.iter().find(|r| r.name == "bad").unwrap();
+    assert_eq!(bad.url, "");
+
+    let got = RemoteLookup::new(tmp.path(), "bad")
+        .run(&ctx())
+        .await
+        .unwrap();
+    assert_eq!(got.url, "");
+}
+
+#[tokio::test]
+async fn remote_list_and_get_return_redacted_url_and_pushurl() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo_with_commit(tmp.path());
+    let repo = Repository::open(tmp.path()).unwrap();
+    repo.remote("origin", "https://user:secret@example.com/repo.git")
+        .unwrap();
+    repo.remote_set_pushurl("origin", Some("https://user:secret@example.com/push.git"))
+        .unwrap();
+
+    let list = RemoteList::new(tmp.path()).run(&ctx()).await.unwrap();
+    assert_eq!(list.remotes.len(), 1);
+    assert_eq!(list.remotes[0].name, "origin");
+    assert!(!list.remotes[0].url.contains("secret"));
+    assert!(list.remotes[0].url.contains("example.com/repo.git"));
+
+    let got = RemoteLookup::new(tmp.path(), "origin")
+        .run(&ctx())
+        .await
+        .unwrap();
+    assert!(!got.url.contains("secret"));
+    let pushurl = got.pushurl.unwrap();
+    assert!(!pushurl.contains("secret"));
+    assert!(pushurl.contains("example.com/push.git"));
+}
+
+#[tokio::test]
+async fn submodule_lookup_and_list_return_name_url_and_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo_with_commit(tmp.path());
+    {
+        let repo = Repository::open(tmp.path()).unwrap();
+        repo.submodule(
+            "https://example.com/org/sub.git",
+            Path::new("vendor/sub"),
+            false,
+        )
+        .unwrap();
+    }
+
+    let lookup = SubmoduleLookup::new(tmp.path(), "vendor/sub")
+        .run(&ctx())
+        .await
+        .unwrap();
+    assert_eq!(lookup.name, "vendor/sub");
+    assert_eq!(lookup.url, "https://example.com/org/sub.git");
+    assert_eq!(lookup.path, "vendor/sub");
+
+    let list = SubmoduleList::new(tmp.path()).run(&ctx()).await.unwrap();
+    assert_eq!(list.submodules.len(), 1);
+    assert_eq!(list.submodules[0].name, "vendor/sub");
+    assert_eq!(list.submodules[0].url, "https://example.com/org/sub.git");
+    assert_eq!(list.submodules[0].path, "vendor/sub");
+}
+
+#[tokio::test]
+async fn reflog_read_returns_message_and_committer() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo_with_commit(tmp.path());
+    let oid = Repository::open(tmp.path())
+        .unwrap()
+        .head()
+        .unwrap()
+        .target()
+        .unwrap()
+        .to_string();
+    ReflogAppend::new(tmp.path(), "HEAD", &oid, "custom entry", "Bot", "bot@t.com")
+        .run(&ctx())
+        .await
+        .unwrap();
+
+    let result = ReflogRead::new(tmp.path(), "HEAD", 50)
+        .run(&ctx())
+        .await
+        .unwrap();
+    let entry = result
+        .entries
+        .iter()
+        .find(|e| e.message == "custom entry")
+        .unwrap();
+    assert_eq!(entry.committer, "Bot");
+    assert_eq!(entry.id_new, oid);
+}
+
+#[tokio::test]
+async fn tag_list_returns_exact_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo_with_commit(tmp.path());
+    TagCreateLightweight::new(tmp.path(), "v1")
+        .run(&ctx())
+        .await
+        .unwrap();
+    let list = TagList::new(tmp.path()).run(&ctx()).await.unwrap();
+    assert_eq!(list.tags, vec!["v1".to_string()]);
+}
+
+#[tokio::test]
+async fn worktree_list_and_remove_use_the_worktree_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo_with_commit(tmp.path());
+    let wt_dir = tempfile::tempdir().unwrap();
+    let wt_path = wt_dir.path().join("wt");
+    WorktreeAdd::new(tmp.path(), "feature-wt", &wt_path)
+        .run(&ctx())
+        .await
+        .unwrap();
+
+    let list = WorktreeList::new(tmp.path()).run(&ctx()).await.unwrap();
+    assert_eq!(list.worktrees, vec!["feature-wt".to_string()]);
+
+    let removed = WorktreeRemove::new(tmp.path(), "feature-wt")
+        .run(&ctx())
+        .await
+        .unwrap();
+    assert_eq!(removed.name, "feature-wt");
+    assert!(removed.removed);
+}
+
+#[tokio::test]
+async fn config_list_returns_exact_name_and_value() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo_with_commit(tmp.path());
+    Repository::open(tmp.path())
+        .unwrap()
+        .config()
+        .unwrap()
+        .set_str("ironflow.key", "some value")
+        .unwrap();
+
+    let result = ConfigList::new(tmp.path()).run(&ctx()).await.unwrap();
+    let entry = result
+        .entries
+        .iter()
+        .find(|e| e.name == "ironflow.key")
+        .unwrap();
+    assert_eq!(entry.value, "some value");
+}
+
+#[tokio::test]
+async fn blame_returns_author_name_for_each_hunk() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo_with_commit(tmp.path());
+
+    let result = BlameFile::new(tmp.path(), "file.txt")
+        .run(&ctx())
+        .await
+        .unwrap();
+    assert_eq!(result.file, "file.txt");
+    assert_eq!(result.hunks.len(), 1);
+    assert_eq!(result.hunks[0].author, "Test");
+    assert_eq!(result.hunks[0].start_line, 1);
+    assert_eq!(result.hunks[0].lines, 1);
 }

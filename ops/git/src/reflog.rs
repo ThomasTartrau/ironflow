@@ -79,7 +79,7 @@ impl ReflogRead {
                 .map(|entry| ReflogEntry {
                     id_new: entry.id_new().to_string(),
                     id_old: entry.id_old().to_string(),
-                    message: entry.message().unwrap_or("").to_string(),
+                    message: entry.message().ok().flatten().unwrap_or("").to_string(),
                     committer: entry.committer().name().unwrap_or("").to_string(),
                 })
                 .collect();

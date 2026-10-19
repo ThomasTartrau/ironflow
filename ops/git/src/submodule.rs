@@ -305,8 +305,8 @@ impl SubmoduleLookup {
             let repo = Repository::open(&repo_path)?;
             let sub = repo.find_submodule(&name)?;
             Ok(SubmoduleLookupOutput {
-                name: sub.name().unwrap_or("").to_string(),
-                url: redact_url(sub.url().unwrap_or("")),
+                name: sub.name().ok().unwrap_or("").to_string(),
+                url: redact_url(sub.url().ok().flatten().unwrap_or("")),
                 path: sub.path().to_string_lossy().into_owned(),
                 head_id: sub.head_id().map(|o| o.to_string()),
             })
@@ -367,8 +367,8 @@ impl SubmoduleList {
             let list = subs
                 .iter()
                 .map(|s| SubmoduleEntry {
-                    name: s.name().unwrap_or("").to_string(),
-                    url: redact_url(s.url().unwrap_or("")),
+                    name: s.name().ok().unwrap_or("").to_string(),
+                    url: redact_url(s.url().ok().flatten().unwrap_or("")),
                     path: s.path().to_string_lossy().into_owned(),
                 })
                 .collect();
