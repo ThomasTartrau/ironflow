@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.2.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-git-v0.1.37...ironflow-ops-git-v0.2.0) - 2026-10-19
+
+### Fixed
+
+- **BREAKING** #212 bump ironflow-ops-git to git2 0.21 (RUSTSEC-2026-0183/0184)
+
 ## [0.1.17](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-git-v0.1.16...ironflow-ops-git-v0.1.17) - 2026-09-29
 
 ### Fixed
