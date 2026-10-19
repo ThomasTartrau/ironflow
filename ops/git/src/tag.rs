@@ -268,7 +268,10 @@ impl TagList {
         blocking(move || {
             let repo = Repository::open(&repo_path)?;
             let tags = repo.tag_names(None)?;
-            let list: Vec<String> = tags.iter().filter_map(|t| t.map(String::from)).collect();
+            let list: Vec<String> = tags
+                .iter()
+                .filter_map(|t| t.ok().flatten().map(String::from))
+                .collect();
             Ok(TagListOutput {
                 tags: list,
                 pattern: None,
@@ -327,7 +330,10 @@ impl TagListMatch {
         blocking(move || {
             let repo = Repository::open(&repo_path)?;
             let tags = repo.tag_names(Some(&pattern))?;
-            let list: Vec<String> = tags.iter().filter_map(|t| t.map(String::from)).collect();
+            let list: Vec<String> = tags
+                .iter()
+                .filter_map(|t| t.ok().flatten().map(String::from))
+                .collect();
             Ok(TagListOutput {
                 tags: list,
                 pattern: Some(pattern),

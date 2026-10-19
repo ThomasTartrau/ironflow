@@ -8,8 +8,10 @@ Provides Git operations (clone, commit, branch, merge, diff, rebase, stash, tag,
 
 ```toml
 [dependencies]
-ironflow-ops-git = "0.1"
+ironflow-ops-git = "0.2"
 ```
+
+This crate follows `git2` 0.21 with the `ssh` and `https` features enabled, and re-exports it (`pub use git2;`).
 
 ### Open a repository
 

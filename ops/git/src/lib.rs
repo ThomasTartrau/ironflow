@@ -5,6 +5,9 @@
 //! operation wraps a [`git2`] API call, running it inside
 //! [`spawn_blocking`](tokio::task::spawn_blocking) since `git2` is synchronous.
 //!
+//! The crate follows `git2` 0.21 with its `ssh` and `https` features enabled, and
+//! re-exports it as [`git2`] (`pub use git2;`).
+//!
 //! # Architecture
 //!
 //! - [`GitRepo`] is the central handle, wrapping a repository path

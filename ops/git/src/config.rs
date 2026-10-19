@@ -252,7 +252,7 @@ impl ConfigList {
             let mut iter = snapshot.entries(None)?;
             while let Some(entry) = iter.next() {
                 let entry = entry?;
-                if let (Some(name), Some(value)) = (entry.name(), entry.value()) {
+                if let (Some(name), Some(value)) = (entry.name().ok(), entry.value().ok()) {
                     entries.push(ConfigEntry {
                         name: name.to_string(),
                         value: value.to_string(),
