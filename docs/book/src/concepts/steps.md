@@ -84,7 +84,11 @@ Anthropic API provider; other HTTP providers ignore it. Without it no flag is se
 model default applies.
 
 Tools are an enum: `.allow_tool(Tool::Bash)`, `Tool::Custom("mcp__server__tool".into())`
-for anything else. Tools and structured output are mutually exclusive.
+for anything else. A step can have tools and structured output: with
+`.allow_tool(Tool::Read).output::<Verdict>()` the agent reads what it needs, then
+`ctx.agent` returns the `Verdict`. Claude Code fills the structured answer with tools
+active (tested with 2.1.296 and 2.1.304); count one more turn in `max_turns` per round
+of tool calls.
 
 On an HTTP provider, tools are registered on the worker in named profiles
 (`HttpAgentProvider::with_tool_profile`). Each profile is a `ToolProfile` constant,

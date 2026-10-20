@@ -43,7 +43,8 @@ pub type AgentStepConfig = AgentConfig;
 /// accepts, and the answer it returns for it.
 ///
 /// A config built with [`output::<T>()`](AgentConfig::output) answers with the
-/// `T` itself; every other config answers with the raw [`StepOutput`].
+/// `T` itself, with or without tools; every other config answers with the raw
+/// [`StepOutput`].
 ///
 /// # Examples
 ///
@@ -135,6 +136,30 @@ impl AgentStep for AgentConfig<NoTools, RawSchema> {
 }
 
 impl<T: DeserializeOwned> AgentStep for AgentConfig<NoTools, WithSchema<T>> {
+    type Answer = T;
+
+    fn into_config(self) -> AgentStepConfig {
+        self.into()
+    }
+
+    fn answer(output: StepOutput) -> Result<T, EngineError> {
+        output.json()
+    }
+}
+
+impl AgentStep for AgentConfig<WithTools, RawSchema> {
+    type Answer = StepOutput;
+
+    fn into_config(self) -> AgentStepConfig {
+        self.into()
+    }
+
+    fn answer(output: StepOutput) -> Result<StepOutput, EngineError> {
+        Ok(output)
+    }
+}
+
+impl<T: DeserializeOwned> AgentStep for AgentConfig<WithTools, WithSchema<T>> {
     type Answer = T;
 
     fn into_config(self) -> AgentStepConfig {

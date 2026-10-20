@@ -1,7 +1,8 @@
 //! Integration tests for agent steps with a typed answer and typed tools.
 //!
-//! `ctx.agent` with `.output::<T>()` returns the `T` itself. The agent provider
-//! is the harness mock: it plays the model, the engine code path is real.
+//! `ctx.agent` with `.output::<T>()` returns the `T` itself, with or without
+//! tools on the step. The agent provider is the harness mock: it plays the
+//! model, the engine code path is real.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,6 +19,7 @@ use ironflow_core::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFut
 use ironflow_engine::config::{AgentStepConfig, HumanInputConfig, ShellConfig};
 use ironflow_engine::context::{AgentReply, WorkflowContext};
 use ironflow_engine::engine::{Engine, EnqueueOptions};
+use ironflow_engine::executor::StepOutput;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::testing::{MockShellOutput, TestEngine};
 use ironflow_store::memory::InMemoryStore;
@@ -173,6 +175,127 @@ async fn typed_tools_reach_the_provider_under_their_names() {
 
     assert_eq!(result.status(), RunStatus::Completed);
     assert_eq!(result.step_names(), vec!["explore", "echo"]);
+}
+
+/// Reads the code with a tool, then answers with a [`Verdict`].
+struct ToolReviewer {
+    seen: Arc<Mutex<Option<Verdict>>>,
+}
+
+impl WorkflowHandler for ToolReviewer {
+    fn name(&self) -> &str {
+        "tool-reviewer"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let verdict: Verdict = ctx
+                .agent(
+                    "review",
+                    AgentStepConfig::new("Read the diff, then review the release")
+                        .max_turns(4)
+                        .max_budget_usd(0.10)
+                        .allow_tool(Tool::Read)
+                        .output::<Verdict>(),
+                )
+                .await?;
+            *self.seen.lock().expect("lock") = Some(verdict);
+            Ok(())
+        })
+    }
+}
+
+/// Greps with a tool and asks for a raw schema: the answer stays untyped.
+struct RawToolReviewer {
+    seen: Arc<Mutex<Option<StepOutput>>>,
+}
+
+impl WorkflowHandler for RawToolReviewer {
+    fn name(&self) -> &str {
+        "raw-tool-reviewer"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let output: StepOutput = ctx
+                .agent(
+                    "review",
+                    AgentStepConfig::new("Grep the TODOs, then review the release")
+                        .max_budget_usd(0.10)
+                        .output_schema_raw(r#"{"type":"object"}"#)
+                        .allow_tool(Tool::Grep),
+                )
+                .await?;
+            *self.seen.lock().expect("lock") = Some(output);
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_step_with_tools_and_a_typed_output_returns_its_answer() {
+    let seen = Arc::new(Mutex::new(None));
+    let result = TestEngine::new()
+        .with_handler(ToolReviewer { seen: seen.clone() })
+        .with_mock_agent(|cfg| {
+            assert_eq!(cfg.allowed_tools, vec!["Read"]);
+            assert!(
+                cfg.json_schema
+                    .as_deref()
+                    .is_some_and(|schema| schema.contains("approved")),
+                "the schema of Verdict is sent next to the tools"
+            );
+            Ok(AgentOutput::new(json!({"approved": true, "score": 8})))
+        })
+        .run(json!({}))
+        .await
+        .expect("the harness ran the handler");
+
+    assert_eq!(result.status(), RunStatus::Completed);
+    assert_eq!(result.step_names(), vec!["review"]);
+    assert_eq!(
+        *seen.lock().expect("lock"),
+        Some(Verdict {
+            approved: true,
+            score: 8
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_step_with_tools_and_a_raw_schema_returns_the_step_output() {
+    let seen = Arc::new(Mutex::new(None));
+    let result = TestEngine::new()
+        .with_handler(RawToolReviewer { seen: seen.clone() })
+        .with_mock_agent(|cfg| {
+            assert_eq!(cfg.allowed_tools, vec!["Grep"]);
+            assert_eq!(cfg.json_schema.as_deref(), Some(r#"{"type":"object"}"#));
+            Ok(AgentOutput::new(json!({"todos": 3})))
+        })
+        .run(json!({}))
+        .await
+        .expect("the harness ran the handler");
+
+    assert_eq!(result.status(), RunStatus::Completed);
+    let output = seen.lock().expect("lock").clone().expect("a step output");
+    assert_eq!(output.output, json!({"todos": 3}));
+}
+
+#[tokio::test]
+async fn a_tool_step_answer_that_does_not_match_the_type_fails_the_run() {
+    let seen = Arc::new(Mutex::new(None));
+    let result = TestEngine::new()
+        .with_handler(ToolReviewer { seen: seen.clone() })
+        .with_mock_agent(|_cfg| Ok(AgentOutput::new(json!({"approved": "yes"}))))
+        .run(json!({}))
+        .await
+        .expect("the harness ran the handler");
+
+    assert_eq!(result.status(), RunStatus::Failed);
+    let error = result.error().expect("the run records why it failed");
+    assert!(error.starts_with("serialization error"), "got: {error}");
+    assert!(error.contains("expected a boolean"), "got: {error}");
+    assert!(seen.lock().expect("lock").is_none());
 }
 
 /// Clones in a typed step and keeps the metadata next to the answer.

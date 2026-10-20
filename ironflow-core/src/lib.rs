@@ -27,19 +27,18 @@
 //!
 //! | Issue | Impact |
 //! |-------|--------|
-//! | [claude-code#18536] | `structured_output` is always `null` when tools are used alongside `--json-schema`. ironflow prevents this at compile time via typestate (tools and schema are mutually exclusive). |
+//! | [claude-code#18536] | `structured_output` reported `null` when tools are used alongside `--json-schema`. No longer reproduced with Claude Code 2.1.296 and 2.1.304, so a step may combine tools and `.output::<T>()`. On an older CLI the answer is read from `result`, or the step fails with `AgentError::SchemaValidation`. |
 //! | [claude-code#9058] | The CLI does not validate output against the provided JSON schema -- non-conforming JSON may be returned. |
 //! | [claude-agent-sdk-python#502] | Wrapper objects with a single array field may be flattened to a bare array (e.g. `[...]` instead of `{"items": [...]}`). |
 //! | [claude-agent-sdk-python#374] | The wrapping behavior is non-deterministic: the same prompt can produce differently shaped output across runs. |
 //!
 //! **Recommended workarounds:**
 //!
-//! 1. **Two-step pattern**: use one agent with tools to gather data, then a second
-//!    agent with `.output::<T>()` (no tools) to structure the result.
-//! 2. **Defensive deserialization**: when deserializing structured output, handle
+//! 1. **Defensive deserialization**: when deserializing structured output, handle
 //!    both the expected wrapper object and a bare array/value as fallback.
-//! 3. **`max_turns >= 2`**: structured output requires at least 2 turns; setting
-//!    `max_turns(1)` with a schema will fail with `error_max_turns`.
+//! 2. **`max_turns >= 2`**: structured output requires at least 2 turns; setting
+//!    `max_turns(1)` with a schema will fail with `error_max_turns`. A step with
+//!    tools needs one more turn per round of tool calls.
 //!
 //! [claude-code#18536]: https://github.com/anthropics/claude-code/issues/18536
 //! [claude-code#9058]: https://github.com/anthropics/claude-code/issues/9058

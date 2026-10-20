@@ -191,6 +191,20 @@ async fn example(ctx: &mut WorkflowContext, diff: &str) -> Result<(), EngineErro
         )
         .await?;
     let _text = explore.text();
+
+    // Both: the agent reads with its tools, then answers with a `Review`. Count one
+    // more turn per round of tool calls.
+    let checked = ctx
+        .agent(
+            "check",
+            AgentStepConfig::new("Read src/lib.rs and review its public API.")
+                .allow_tool(Tool::Read)
+                .max_turns(6)
+                .max_budget_usd(0.50)
+                .output::<Review>(),
+        )
+        .await?;
+    let _ = checked.score;
     Ok(())
 }
 ```
@@ -207,8 +221,9 @@ named profiles (see the setup skill, `references/options.md`). A step picks one 
 `.tool_profile(BUG)`, a `ToolProfile` constant shared with the worker, and sees only
 those tools. A step without a profile gets the
 provider's default tools (`with_tools`), or none. An unknown profile fails the step;
-a Claude CLI provider refuses any profile. Like `allow_tool`, a profile rules out
-`.output::<T>()`.
+a Claude CLI provider refuses any profile. A profile combines with `.output::<T>()`,
+but whether the model answers with the schema after using tools depends on the HTTP
+backend.
 
 `system_prompt(..)` replaces the provider's system prompt: on the Claude CLI, Claude Code
 loses its own (skills, slash commands). To give it project rules on top, use
@@ -277,7 +292,6 @@ struct Triage {
 }
 
 async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
-    // A structured step cannot use tools: it only reads its prompt.
     let reply = ctx
         .agent_with_meta(
             "triage",

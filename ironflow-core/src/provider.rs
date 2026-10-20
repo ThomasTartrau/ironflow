@@ -145,44 +145,21 @@ impl AgentInput {
 /// Provider implementations translate these fields into whatever format the underlying
 /// backend expects.
 ///
-/// # Typestate: tools vs structured output
+/// # Typestate: tools and structured output
 ///
-/// Claude CLI has a [known bug](https://github.com/anthropics/claude-code/issues/18536)
-/// where combining `--json-schema` with `--allowedTools` always returns
-/// `structured_output: null`. To prevent this at compile time, [`allow_tool`](Self::allow_tool)
-/// and [`output`](Self::output) / [`output_schema_raw`](Self::output_schema_raw) are mutually
-/// exclusive: using one removes the other from the available API.
+/// `Tools` records whether tools were added ([`allow_tool`](Self::allow_tool),
+/// [`tool_profile`](Self::tool_profile)), `Schema` whether a schema was set
+/// ([`output`](Self::output), [`output_schema_raw`](Self::output_schema_raw)).
+/// Both can be set on one step, in any order: the agent uses its tools, then
+/// answers with the schema. `WithSchema<T>` types the answer of a workflow step.
 ///
 /// ```
-/// use ironflow_core::provider::{AgentConfig, Tool};
+/// use ironflow_core::provider::{AgentConfig, Tool, ToolProfile};
 ///
-/// // OK: tools only
-/// let _ = AgentConfig::new("search").allow_tool(Tool::WebSearch);
-///
-/// // OK: structured output only
-/// let _ = AgentConfig::new("classify").output_schema_raw(r#"{"type":"object"}"#);
-/// ```
-///
-/// ```compile_fail,E0599
-/// use ironflow_core::provider::{AgentConfig, Tool};
-/// // COMPILE ERROR: cannot add tools after setting structured output
 /// let _ = AgentConfig::new("x").output_schema_raw("{}").allow_tool(Tool::Read);
-/// ```
-///
-/// ```compile_fail,E0599
-/// use ironflow_core::provider::{AgentConfig, Tool};
-/// // COMPILE ERROR: cannot set structured output after adding tools
 /// let _ = AgentConfig::new("x").allow_tool(Tool::Read).output_schema_raw("{}");
-/// ```
-///
-/// ```compile_fail,E0599
-/// use ironflow_core::provider::{AgentConfig, ToolProfile};
-/// // COMPILE ERROR: a tool profile counts as tools
 /// let _ = AgentConfig::new("x").tool_profile(ToolProfile::new("bug")).output_schema_raw("{}");
 /// ```
-///
-/// **Workaround**: split the work into two steps -- one agent with tools to
-/// gather data, then a second agent with `.output::<T>()` to structure the result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(serialize = "", deserialize = ""))]
 #[non_exhaustive]
@@ -218,9 +195,7 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     /// Maps to `--disallowedTools` on the Claude CLI. Unlike
     /// [`allowed_tools`](Self::allowed_tools), this does **not** activate any
     /// tools; it only filters out tools that would otherwise be loaded by
-    /// default. As such, it is safe to combine with structured output
-    /// ([`output`](Self::output)) without triggering the Claude CLI bug that
-    /// affects `--json-schema` + `--allowedTools`.
+    /// default.
     #[serde(default)]
     pub disallowed_tools: Vec<String>,
 
@@ -253,11 +228,8 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     /// loads MCP servers from [`mcp_config`](Self::mcp_config) and ignores
     /// any global/user MCP configuration (e.g. `~/.claude.json`).
     ///
-    /// Useful to prevent global MCP servers from leaking tools into steps
-    /// that request `structured_output`, which triggers the Claude CLI bug
-    /// where `--json-schema` combined with any active tool returns
-    /// `structured_output: null`. See
-    /// <https://github.com/anthropics/claude-code/issues/18536>.
+    /// Useful to keep global MCP servers from leaking tools into a step that
+    /// should only see the tools it allows.
     ///
     /// Combine with `mcp_config` set to a file containing
     /// `{"mcpServers":{}}` to disable every MCP server for the invocation.
@@ -589,11 +561,8 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// [`mcp_config`](Self::mcp_config) file (the global `~/.claude.json`
     /// and user-level configs are ignored).
     ///
-    /// This is the recommended way to prevent global MCP servers from
-    /// silently injecting tools into a structured-output step and
-    /// triggering the Claude CLI bug that returns `structured_output: null`
-    /// whenever any tool is active. See
-    /// <https://github.com/anthropics/claude-code/issues/18536>.
+    /// This is the recommended way to keep global MCP servers from silently
+    /// injecting tools into a step.
     ///
     /// # Examples
     ///
@@ -604,7 +573,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// #[derive(serde::Deserialize, JsonSchema)]
     /// struct Out { ok: bool }
     ///
-    /// // Isolate the step from any global MCP server so structured output works.
+    /// // Isolate the step from any global MCP server.
     /// let config = AgentConfig::new("classify this")
     ///     .strict_mcp_config(true)
     ///     .mcp_config(r#"{"mcpServers":{}}"#)
@@ -667,14 +636,10 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
 
     /// Replace the entire disallowed-tools list.
     ///
-    /// Maps to `--disallowedTools` on the Claude CLI. This method is available
-    /// on **every** typestate variant (including
-    /// [`AgentConfig<NoTools, WithSchema<T>>`]) because, unlike
+    /// Maps to `--disallowedTools` on the Claude CLI. Unlike
     /// [`allow_tool`](AgentConfig::allow_tool), `disallowed_tools` does not
-    /// activate any tool -- it only filters out tools that would otherwise be
-    /// loaded by default.
-    ///
-    /// As such, it is safe to combine with structured output:
+    /// activate any tool and leaves the typestate unchanged: it only filters
+    /// out tools that would otherwise be loaded by default.
     ///
     /// # Examples
     ///
@@ -1368,22 +1333,14 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     }
 }
 
-// ── allow_tool: only when no schema is set ─────────────────────────
+// ── Tools: set the `Tools` marker, keep the schema ─────────────────
 
-impl<Tools> AgentConfig<Tools, NoSchema> {
+impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// Add an allowed tool.
     ///
     /// Can be called multiple times to allow several tools. Returns an
-    /// [`AgentConfig<WithTools, NoSchema>`], which **cannot** call
-    /// [`output`](AgentConfig::output) or [`output_schema_raw`](AgentConfig::output_schema_raw).
-    ///
-    /// This restriction exists because Claude CLI has a
-    /// [known bug](https://github.com/anthropics/claude-code/issues/18536)
-    /// where `--json-schema` combined with `--allowedTools` always returns
-    /// `structured_output: null`.
-    ///
-    /// **Workaround**: use two sequential agent steps -- one with tools to
-    /// gather data, then one with `.output::<T>()` to structure the result.
+    /// [`AgentConfig<WithTools, Schema>`]: a schema set before or after with
+    /// [`output`](AgentConfig::output) is kept, and still types the answer.
     ///
     /// # Examples
     ///
@@ -1396,14 +1353,22 @@ impl<Tools> AgentConfig<Tools, NoSchema> {
     /// assert_eq!(config.allowed_tools, vec!["WebSearch", "mcp__docs__lookup"]);
     /// ```
     ///
-    /// ```compile_fail,E0599
-    /// use ironflow_core::provider::{AgentConfig, Tool};
-    /// // ERROR: cannot set structured output after adding tools
-    /// let _ = AgentConfig::new("x")
-    ///     .allow_tool(Tool::Read)
-    ///     .output_schema_raw(r#"{"type":"object"}"#);
+    /// Tools and a typed answer on the same step:
+    ///
     /// ```
-    pub fn allow_tool(mut self, tool: Tool) -> AgentConfig<WithTools, NoSchema> {
+    /// use ironflow_core::provider::{AgentConfig, Tool};
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(serde::Deserialize, JsonSchema)]
+    /// struct Verdict { approved: bool }
+    ///
+    /// let config = AgentConfig::new("Read src/lib.rs and say if it is documented")
+    ///     .allow_tool(Tool::Read)
+    ///     .output::<Verdict>();
+    /// assert_eq!(config.allowed_tools, vec!["Read"]);
+    /// assert!(config.json_schema.is_some());
+    /// ```
+    pub fn allow_tool(mut self, tool: Tool) -> AgentConfig<WithTools, Schema> {
         self.allowed_tools.push(tool.to_string());
         self.change_state()
     }
@@ -1416,8 +1381,9 @@ impl<Tools> AgentConfig<Tools, NoSchema> {
     /// the provider does not have fails the step with
     /// [`AgentError::UnknownToolProfile`], never falling back to other tools.
     /// Claude CLI providers fail with [`AgentError::ToolProfileUnsupported`].
-    /// Like [`allow_tool`](Self::allow_tool), it rules out
-    /// [`output`](AgentConfig::output): split into two steps.
+    /// Like [`allow_tool`](Self::allow_tool), it keeps the schema set with
+    /// [`output`](AgentConfig::output); whether the model answers with it
+    /// once it has used tools depends on the HTTP backend.
     ///
     /// # Examples
     ///
@@ -1435,15 +1401,15 @@ impl<Tools> AgentConfig<Tools, NoSchema> {
     /// // COMPILE ERROR: a profile is a `ToolProfile`, not a string
     /// let _ = AgentConfig::new("x").tool_profile("bug");
     /// ```
-    pub fn tool_profile(mut self, profile: ToolProfile) -> AgentConfig<WithTools, NoSchema> {
+    pub fn tool_profile(mut self, profile: ToolProfile) -> AgentConfig<WithTools, Schema> {
         self.tool_profile = Some(profile);
         self.change_state()
     }
 }
 
-// ── output: only when no tools are set ─────────────────────────────
+// ── Schema: set the `Schema` marker, keep the tools ────────────────
 
-impl<Schema> AgentConfig<NoTools, Schema> {
+impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// Set structured output from a Rust type implementing [`JsonSchema`].
     ///
     /// The schema is serialized once at build time. When set, the provider
@@ -1451,17 +1417,13 @@ impl<Schema> AgentConfig<NoTools, Schema> {
     ///
     /// **Important:** structured output requires `max_turns >= 2`.
     ///
-    /// Returns an [`AgentConfig<NoTools, WithSchema<T>>`], which remembers
-    /// `T` (a workflow step built from it answers with a `T`) and **cannot**
-    /// call [`allow_tool`](AgentConfig::allow_tool).
-    ///
-    /// This restriction exists because Claude CLI has a
-    /// [known bug](https://github.com/anthropics/claude-code/issues/18536)
-    /// where `--json-schema` combined with `--allowedTools` always returns
-    /// `structured_output: null`.
-    ///
-    /// **Workaround**: use two sequential agent steps -- one with tools to
-    /// gather data, then one with `.output::<T>()` to structure the result.
+    /// Returns an [`AgentConfig<Tools, WithSchema<T>>`], which remembers
+    /// `T` (a workflow step built from it answers with a `T`) and keeps the
+    /// tools added with [`allow_tool`](AgentConfig::allow_tool): the agent can
+    /// use them, then answer with a `T`. Claude Code fills `structured_output`
+    /// with tools active (tested with 2.1.296 and 2.1.304), where
+    /// [claude-code#18536](https://github.com/anthropics/claude-code/issues/18536)
+    /// reported `null`.
     ///
     /// # Known limitations of Claude CLI structured output
     ///
@@ -1498,20 +1460,24 @@ impl<Schema> AgentConfig<NoTools, Schema> {
     ///     .output::<Labels>();
     /// ```
     ///
-    /// ```compile_fail,E0599
+    /// ```
     /// use ironflow_core::provider::{AgentConfig, Tool};
     /// use schemars::JsonSchema;
+    ///
     /// #[derive(serde::Deserialize, JsonSchema)]
     /// struct Out { x: i32 }
-    /// // ERROR: cannot add tools after setting structured output
-    /// let _ = AgentConfig::new("x").output::<Out>().allow_tool(Tool::Read);
+    ///
+    /// // Tools can come after the schema too.
+    /// let config = AgentConfig::new("x").output::<Out>().allow_tool(Tool::Read);
+    /// assert_eq!(config.allowed_tools, vec!["Read"]);
     /// ```
+    ///
     /// # Panics
     ///
     /// Panics if the schema generated by `schemars` cannot be serialized
     /// to JSON. This indicates a bug in the type's `JsonSchema` derive,
     /// not a recoverable runtime error.
-    pub fn output<T: JsonSchema>(mut self) -> AgentConfig<NoTools, WithSchema<T>> {
+    pub fn output<T: JsonSchema>(mut self) -> AgentConfig<Tools, WithSchema<T>> {
         let schema = schemars::schema_for!(T);
         let serialized = serde_json::to_string(&schema).unwrap_or_else(|e| {
             panic!(
@@ -1525,11 +1491,9 @@ impl<Schema> AgentConfig<NoTools, Schema> {
 
     /// Set structured output from a pre-serialized JSON Schema string.
     ///
-    /// Returns an [`AgentConfig<NoTools, RawSchema>`], whose answer is not
-    /// typed, and which **cannot** call [`allow_tool`](AgentConfig::allow_tool).
-    /// Prefer [`output`](Self::output). See it for the rationale and
-    /// workaround.
-    pub fn output_schema_raw(mut self, schema: &str) -> AgentConfig<NoTools, RawSchema> {
+    /// Returns an [`AgentConfig<Tools, RawSchema>`], whose answer is not
+    /// typed, and which keeps the tools. Prefer [`output`](Self::output).
+    pub fn output_schema_raw(mut self, schema: &str) -> AgentConfig<Tools, RawSchema> {
         self.json_schema = Some(schema.to_string());
         self.change_state()
     }
@@ -1551,6 +1515,18 @@ impl<T> From<AgentConfig<NoTools, WithSchema<T>>> for AgentConfig {
 
 impl From<AgentConfig<NoTools, RawSchema>> for AgentConfig {
     fn from(config: AgentConfig<NoTools, RawSchema>) -> Self {
+        config.change_state()
+    }
+}
+
+impl<T> From<AgentConfig<WithTools, WithSchema<T>>> for AgentConfig {
+    fn from(config: AgentConfig<WithTools, WithSchema<T>>) -> Self {
+        config.change_state()
+    }
+}
+
+impl From<AgentConfig<WithTools, RawSchema>> for AgentConfig {
+    fn from(config: AgentConfig<WithTools, RawSchema>) -> Self {
         config.change_state()
     }
 }

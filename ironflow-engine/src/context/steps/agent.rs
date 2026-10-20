@@ -122,7 +122,6 @@ impl WorkflowContext {
     /// }
     ///
     /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
-    /// // A structured step cannot use tools: it only reads its prompt.
     /// let reply = ctx
     ///     .agent_with_meta(
     ///         "triage",
