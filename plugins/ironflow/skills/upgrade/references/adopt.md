@@ -4,6 +4,26 @@ Each entry replaces a workaround. Nothing breaks if the project keeps the workar
 propose these one by one, never apply them in bulk. Most of them change the sequence of
 steps: see "Steps are replay keys" in the skill before applying.
 
+## agent-tools-and-output
+- kind: adopt
+- since: ironflow-engine 2.53.0 (#213)
+
+A step that had to read code and then return a typed verdict used to cost two agent
+steps: one with tools, one with `.output::<T>()` reformatting the first one's text. One
+step does both now (tested with Claude Code 2.1.296 and 2.1.304).
+
+```diff
+- let notes = ctx.agent("read", AgentStepConfig::new(&read_prompt).allow_tool(Tool::Read)).await?;
+- let verdict = ctx
+-     .agent("verdict", AgentStepConfig::new(&format!("Verdict from:\n{}", notes.text())).output::<Verdict>())
+-     .await?;
++ let verdict = ctx
++     .agent("verdict", AgentStepConfig::new(&read_prompt).allow_tool(Tool::Read).output::<Verdict>())
++     .await?;
+```
+
+Raise `max_turns` by one per round of tool calls. Section: Agent.
+
 ## wait-for-signal
 - kind: adopt
 - since: ironflow-engine 2.43.0 (#146)

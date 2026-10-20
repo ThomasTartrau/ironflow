@@ -546,10 +546,11 @@ fn shell_escape(s: &str) -> String {
 /// the `structured_output` field unreliable:
 ///
 /// - When tools are used alongside `--json-schema`, `structured_output`
-///   is always `null` (the result lands in `result` as markdown text).
+///   was reported `null`, the answer left in `result` as markdown text.
 ///   See <https://github.com/anthropics/claude-code/issues/18536>.
-///   This case is blocked at compile time by the typestate, but defensive
-///   fallbacks remain for forward compatibility.
+///   Claude Code 2.1.296 and 2.1.304 fill it; the fallbacks keep a CLI that
+///   still returns `null` working, and a `result` with no JSON in it fails
+///   with [`AgentError::SchemaValidation`], never with a null answer.
 /// - The CLI does not validate output against the schema; it may return
 ///   malformed or non-conforming JSON.
 ///   See <https://github.com/anthropics/claude-code/issues/9058>.
@@ -1849,53 +1850,12 @@ mod tests {
 
     #[test]
     fn build_args_includes_both_tools_and_json_schema() {
-        use std::marker::PhantomData;
-
-        use crate::operations::agent::PermissionMode;
-        use crate::provider::PodSettings;
-
-        // Use direct field access to bypass typestate (testing CLI arg construction,
-        // not the builder API -- this combination triggers a Claude CLI bug).
-        let config = AgentConfig {
-            prompt: "test prompt".to_string(),
-            model: "sonnet".to_string(),
-            json_schema: Some(
-                r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string(),
-            ),
-            allowed_tools: vec!["WebSearch".to_string(), "WebFetch".to_string()],
-            disallowed_tools: vec![],
-            tool_profile: None,
-            max_turns: Some(5),
-            max_parallel_tools: 4,
-            permission_mode: PermissionMode::Default,
-            system_prompt: None,
-            append_system_prompt: None,
-            max_budget_usd: None,
-            working_dir: None,
-            mcp_config: None,
-            strict_mcp_config: false,
-            bare: false,
-            resume_session_id: None,
-            session_id: None,
-            resume_prompt: None,
-            resume_environment_id: None,
-            effort: None,
-            verbose: false,
-            pod_labels: std::collections::BTreeMap::new(),
-            pod: PodSettings::default(),
-            inputs: Vec::new(),
-            allow_failure: false,
-            retry: None,
-            trace_context: None,
-            account: None,
-            proxied_secrets: Vec::new(),
-            max_capacity_wait: None,
-            account_name: None,
-            account_pool: None,
-            rate_limits: None,
-            capacity_wait_since: None,
-            _marker: PhantomData,
-        };
+        let config: AgentConfig = AgentConfig::new("test prompt")
+            .allow_tool(Tool::WebSearch)
+            .allow_tool(Tool::WebFetch)
+            .max_turns(5)
+            .output_schema_raw(r#"{"type":"object","properties":{"items":{"type":"array"}}}"#)
+            .into();
 
         let args = build_args(&config).unwrap();
 
