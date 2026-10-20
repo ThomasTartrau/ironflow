@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.53.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.52.8...ironflow-engine-v2.53.0) - 2026-10-20
+
+### Added
+
+- #213 allow tools and typed output on the same agent step
+
 ## [2.52.8](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.52.7...ironflow-engine-v2.52.8) - 2026-10-16
 
 ### Fixed
