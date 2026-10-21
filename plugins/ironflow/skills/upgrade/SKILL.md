@@ -111,7 +111,8 @@ kind present. In `--apply` mode, skip the question for everything but `adopt`.
 - One catalogue entry at a time, in the order of the table above. After each:
   `cargo check --workspace --all-targets`. Do not start the next with new errors.
 - The `+` side of each entry and the compiled snippets of
-  `${CLAUDE_SKILL_DIR}/../workflow/references/steps.md` are the target form. Imports go at
+  `${CLAUDE_SKILL_DIR}/../workflow/references/steps.md` and `sub-workflows.md` are the
+  target form. Imports go at
   the top of the file with `use`.
 - **Steps are replay keys.** A run waiting on an approval, a human input or a signal
   replays its handler by step name and order; a changed sequence fails it with

@@ -39,6 +39,7 @@ use metrics::{counter, gauge, histogram};
 
 use crate::artifact::ArtifactSink;
 use crate::budget::{BudgetConfig, month_start};
+use crate::chain::ChainClaim;
 use crate::context::{PARENT_RUN_ID_LABEL, WorkflowContext, interrupt_running_steps};
 use crate::error::EngineError;
 use crate::executor::{StepInterceptor, StepResult};
@@ -141,7 +142,7 @@ pub struct EnqueueOptions {
     /// [`EngineError::InvalidConcurrencyLimit`].
     pub concurrency_limits: Vec<ConcurrencyLimit>,
     /// Queue priority of the run, overriding
-    /// [`WorkflowHandler::priority`](crate::handler::WorkflowHandler::priority).
+    /// [`WorkflowHandler::priority`].
     ///
     /// Workers pick the pending run with the highest priority first, then the
     /// oldest among equal priorities. `None` falls back to the handler's
@@ -1540,9 +1541,11 @@ impl Engine {
     ///
     /// The root waits without `scheduled_at` while its child is suspended, so
     /// nothing but this path ever wakes it. It is moved to `Running` and
-    /// resumed; its replay re-enters the child. A root that is not suspended
-    /// (already running, or finished) cannot take the child back: the child
-    /// is failed.
+    /// resumed; its replay re-enters the child. A root already running, resumed
+    /// by a sibling of the child in a wave, is waited for: if it re-entered the
+    /// child meanwhile, the root is returned as it stands and nothing else
+    /// runs. A finished root cannot take the child back: the child is failed
+    /// (see [`claim_chain_root`](Self::claim_chain_root)).
     ///
     /// When the child holds a worker lease (it was picked by a worker), the
     /// lease is transferred to the root in the same update that moves it to
@@ -1557,39 +1560,16 @@ impl Engine {
     ) -> Result<WorkflowResult, EngineError> {
         let child_run_id = child.id;
         let lease = child.worker_id.zip(child.lease_expires_at);
-        let root = self
-            .store
-            .get_run(root_run_id)
+        match self
+            .claim_chain_root(child_run_id, root_run_id, lease.as_ref())
             .await?
-            .ok_or(EngineError::Store(StoreError::RunNotFound(root_run_id)))?;
-
-        match root.status.state {
-            RunStatus::AwaitingApproval | RunStatus::Pending => {
-                self.move_root_to_running(root_run_id, lease.as_ref())
-                    .await?;
-            }
-            RunStatus::Sleeping => {
-                self.store
-                    .update_run_status(root_run_id, RunStatus::Pending)
-                    .await?;
-                self.move_root_to_running(root_run_id, lease.as_ref())
-                    .await?;
-            }
-            other => {
-                let reason = format!(
-                    "cannot resume child run {child_run_id}: root run {root_run_id} is {other}"
-                );
-                if let Err(err) = self
-                    .fail_or_schedule_retry(child_run_id, &reason, false, None, None)
-                    .await
-                {
-                    error!(
-                        run_id = %child_run_id,
-                        error = %err,
-                        "failed to fail a child run whose root cannot resume"
-                    );
-                }
-                return Err(EngineError::InvalidWorkflow(reason));
+        {
+            ChainClaim::Claimed => {}
+            ChainClaim::Settled(root) => {
+                return Ok(WorkflowResult {
+                    run: *root,
+                    steps: Vec::new(),
+                });
             }
         }
 
@@ -1625,7 +1605,7 @@ impl Engine {
     /// With `lease`, the root takes the worker lease of the child that
     /// resumes it, atomically with the transition, so it is never `Running`
     /// without an owner.
-    async fn move_root_to_running(
+    pub(crate) async fn move_root_to_running(
         &self,
         root_run_id: Uuid,
         lease: Option<&(String, DateTime<Utc>)>,
@@ -2404,37 +2384,10 @@ impl Engine {
                     "run suspended with its child run"
                 );
 
-                match leaf {
-                    EngineError::ApprovalRequired {
-                        run_id: approval_run_id,
-                        step_id,
-                        message,
-                    } => {
-                        self.publish_approval_requested(*approval_run_id, *step_id, message)
-                            .await?;
-                    }
-                    EngineError::SignalWaiting {
-                        run_id: wait_run_id,
-                        step_id,
-                        step_name,
-                        name,
-                        key,
-                        deadline_at,
-                    } => {
-                        self.event_publisher
-                            .publish(Event::SignalAwaited(SignalAwaitedEvent {
-                                run_id: *wait_run_id,
-                                step_id: *step_id,
-                                step_name: step_name.clone(),
-                                name: name.clone(),
-                                key: key.clone(),
-                                deadline_at: *deadline_at,
-                                at: Utc::now(),
-                            }));
-                    }
-                    // A human input or a delay publishes no suspension event,
-                    // like on a top-level run.
-                    _ => {}
+                self.publish_suspension(leaf).await?;
+                // A wave reports its first suspended child: the others wait too.
+                for sibling in ctx.sibling_suspensions() {
+                    self.publish_suspension(sibling.suspension_leaf()).await?;
                 }
             }
             Err(EngineError::HumanInputRequired {
@@ -2682,7 +2635,7 @@ impl Engine {
 
     /// Publish [`Event::ApprovalRequested`] for an approval gate that opened
     /// on `run_id`, with the requirement recorded when the gate opened.
-    async fn publish_approval_requested(
+    pub(crate) async fn publish_approval_requested(
         &self,
         run_id: Uuid,
         step_id: Uuid,

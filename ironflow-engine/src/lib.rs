@@ -57,6 +57,7 @@ pub mod accounts;
 pub mod artifact;
 pub mod budget;
 pub mod cancel;
+mod chain;
 pub mod config;
 pub mod context;
 pub mod decision;

@@ -12,9 +12,16 @@
 //! With `allow_failure` (see [`WorkflowContext::workflow_with`]) a child whose
 //! handler fails is still marked failed, but the parent's step completes with
 //! the failure in its [`SubWorkflowOutput`].
+//!
+//! [`WorkflowContext::workflows_with`] records a wave of `Workflow` steps at
+//! one position and runs their children concurrently (see [`wave`]).
+//!
+//! The child run itself is prepared in [`child`] and executed in
+//! [`child_run`].
 
-use std::collections::HashMap;
-use std::time::Instant;
+mod child;
+mod child_run;
+mod wave;
 
 use chrono::Utc;
 use rust_decimal::Decimal;
@@ -22,22 +29,20 @@ use serde_json::{Value, from_value, json, to_value};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use ironflow_core::provider::LABEL_ROOT_RUN_ID;
-use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    NewRun, NewStep, ProviderKind, Run, RunStatus, RunUpdate, Step, StepKind, StepStatus,
-    StepUpdate, TriggerKind, normalize_worker_tags, step_trace_id,
+    NewStep, RunStatus, Step, StepKind, StepStatus, StepUpdate, normalize_worker_tags,
+    step_trace_id,
 };
 
 use crate::config::{WorkflowOptions, WorkflowStepConfig};
+use crate::context::WorkflowContext;
 use crate::context::lifecycle::check_replay_identity;
-use crate::context::{PARENT_RUN_ID_LABEL, WorkflowContext, interrupt_running_steps};
 use crate::error::EngineError;
 use crate::executor::{
     ConcurrencyConflict, RecordedWorkflowStep, SubWorkflowOutcome, SubWorkflowOutput,
 };
 use crate::guard::WorkflowRejection;
-use crate::handler::{TypedWorkflow, WorkflowHandler, clamp_priority};
+use crate::handler::{TypedWorkflow, WorkflowHandler};
 use crate::plan::{SharedPlanRecorder, lock_plan};
 
 /// Key of the open `Workflow` step output that records the child run id.
@@ -91,34 +96,10 @@ enum ChildOutcome {
     Conflict(ConcurrencyConflict),
 }
 
-/// The outcome of a child run found `Cancelled`: with `allow_failure`, a
-/// `Cancelled` output carrying the child's error; otherwise
-/// [`EngineError::ChildRunCancelled`], which fails the step and the parent.
-fn cancelled_child_outcome(
-    config: &WorkflowStepConfig,
-    child: &Run,
-    cost_usd: Decimal,
-    duration_ms: u64,
-    output: Option<Value>,
-) -> Result<ChildOutcome, EngineError> {
-    let cancelled = EngineError::ChildRunCancelled { run_id: child.id };
-    if !config.allow_failure {
-        return Err(cancelled);
-    }
-    let error = child.error.clone().unwrap_or_else(|| cancelled.to_string());
-    let status = RunStatus::Cancelled;
-    Ok(ChildOutcome::Finished(
-        SubWorkflowOutput::new(
-            child.id,
-            &config.workflow_name,
-            status,
-            cost_usd,
-            duration_ms,
-        )
-        .with_output(output)
-        .with_error(error),
-        true,
-    ))
+/// Whether `err` stops the parent without closing the child's step: the next
+/// replay re-enters the same child run.
+fn leaves_step_open(err: &EngineError) -> bool {
+    err.is_suspension() || matches!(err, EngineError::RunPaused { .. })
 }
 
 /// The output of a `workflow` or `workflow_dyn` step, which records no
@@ -365,29 +346,23 @@ impl WorkflowContext {
         payload: Value,
         options: WorkflowOptions,
     ) -> Result<SubWorkflowOutcome, EngineError> {
+        let (step_name, config) = options.into_step_config(handler.name(), payload);
+
         // Plan mode: record the invocation, expand the child handler in the
         // same recorder, and return a synthetic output. No child run is
         // created and no step of the child is executed.
         if let Some(plan) = self.plan().cloned() {
-            let planned = self.plan_sub_workflow(&plan, handler, payload).await?;
+            let planned = self
+                .plan_sub_workflow(&plan, handler, &step_name, config.payload)
+                .await?;
             return Ok(SubWorkflowOutcome::Completed(planned));
         }
 
-        let mut config = WorkflowStepConfig::new(handler.name(), payload);
-        config.allow_failure = options.allow_failure;
-        let (concurrency_key, priority) = options.into_parts();
-        config.concurrency_key = concurrency_key;
-        config.priority = priority;
         let position = self.position;
 
         let existing = self.replay_steps.get(&position).cloned();
         if let Some(existing) = &existing {
-            check_replay_identity(
-                existing,
-                position,
-                &config.workflow_name,
-                &StepKind::Workflow,
-            )?;
+            check_replay_identity(existing, position, &step_name, &StepKind::Workflow)?;
             if existing.status.state == StepStatus::Completed {
                 return self.replay_sub_workflow(existing);
             }
@@ -395,81 +370,117 @@ impl WorkflowContext {
 
         // A step interrupted by a lost lease must be the same step the handler
         // calls now before its child run is re-entered.
-        let interrupted = self.interrupted_children.get(&position).cloned();
+        let interrupted = self
+            .interrupted_children
+            .get(&(position, step_name.clone()))
+            .cloned();
         if let Some(interrupted) = &interrupted {
-            check_replay_identity(
-                interrupted,
-                position,
-                &config.workflow_name,
-                &StepKind::Workflow,
-            )?;
+            check_replay_identity(interrupted, position, &step_name, &StepKind::Workflow)?;
         }
 
         // A child runs on the worker that runs its parent: refuse it here
         // rather than run it on a host missing what it requires.
         self.check_child_worker_tags(handler)?;
 
-        // Guard check: verify limits before creating the step.
+        // Guard: verify the limits and claim the invocation before creating the
+        // step (fail-closed). The claim is atomic, so a sibling of a wave
+        // running its own child at the same time cannot cross the fan-out too.
         if let (Some(guard_config), Some(guard_state)) = (&self.guard_config, &self.guard_state) {
-            let state = guard_state
+            guard_state
                 .lock()
-                .map_err(|_| WorkflowRejection::GuardUnavailable)?;
-            state.check(guard_config, handler.name())?;
+                .map_err(|_| WorkflowRejection::GuardUnavailable)?
+                .enter(guard_config, handler.name())?;
         }
 
         // Paused while it ran: no child is started, the run stops here.
-        self.check_not_paused().await?;
+        if let Err(err) = self.check_not_paused().await {
+            self.guard_record_return();
+            return Err(err);
+        }
 
         self.position += 1;
 
         // An open step was left by a child that suspended: reuse it instead of
         // recording a second step at the same position.
-        let (step, resume) = match existing.filter(|s| s.status.state == StepStatus::Running) {
-            Some(step) => {
-                let resume = recorded_child_run_id(&step).map(ChildResume::Suspended);
-                (step, resume)
-            }
+        let (step_id, resume) = match existing.filter(|s| s.status.state == StepStatus::Running) {
+            Some(step) => (
+                step.id,
+                recorded_child_run_id(&step).map(ChildResume::Suspended),
+            ),
             None => {
-                let trace_id = step_trace_id(self.run_id, &config.workflow_name, position);
-                let step = self
-                    .store
-                    .create_step(NewStep {
-                        run_id: self.run_id,
-                        trace_id,
-                        name: config.workflow_name.clone(),
-                        kind: StepKind::Workflow,
-                        position,
-                        input: Some(to_value(&config)?),
-                        is_error_handler: false,
-                    })
-                    .await?;
-
-                self.start_step(step.id, Utc::now()).await?;
+                let recorded = self
+                    .record_workflow_step(&step_name, &config, position)
+                    .await;
+                let step_id = match recorded {
+                    Ok(step_id) => step_id,
+                    Err(err) => {
+                        self.guard_record_return();
+                        return Err(err);
+                    }
+                };
                 // A step interrupted by a lost lease re-enters the child run it
                 // recorded instead of starting a new one.
                 let resume = interrupted
                     .as_ref()
                     .and_then(recorded_child_run_id)
                     .map(ChildResume::Interrupted);
-                (step, resume)
+                (step_id, resume)
             }
         };
 
-        // Record invocation in guard state (fail-closed).
-        if let Some(guard_state) = &self.guard_state {
-            let mut state = guard_state
-                .lock()
-                .map_err(|_| WorkflowRejection::GuardUnavailable)?;
-            state.record_invocation(handler.name());
+        let run = self.execute_child_workflow(&config, step_id, resume).await;
+        if matches!(&run.result, Err(err) if err.is_suspension()) {
+            self.sibling_suspensions.extend(run.sibling_suspensions);
         }
+        let settled = self.settle_child_step(step_id, &config, run.result).await;
+        self.guard_record_return();
+        if settled.is_ok() {
+            self.last_step_ids = vec![step_id];
+        }
+        settled
+    }
 
-        match self.execute_child_workflow(&config, step.id, resume).await {
+    /// Record a `Workflow` step at `position` and start it.
+    async fn record_workflow_step(
+        &self,
+        step_name: &str,
+        config: &WorkflowStepConfig,
+        position: u32,
+    ) -> Result<Uuid, EngineError> {
+        let step = self
+            .store
+            .create_step(NewStep {
+                run_id: self.run_id,
+                trace_id: step_trace_id(self.run_id, step_name, position),
+                name: step_name.to_string(),
+                kind: StepKind::Workflow,
+                position,
+                input: Some(to_value(config)?),
+                is_error_handler: false,
+            })
+            .await?;
+        self.start_step(step.id, Utc::now()).await?;
+        Ok(step.id)
+    }
+
+    /// Close the `Workflow` step `step_id` from what its child produced, and
+    /// account for the child on this run.
+    ///
+    /// A suspended or paused child leaves the step open, neither failed nor
+    /// completed, so the next replay re-enters the same child run.
+    async fn settle_child_step(
+        &mut self,
+        step_id: Uuid,
+        config: &WorkflowStepConfig,
+        result: Result<ChildOutcome, EngineError>,
+    ) -> Result<SubWorkflowOutcome, EngineError> {
+        match result {
             // No child run was created: the step completes with the conflict
             // as its output, so a replay serves the same outcome.
             Ok(ChildOutcome::Conflict(conflict)) => {
                 self.store
                     .update_step(
-                        step.id,
+                        step_id,
                         StepUpdate {
                             status: Some(StepStatus::Completed),
                             output: Some(json!({ "concurrency_conflict": conflict })),
@@ -488,29 +499,26 @@ impl WorkflowContext {
                     holder = %conflict.run_id(),
                     "workflow step skipped: concurrency conflict"
                 );
-
-                self.last_step_ids = vec![step.id];
-
-                self.guard_record_return();
                 Ok(SubWorkflowOutcome::Conflict(conflict))
             }
             Ok(ChildOutcome::Finished(output, child_had_allowed_failure)) => {
+                // Not `charge_cost`: a child sharing this run's live total
+                // charged its cost there already, step by step.
                 self.total_cost_usd += output.cost_usd();
                 self.total_duration_ms += output.duration_ms();
                 if child_had_allowed_failure {
                     self.has_allowed_failure = true;
                 }
 
-                let completed_at = Utc::now();
                 self.store
                     .update_step(
-                        step.id,
+                        step_id,
                         StepUpdate {
                             status: Some(StepStatus::Completed),
                             output: Some(to_value(&output)?),
                             duration_ms: Some(output.duration_ms()),
                             cost_usd: Some(output.cost_usd()),
-                            completed_at: Some(completed_at),
+                            completed_at: Some(Utc::now()),
                             ..StepUpdate::default()
                         },
                     )
@@ -522,37 +530,25 @@ impl WorkflowContext {
                     duration_ms = output.duration_ms(),
                     "workflow step completed"
                 );
-
-                self.last_step_ids = vec![step.id];
-
-                self.guard_record_return();
                 Ok(SubWorkflowOutcome::Completed(output))
             }
-            // The child suspended or was paused: the step stays open, neither
-            // failed nor completed, so the next replay re-enters the same child run.
-            Err(err) if err.is_suspension() || matches!(err, EngineError::RunPaused { .. }) => {
-                self.guard_record_return();
-                Err(err)
-            }
+            Err(err) if leaves_step_open(&err) => Err(err),
             Err(err) => {
-                let completed_at = Utc::now();
                 if let Err(store_err) = self
                     .store
                     .update_step(
-                        step.id,
+                        step_id,
                         StepUpdate {
                             status: Some(StepStatus::Failed),
                             error: Some(err.to_string()),
-                            completed_at: Some(completed_at),
+                            completed_at: Some(Utc::now()),
                             ..StepUpdate::default()
                         },
                     )
                     .await
                 {
-                    error!(step_id = %step.id, error = %store_err, "failed to persist step failure");
+                    error!(step_id = %step_id, error = %store_err, "failed to persist step failure");
                 }
-
-                self.guard_record_return();
                 Err(err)
             }
         }
@@ -564,6 +560,15 @@ impl WorkflowContext {
     /// A step skipped on a concurrency conflict replays the same conflict: the
     /// child is not attempted again, even if the key has been released since.
     fn replay_sub_workflow(&mut self, step: &Step) -> Result<SubWorkflowOutcome, EngineError> {
+        let outcome = self.replay_recorded_child(step)?;
+        self.position += 1;
+        self.last_step_ids = vec![step.id];
+        Ok(outcome)
+    }
+
+    /// The outcome recorded on a completed `Workflow` step, accounted for on
+    /// this run like the first time, without moving the position.
+    fn replay_recorded_child(&mut self, step: &Step) -> Result<SubWorkflowOutcome, EngineError> {
         let recorded = step.output.clone().ok_or_else(|| {
             EngineError::StepConfig(format!(
                 "completed workflow step {} has no recorded output",
@@ -571,9 +576,6 @@ impl WorkflowContext {
             ))
         })?;
         let recorded: RecordedWorkflowStep = from_value(recorded)?;
-
-        self.position += 1;
-        self.last_step_ids = vec![step.id];
 
         let output = match SubWorkflowOutcome::from(recorded) {
             SubWorkflowOutcome::Completed(output) => output,
@@ -640,9 +642,29 @@ impl WorkflowContext {
         &mut self,
         plan: &SharedPlanRecorder,
         handler: &dyn WorkflowHandler,
+        step_name: &str,
         payload: Value,
     ) -> Result<SubWorkflowOutput, EngineError> {
         self.position += 1;
+        {
+            let mut recorder = lock_plan(plan);
+            recorder.record_or_stop(step_name, StepKind::Workflow, &self.workflow_name, None)?;
+            recorder.set_last(vec![step_name.to_string()]);
+        }
+        Ok(self.expand_planned_child(plan, handler, payload).await)
+    }
+
+    /// Expand `handler` into the plan, when the depth limit allows it, and
+    /// return the synthetic output of its step.
+    ///
+    /// The child plans against its own payload and under its own workflow
+    /// name; the parent's payload is restored on the way out.
+    async fn expand_planned_child(
+        &self,
+        plan: &SharedPlanRecorder,
+        handler: &dyn WorkflowHandler,
+        payload: Value,
+    ) -> SubWorkflowOutput {
         let sub_name = handler.name().to_string();
         // No child run exists while planning: a nil id and zero metrics.
         let planned = SubWorkflowOutput::new(
@@ -652,12 +674,6 @@ impl WorkflowContext {
             Decimal::ZERO,
             0,
         );
-
-        {
-            let mut recorder = lock_plan(plan);
-            recorder.record_or_stop(&sub_name, StepKind::Workflow, &self.workflow_name, None)?;
-            recorder.set_last(vec![sub_name.clone()]);
-        }
 
         let expand = lock_plan(plan).enter_workflow();
         if expand {
@@ -683,513 +699,6 @@ impl WorkflowContext {
             recorder.leave_workflow();
         }
 
-        Ok(planned)
-    }
-
-    /// Execute a child workflow and return aggregated output plus whether
-    /// at least one `allow_failure` step failed.
-    ///
-    /// When another active run holds the step's concurrency key, no child run
-    /// is created and [`ChildOutcome::Conflict`] is returned.
-    ///
-    /// `resume` is the child run recorded on an open or interrupted step: that
-    /// run is re-entered, with its completed steps replayed, instead of
-    /// creating a new one. A child re-entered after a lost lease has its
-    /// `Running` steps marked interrupted first, like a requeued run, and the
-    /// new step records the same child run so a second interruption re-enters
-    /// it again. A child that suspends is left in its suspension status and
-    /// [`EngineError::ChildSuspended`] is returned.
-    async fn execute_child_workflow(
-        &self,
-        config: &WorkflowStepConfig,
-        step_id: Uuid,
-        resume: Option<ChildResume>,
-    ) -> Result<ChildOutcome, EngineError> {
-        let resolver = self.handler_resolver.as_ref().ok_or_else(|| {
-            EngineError::InvalidWorkflow(
-                "sub-workflow requires a handler resolver (use Engine to execute)".to_string(),
-            )
-        })?;
-
-        let handler = resolver(&config.workflow_name).ok_or_else(|| {
-            EngineError::InvalidWorkflow(format!("no handler registered: {}", config.workflow_name))
-        })?;
-
-        let (child_run_id, carried_cost_usd, carried_duration_ms) = match resume {
-            Some(resume) => {
-                let child_run_id = resume.run_id();
-                if let ChildResume::Interrupted(_) = resume {
-                    self.store
-                        .update_step(
-                            step_id,
-                            StepUpdate {
-                                output: Some(json!({ CHILD_RUN_ID_KEY: child_run_id })),
-                                ..StepUpdate::default()
-                            },
-                        )
-                        .await?;
-                }
-
-                let child_run = self
-                    .store
-                    .get_run(child_run_id)
-                    .await?
-                    .ok_or(EngineError::Store(StoreError::RunNotFound(child_run_id)))?;
-
-                match child_run.status.state {
-                    // Left running by the worker that lost the lease: its open
-                    // steps are executed again, like those of a requeued run.
-                    RunStatus::Running if matches!(resume, ChildResume::Interrupted(_)) => {
-                        interrupt_running_steps(self.store.as_ref(), child_run_id).await?;
-                    }
-                    // Already moved to Running by the path that resumed it.
-                    RunStatus::Running => {}
-                    RunStatus::AwaitingApproval | RunStatus::Pending => {
-                        self.store
-                            .update_run_status(child_run_id, RunStatus::Running)
-                            .await?;
-                    }
-                    RunStatus::Sleeping => {
-                        self.store
-                            .update_run_status(child_run_id, RunStatus::Pending)
-                            .await?;
-                        self.store
-                            .update_run_status(child_run_id, RunStatus::Running)
-                            .await?;
-                    }
-                    // Cancelled while the chain waited, or before the parent
-                    // closed its step: the cancellation is the outcome.
-                    RunStatus::Cancelled => {
-                        return cancelled_child_outcome(
-                            config,
-                            &child_run,
-                            child_run.cost_usd,
-                            child_run.duration_ms,
-                            child_run.output.clone(),
-                        );
-                    }
-                    // The child finished but the parent stopped before closing
-                    // its step: report the recorded outcome, run nothing.
-                    status @ RunStatus::Failed if config.allow_failure => {
-                        let error = child_run
-                            .error
-                            .clone()
-                            .unwrap_or_else(|| "child run failed".to_string());
-                        return Ok(ChildOutcome::Finished(
-                            SubWorkflowOutput::new(
-                                child_run_id,
-                                &config.workflow_name,
-                                status,
-                                child_run.cost_usd,
-                                child_run.duration_ms,
-                            )
-                            .with_output(child_run.output.clone())
-                            .with_error(error),
-                            true,
-                        ));
-                    }
-                    status @ (RunStatus::Completed | RunStatus::Warning) => {
-                        return Ok(ChildOutcome::Finished(
-                            SubWorkflowOutput::new(
-                                child_run_id,
-                                &config.workflow_name,
-                                status,
-                                child_run.cost_usd,
-                                child_run.duration_ms,
-                            )
-                            .with_output(child_run.output.clone()),
-                            status == RunStatus::Warning,
-                        ));
-                    }
-                    other => {
-                        return Err(EngineError::InvalidWorkflow(format!(
-                            "child run {child_run_id} is {other}"
-                        )));
-                    }
-                }
-
-                info!(
-                    parent_run_id = %self.run_id,
-                    child_run_id = %child_run_id,
-                    workflow = %config.workflow_name,
-                    "child run re-entered"
-                );
-                (child_run_id, child_run.cost_usd, child_run.duration_ms)
-            }
-            None => {
-                let priority = config
-                    .priority
-                    .unwrap_or_else(|| clamp_priority(handler.priority()));
-                let child_run_id = match self
-                    .create_child_run(config, priority, handler.as_ref())
-                    .await
-                {
-                    Ok(id) => id,
-                    Err(EngineError::ConcurrencyConflict { key, run_id }) => {
-                        return Ok(ChildOutcome::Conflict(ConcurrencyConflict::new(
-                            key, run_id,
-                        )));
-                    }
-                    Err(err) => return Err(err),
-                };
-
-                // Recorded before the child runs, so a suspension of the child
-                // can be resumed into this same run.
-                self.store
-                    .update_step(
-                        step_id,
-                        StepUpdate {
-                            output: Some(json!({ CHILD_RUN_ID_KEY: child_run_id })),
-                            ..StepUpdate::default()
-                        },
-                    )
-                    .await?;
-
-                self.store
-                    .update_run_status(child_run_id, RunStatus::Running)
-                    .await?;
-                (child_run_id, Decimal::ZERO, 0)
-            }
-        };
-
-        let run_start = Instant::now();
-        let mut child_ctx = WorkflowContext {
-            run_id: child_run_id,
-            root_run_id: self.root_run_id,
-            workflow_name: config.workflow_name.clone(),
-            store: self.store.clone(),
-            provider: self.provider.clone(),
-            decision_provider: self.decision_provider.clone(),
-            handler_resolver: self.handler_resolver.clone(),
-            position: 0,
-            last_step_ids: Vec::new(),
-            // A re-entered child starts from what it already spent, like a
-            // resumed top-level run.
-            total_cost_usd: carried_cost_usd,
-            total_duration_ms: 0,
-            max_cost_usd: self.max_cost_usd,
-            // Everything the parent chain already spent counts against the
-            // shared cap, so the child cannot restart the budget from zero.
-            inherited_cost_usd: self.charged_cost_usd(),
-            replay_steps: HashMap::new(),
-            replay_wave_steps: HashMap::new(),
-            granted_approvals: HashMap::new(),
-            answered_inputs: HashMap::new(),
-            interrupted_children: HashMap::new(),
-            // A child run is never itself retried.
-            attempt: 1,
-            carried_duration_ms,
-            log_sender: self.log_sender.clone(),
-            // A child shares the storage backend but not the parent's artifacts:
-            // input lookups are scoped to the child's own run.
-            artifact_sink: self.artifact_sink.clone(),
-            has_allowed_failure: false,
-            error_handlers: Vec::new(),
-            guard_state: self.guard_state.clone(),
-            guard_config: self.guard_config.clone(),
-            step_results: Vec::new(),
-            event_bus: self.event_bus.clone(),
-            // A child run is mocked exactly like its parent.
-            interceptor: self.interceptor.clone(),
-            trace_context: self.trace_context.child(),
-            operation_ctx: None,
-            run_created_at: None,
-            plan: None,
-            output: None,
-            worker_tags: self.worker_tags.clone(),
-        };
-
-        // A re-entered child replays its completed steps and is served the
-        // answer, signal or elapsed delay it was suspended on.
-        let loaded = if resume.is_some() {
-            child_ctx.load_replay_steps().await
-        } else {
-            Ok(())
-        };
-        let result = match loaded {
-            Ok(()) => handler.execute(&mut child_ctx).await,
-            Err(err) => Err(err),
-        };
-        let total_duration = child_ctx.carried_duration_ms + run_start.elapsed().as_millis() as u64;
-        let completed_at = Utc::now();
-
-        // Cancelled while it ran: whatever the handler returned, the child
-        // stays cancelled and the cancellation is its outcome.
-        if let Some(child_run) = self.store.get_run(child_run_id).await? {
-            match child_run.status.state {
-                RunStatus::Cancelled => {
-                    return cancelled_child_outcome(
-                        config,
-                        &child_run,
-                        child_ctx.total_cost_usd,
-                        total_duration,
-                        child_ctx.output().cloned(),
-                    );
-                }
-                // Paused with its root while it ran: the child is left as the
-                // pause recorded it and the parent stops with it.
-                RunStatus::Paused => {
-                    info!(
-                        parent_run_id = %self.run_id,
-                        child_run_id = %child_run_id,
-                        "child run paused"
-                    );
-                    return Err(EngineError::RunPaused {
-                        run_id: child_run_id,
-                    });
-                }
-                _ => {}
-            }
-        }
-
-        match result {
-            Ok(()) => {
-                let child_status = if child_ctx.has_allowed_failure {
-                    RunStatus::Warning
-                } else {
-                    RunStatus::Completed
-                };
-                self.store
-                    .update_run(
-                        child_run_id,
-                        RunUpdate {
-                            status: Some(child_status),
-                            cost_usd: Some(child_ctx.total_cost_usd),
-                            duration_ms: Some(total_duration),
-                            completed_at: Some(completed_at),
-                            output: child_ctx.output().cloned(),
-                            ..RunUpdate::default()
-                        },
-                    )
-                    .await?;
-
-                let child_had_allowed_failure = child_ctx.has_allowed_failure;
-                Ok(ChildOutcome::Finished(
-                    SubWorkflowOutput::new(
-                        child_run_id,
-                        &config.workflow_name,
-                        child_status,
-                        child_ctx.total_cost_usd,
-                        total_duration,
-                    )
-                    .with_output(child_ctx.output().cloned()),
-                    child_had_allowed_failure,
-                ))
-            }
-            Err(err) if err.is_suspension() => {
-                match self
-                    .suspend_child_run(child_run_id, &err, child_ctx.total_cost_usd, total_duration)
-                    .await
-                {
-                    Ok(()) => {
-                        info!(
-                            parent_run_id = %self.run_id,
-                            child_run_id = %child_run_id,
-                            cause = %err.suspension_leaf(),
-                            "child run suspended"
-                        );
-                        Err(EngineError::ChildSuspended {
-                            run_id: child_run_id,
-                            cause: Box::new(err),
-                        })
-                    }
-                    Err(store_err) => {
-                        self.fail_child_run(
-                            child_run_id,
-                            RunStatus::Failed,
-                            &store_err,
-                            child_ctx.total_cost_usd,
-                            total_duration,
-                            child_ctx.output().cloned(),
-                        )
-                        .await;
-                        Err(store_err)
-                    }
-                }
-            }
-            Err(err) => {
-                // The engine cancels top-level runs stopped by a guardrail.
-                let status = if matches!(
-                    err,
-                    EngineError::RunBudgetExceeded { .. } | EngineError::WorkflowGuardRejected(_)
-                ) {
-                    RunStatus::Cancelled
-                } else {
-                    RunStatus::Failed
-                };
-                self.fail_child_run(
-                    child_run_id,
-                    status,
-                    &err,
-                    child_ctx.total_cost_usd,
-                    total_duration,
-                    child_ctx.output().cloned(),
-                )
-                .await;
-                if config.allow_failure {
-                    return Ok(ChildOutcome::Finished(
-                        SubWorkflowOutput::new(
-                            child_run_id,
-                            &config.workflow_name,
-                            status,
-                            child_ctx.total_cost_usd,
-                            total_duration,
-                        )
-                        .with_output(child_ctx.output().cloned())
-                        .with_error(err.to_string()),
-                        true,
-                    ));
-                }
-                Err(err)
-            }
-        }
-    }
-
-    /// Create the child run of a sub-workflow step and return its id.
-    ///
-    /// The child inherits the parent labels and author, and is linked to its
-    /// parent and to the root of the chain by two labels, so a suspended child
-    /// can be found and resumed like a top-level run.
-    async fn create_child_run(
-        &self,
-        config: &WorkflowStepConfig,
-        priority: i16,
-        handler: &dyn WorkflowHandler,
-    ) -> Result<Uuid, EngineError> {
-        // Whoever triggered the parent workflow is accountable for its children.
-        let parent = self.store.get_run(self.run_id).await?;
-        let (mut labels, parent_author) =
-            parent.map(|r| (r.labels, r.created_by)).unwrap_or_default();
-        // Overwritten, never inherited: a grand-child must point at its own
-        // parent, not at its grand-parent.
-        labels.insert(PARENT_RUN_ID_LABEL.to_string(), self.run_id.to_string());
-        labels.insert(LABEL_ROOT_RUN_ID.to_string(), self.root_run_id.to_string());
-
-        let child_run = self
-            .store
-            .create_run(NewRun {
-                workflow_name: config.workflow_name.clone(),
-                trigger: TriggerKind::Workflow,
-                payload: config.payload.clone(),
-                max_retries: 0,
-                handler_version: None,
-                labels,
-                scheduled_at: None,
-                created_by: parent_author,
-                idempotency_key: None,
-                concurrency_key: config.concurrency_key.clone(),
-                priority,
-                // A child runs inside its parent's slot: it never consumes a
-                // concurrency group slot of its own.
-                concurrency_limits: Vec::new(),
-                // The child shares the parent's cap; it does not get its own budget.
-                max_cost_usd: self.max_cost_usd,
-                // Recorded for display: the child runs on its parent's worker.
-                worker_tags: normalize_worker_tags(handler.required_worker_tags()),
-            })
-            .await?
-            .into_run();
-
-        info!(
-            parent_run_id = %self.run_id,
-            child_run_id = %child_run.id,
-            workflow = %config.workflow_name,
-            "child run created"
-        );
-        Ok(child_run.id)
-    }
-
-    /// Persist the suspension of a child run, with no event: the root run
-    /// publishes the suspension once the whole chain is suspended.
-    ///
-    /// A direct suspension is persisted like a top-level run's (a delay, a
-    /// capacity wait or a signal deadline arms `scheduled_at`; a capacity wait
-    /// also records its provider kind). A child suspended because of its own
-    /// child gets no `scheduled_at`: only the deepest run owns the
-    /// wake-up, so the chain is never resumed twice.
-    async fn suspend_child_run(
-        &self,
-        child_run_id: Uuid,
-        err: &EngineError,
-        cost_usd: Decimal,
-        duration_ms: u64,
-    ) -> Result<(), EngineError> {
-        let totals = RunUpdate {
-            cost_usd: Some(cost_usd),
-            duration_ms: Some(duration_ms),
-            ..RunUpdate::default()
-        };
-
-        let update = match err {
-            EngineError::DelaySleeping { wake_at, .. } => RunUpdate {
-                status: Some(RunStatus::Sleeping),
-                scheduled_at: Some(*wake_at),
-                ..totals
-            },
-            EngineError::CapacitySleeping { kind, wake_at, .. } => RunUpdate {
-                status: Some(RunStatus::Sleeping),
-                scheduled_at: Some(*wake_at),
-                capacity_wait_kind: Some(ProviderKind::new(kind.as_str())),
-                ..totals
-            },
-            EngineError::SignalWaiting {
-                step_id,
-                deadline_at,
-                ..
-            } => {
-                // Atomic with the step lock, like a top-level run.
-                self.store
-                    .suspend_run_on_signal(child_run_id, *step_id, *deadline_at)
-                    .await?;
-                totals
-            }
-            EngineError::ChildSuspended { cause, .. } => RunUpdate {
-                status: Some(cause.suspension_status()),
-                ..totals
-            },
-            _ => RunUpdate {
-                status: Some(RunStatus::AwaitingApproval),
-                ..totals
-            },
-        };
-
-        self.store.update_run(child_run_id, update).await?;
-        Ok(())
-    }
-
-    /// Mark a child run failed after its handler (or its suspension) failed.
-    ///
-    /// Best effort: the original error is what the parent reports.
-    async fn fail_child_run(
-        &self,
-        child_run_id: Uuid,
-        status: RunStatus,
-        err: &EngineError,
-        cost_usd: Decimal,
-        duration_ms: u64,
-        output: Option<Value>,
-    ) {
-        if let Err(store_err) = self
-            .store
-            .update_run(
-                child_run_id,
-                RunUpdate {
-                    status: Some(status),
-                    error: Some(err.to_string()),
-                    cost_usd: Some(cost_usd),
-                    duration_ms: Some(duration_ms),
-                    completed_at: Some(Utc::now()),
-                    output,
-                    ..RunUpdate::default()
-                },
-            )
-            .await
-        {
-            error!(
-                child_run_id = %child_run_id,
-                store_error = %store_err,
-                "failed to persist child run failure"
-            );
-        }
+        planned
     }
 }

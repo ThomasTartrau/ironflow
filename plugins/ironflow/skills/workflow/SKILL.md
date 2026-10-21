@@ -122,7 +122,7 @@ Then add the source display, which needs the real file name:
     }
 ```
 
-Step catalogue with every config builder: `references/steps.md`. Read it before writing an agent, http, signal (`ctx.wait_for_signal`), sub-workflow, secret or artifact step.
+Step catalogue with every config builder: `references/steps.md`. Read it before writing an agent, http, signal (`ctx.wait_for_signal`), secret or artifact step. Sub-workflows (`ctx.workflow`, `ctx.workflow_with`, children in parallel with `ctx.workflows_with`): `references/sub-workflows.md`.
 
 ## 3. Register
 
@@ -149,7 +149,7 @@ Then offer, in one sentence, the workflow reviewer (`/ironflow review`) and the 
 
 - **Branches are invisible to the planner unless you declare them.** A plain `if` works, but `ctx.when("production run", |i: &DeployInput| i.environment == "production").await?` and `ctx.when_dynamic("build succeeded", build.is_success())` make it show up in `ironflow-cli run plan <name>`, which lists the steps a run would create without executing anything. The first argument is a label, never parsed; the closure gets the typed input. See `references/steps.md`.
 - **No stringly-typed access.** Read step outputs with `stdout()`, `stderr()`, `exit_code()`, `status()`, `body()`, `error()` (the message of an `allow_failure` step that failed), the input with `ctx.input::<T>()`, decisions through a `#[derive(DecisionAnswers)]` struct, agent answers through `.output::<T>()`, and artifacts through the handle `step.artifact("file")?`. Never index the raw output JSON by key, and never copy a step name by hand where a handle exists. Sub-workflow children implement `TypedWorkflow`; `ctx.workflow(&Child, ChildInput { .. })` returns `run_id()` as a `Uuid`.
-- **Step names are cache keys.** Stable, unique within the run, no timestamps or random ids. In a loop, suffix with the loop index. `ctx.parallel` enforces it for its branches: a duplicate name fails the run before any step starts.
+- **Step names are cache keys.** Stable, unique within the run, no timestamps or random ids. In a loop, suffix with the loop index. `ctx.parallel` enforces it for its branches: a duplicate name fails the run before any step starts. A child workflow's step is named after its handler: when the same child runs twice (a loop, a `ctx.workflows_with` wave), give each one `WorkflowOptions::step_name`.
 - **Approval replays the handler.** Anything that is not a `ctx.*` step runs again after approval. Keep side effects inside steps. Details and a safe pattern: `references/approval-replay.md`.
 - **Agent steps: tools and structured output on one step.** `AgentStepConfig::new(prompt).allow_tool(Tool::Read).output::<T>()` lets the agent read, then answer with a `T`: `ctx.agent` returns the `T` itself. Do not split it into a tools step and a formatting step. On an HTTP provider, `.tool_profile(BUG)` (a `ToolProfile` constant shared with the worker) picks a named tool profile registered on the worker (`references/steps.md`); a Claude CLI provider refuses it.
 - **Budget.** Claude Code's system cache alone costs about `0.04` USD, so `max_budget_usd` below `0.10` fails. Put a `default_max_cost_usd` on the handler when it contains an agent step.

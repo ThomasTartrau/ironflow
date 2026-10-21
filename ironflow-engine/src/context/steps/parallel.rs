@@ -157,7 +157,8 @@ impl WorkflowContext {
             })
             .map(step_budget_usd)
             .sum();
-        self.check_run_budget(wave_budget)?;
+        // Held until every step of the wave has been charged.
+        let _reservation = self.check_run_budget(wave_budget)?;
 
         let now = Utc::now();
         let mut step_records: Vec<(Uuid, Uuid, String, StepConfig)> =
@@ -338,7 +339,7 @@ impl WorkflowContext {
 
             match step_result {
                 Ok(output) => {
-                    self.total_cost_usd += output.cost_usd;
+                    self.charge_cost(output.cost_usd);
                     self.total_duration_ms += output.duration_ms;
 
                     // Record token usage in the guard for agent steps.
@@ -437,7 +438,7 @@ impl WorkflowContext {
 
                     if let Some(ref usage) = partial {
                         if let Some(cost) = usage.cost_usd {
-                            self.total_cost_usd += cost;
+                            self.charge_cost(cost);
                         }
                         if let Some(dur) = usage.duration_ms {
                             self.total_duration_ms += dur;
