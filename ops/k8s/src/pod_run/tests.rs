@@ -27,7 +27,7 @@ use super::{
 use crate::KubeClient;
 
 /// Wrap a canned `tower` service as a [`KubeClient`].
-fn kube_from<S>(svc: S) -> KubeClient
+pub(crate) fn kube_from<S>(svc: S) -> KubeClient
 where
     S: Service<
             Request<kube::client::Body>,
@@ -41,7 +41,7 @@ where
 }
 
 /// A dummy client that echoes `{}` -- enough for pure `build_pod` tests.
-fn dummy_kube() -> KubeClient {
+pub(crate) fn dummy_kube() -> KubeClient {
     kube_from(service_fn(|_r: Request<kube::client::Body>| async {
         Ok::<_, Infallible>(Response::new(kube::client::Body::from(Bytes::from_static(
             b"{}",
@@ -768,7 +768,7 @@ async fn input_exposes_metadata_no_secret() {
 // -- run(): phase transitions via a stateful routing service --
 
 /// Build a `PodRun` over `svc` with fast polling and a short timeout.
-fn pod_run_with<S>(svc: S) -> PodRun
+pub(crate) fn pod_run_with<S>(svc: S) -> PodRun
 where
     S: Service<
             Request<kube::client::Body>,
@@ -786,7 +786,7 @@ where
 /// Route by method + path. `get_phases` are returned in order for each
 /// successive GET on the pod (simulating phase transitions); the last value
 /// repeats. `deleted` counts DELETE calls.
-fn routing_service(
+pub(crate) fn routing_service(
     get_phases: Vec<&'static str>,
     deleted: Arc<AtomicUsize>,
 ) -> impl Service<
@@ -809,12 +809,31 @@ fn routing_service_with_logs(
     Error = Infallible,
     Future = impl Send,
 > + Clone {
+    let statuses = get_phases
+        .into_iter()
+        .map(|phase| format!(r#"{{"phase":"{phase}"}}"#))
+        .collect();
+    routing_service_with_statuses(statuses, deleted, logs)
+}
+
+/// Same as [`routing_service_with_logs`], each GET on the pod returning the
+/// next of `get_statuses`, the JSON of a whole `PodStatus`.
+pub(crate) fn routing_service_with_statuses(
+    get_statuses: Vec<String>,
+    deleted: Arc<AtomicUsize>,
+    logs: String,
+) -> impl Service<
+    Request<kube::client::Body>,
+    Response = Response<kube::client::Body>,
+    Error = Infallible,
+    Future = impl Send,
+> + Clone {
     let get_idx = Arc::new(AtomicUsize::new(0));
-    let phases = Arc::new(get_phases);
+    let statuses = Arc::new(get_statuses);
     let logs = Arc::new(logs);
     service_fn(move |req: Request<kube::client::Body>| {
         let get_idx = get_idx.clone();
-        let phases = phases.clone();
+        let statuses = statuses.clone();
         let logs = logs.clone();
         let deleted = deleted.clone();
         async move {
@@ -829,13 +848,13 @@ fn routing_service_with_logs(
                 r#"{"kind":"Pod","apiVersion":"v1","metadata":{"name":"job-pod","namespace":"default"},"spec":{"containers":[]},"status":{"phase":"Pending"}}"#.to_string()
             } else {
                 let i = get_idx.fetch_add(1, Ordering::SeqCst);
-                let phase = phases
+                let status = statuses
                     .get(i)
-                    .or_else(|| phases.last())
-                    .copied()
-                    .unwrap_or("Pending");
+                    .or_else(|| statuses.last())
+                    .cloned()
+                    .unwrap_or_else(|| r#"{"phase":"Pending"}"#.to_string());
                 format!(
-                    r#"{{"kind":"Pod","apiVersion":"v1","metadata":{{"name":"job-pod","namespace":"default"}},"spec":{{"containers":[]}},"status":{{"phase":"{phase}"}}}}"#
+                    r#"{{"kind":"Pod","apiVersion":"v1","metadata":{{"name":"job-pod","namespace":"default"}},"spec":{{"containers":[]}},"status":{status}}}"#
                 )
             };
             Ok::<_, Infallible>(Response::new(kube::client::Body::from(Bytes::from(body))))

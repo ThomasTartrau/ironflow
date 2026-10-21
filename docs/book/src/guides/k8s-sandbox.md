@@ -305,6 +305,30 @@ set on the output. `.max_log_bytes(n)` changes the limit. A `PodRun` with
 is not re-chowned on every pod; `.fs_group_change_policy("Always")` restores
 the Kubernetes default.
 
+A `PodRun` running a script it does not trust takes `.sandboxed()`: the same
+hardening as `K8sEphemeralProvider::sandboxed` (read-only root, all
+capabilities dropped, seccomp `RuntimeDefault`, non-root uid `10001` unless
+`.security(..)` sets one, `/tmp` on a 512Mi `emptyDir`, no service account
+token). `.stdin(input)` feeds the script up to 255 KiB through a downward API
+file, and the output reports how it ended: `exit_code` from the container,
+`reason` from the pod (`DeadlineExceeded` when `active_deadline_seconds` killed
+it, with no `exit_code`) or from the container (`OOMKilled`, `Error`). `logs`
+holds stdout and stderr interleaved; redirect stderr in the command to parse
+stdout alone.
+
+```rust,ignore
+let out = ctx
+    .operation(
+        "extract",
+        &PodRun::new(&kube, "extract", &image, "python /scripts/extract.py 2>/dev/null")
+            .sandboxed()
+            .stdin(document_json)
+            .active_deadline_seconds(Duration::from_secs(60)),
+    )
+    .await?;
+let timed_out = out.reason.as_deref() == Some("DeadlineExceeded");
+```
+
 ## Persistent environment
 
 By default an agent pod starts from an empty working directory and loses

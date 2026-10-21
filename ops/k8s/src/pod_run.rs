@@ -26,8 +26,17 @@ use crate::conventions::{
 };
 use crate::error::k8s_external;
 
+mod sandbox;
+mod stdin;
+mod termination;
 #[cfg(test)]
 mod tests;
+
+pub use sandbox::SANDBOX_UID;
+use sandbox::Sandbox;
+pub use stdin::{MAX_STDIN_BYTES, STDIN_ANNOTATION};
+use stdin::{stdin_command, stdin_volume};
+use termination::Termination;
 
 /// Default wall-clock timeout for a [`PodRun`] if none is configured.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -108,6 +117,11 @@ pub struct PodRunOutput {
     /// are longer, only their tail is kept, prefixed with a
     /// `[... N bytes truncated ...]` line, and
     /// [`logs_truncated`](Self::logs_truncated) is `true`.
+    ///
+    /// stdout and stderr are interleaved: the pod log API serves them as one
+    /// stream (splitting them needs the alpha `PodLogsQuerySplitStreams`
+    /// feature gate). Redirect stderr in the command (`cmd 2>/dev/null`, or
+    /// `2>/tmp/err` to keep it apart) when only stdout must be parsed.
     pub logs: String,
     /// Terminal pod phase (`"Succeeded"` or `"Failed"`).
     pub phase: String,
@@ -115,6 +129,20 @@ pub struct PodRunOutput {
     /// logs. Defaults to `false` when absent from a serialized output.
     #[serde(default)]
     pub logs_truncated: bool,
+    /// Exit code of the command, read on the terminated container before the
+    /// pod is deleted.
+    ///
+    /// `None` when the container never terminated on its own, e.g. a pod
+    /// killed by [`PodRun::active_deadline_seconds`] (see
+    /// [`reason`](Self::reason)) or one that failed before the container
+    /// started.
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    /// Why the pod ended: the pod's own `status.reason` when Kubernetes set
+    /// one (`"DeadlineExceeded"`, `"Evicted"`), else the container's
+    /// `terminated.reason` (`"Completed"`, `"Error"`, `"OOMKilled"`).
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Run a shell command in an ephemeral pod, wait for completion, collect its
@@ -175,6 +203,8 @@ pub struct PodRun {
     expiry_margin: Duration,
     poll_interval: Duration,
     max_log_bytes: usize,
+    stdin: Option<String>,
+    sandbox: Option<Sandbox>,
 }
 
 impl PodRun {
@@ -208,6 +238,8 @@ impl PodRun {
             expiry_margin: DEFAULT_EXPIRY_MARGIN,
             poll_interval: DEFAULT_POLL_INTERVAL,
             max_log_bytes: DEFAULT_MAX_LOG_BYTES,
+            stdin: None,
+            sandbox: None,
         }
     }
 
@@ -587,7 +619,10 @@ impl PodRun {
             command: Some(vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),
-                self.command.clone(),
+                match &self.stdin {
+                    Some(_) => stdin_command(&self.command),
+                    None => self.command.clone(),
+                },
             ]),
             working_dir: self.working_dir.clone(),
             ..Default::default()
@@ -600,16 +635,21 @@ impl PodRun {
         // Build a container SecurityContext when either the non-root spec or the
         // privilege-escalation toggle is set, merging both so neither overwrites
         // the other. Left absent entirely when neither is set (opt-in, no
-        // regression for existing callers).
-        if self.security.is_some() || self.allow_privilege_escalation.is_some() {
+        // regression for existing callers). A sandboxed pod always has a
+        // security spec.
+        let security = self.effective_security();
+        if security.is_some() || self.allow_privilege_escalation.is_some() {
             let mut sc = SecurityContext {
                 allow_privilege_escalation: self.allow_privilege_escalation,
                 ..Default::default()
             };
-            if let Some(sec) = &self.security {
+            if let Some(sec) = &security {
                 sc.run_as_non_root = Some(true);
                 sc.run_as_user = Some(sec.run_as_user);
                 sc.run_as_group = Some(sec.run_as_group);
+            }
+            if self.sandbox.is_some() {
+                Sandbox::harden(&mut sc);
             }
             container.security_context = Some(sc);
         }
@@ -618,6 +658,18 @@ impl PodRun {
         for (vol, mount) in &self.volumes {
             volumes.push(vol.clone());
             volume_mounts.push(mount.clone());
+        }
+        if let Some(sandbox) = &self.sandbox {
+            let (vol, mount) = sandbox.tmp_volume();
+            volumes.push(vol);
+            volume_mounts.push(mount);
+        }
+        let mut annotations = expiry_annotation(self.timeout + self.expiry_margin);
+        if let Some(input) = &self.stdin {
+            let (vol, mount) = stdin_volume();
+            volumes.push(vol);
+            volume_mounts.push(mount);
+            annotations.insert(STDIN_ANNOTATION.to_string(), input.clone());
         }
         if !volume_mounts.is_empty() {
             container.volume_mounts = Some(volume_mounts);
@@ -632,7 +684,7 @@ impl PodRun {
             .as_ref()
             .map(|name| vec![LocalObjectReference { name: name.clone() }]);
 
-        let security_context = self.security.map(|sec| PodSecurityContext {
+        let security_context = security.map(|sec| PodSecurityContext {
             run_as_non_root: Some(true),
             fs_group: Some(sec.fs_group),
             fs_group_change_policy: Some(
@@ -648,7 +700,7 @@ impl PodRun {
                 name: Some(self.name.clone()),
                 namespace: Some(self.namespace.clone()),
                 labels: Some(ironflow_labels(&self.labels, POD_RUN_COMPONENT)),
-                annotations: Some(expiry_annotation(self.timeout + self.expiry_margin)),
+                annotations: Some(annotations),
                 ..Default::default()
             },
             spec: Some(PodSpec {
@@ -663,7 +715,9 @@ impl PodRun {
                     Some(volumes)
                 },
                 security_context,
-                automount_service_account_token: self.automount_service_account_token,
+                automount_service_account_token: self
+                    .automount_service_account_token
+                    .or(self.sandbox.as_ref().map(|_| false)),
                 runtime_class_name: self.runtime_class.clone(),
                 active_deadline_seconds: active_deadline_secs(self.active_deadline_seconds),
                 ..Default::default()
@@ -677,10 +731,12 @@ impl PodRun {
     /// # Errors
     ///
     /// Returns [`OperationError::External`] with `origin: "kubernetes"` if the
-    /// pod cannot be created, the wait loop fails, or the wall-clock timeout is
-    /// exceeded. A command that ran and exited non-zero is **not** an error;
+    /// [`stdin`](Self::stdin) input exceeds [`MAX_STDIN_BYTES`] (no pod is
+    /// created), the pod cannot be created, the wait loop fails, or the
+    /// wall-clock timeout is exceeded. A command that ran and exited non-zero is **not** an error;
     /// it is reported via [`PodRunOutput::success`].
     pub async fn run(&self) -> Result<PodRunOutput, OperationError> {
+        self.check_stdin()?;
         let pods: Api<Pod> = Api::namespaced(self.client.clone(), &self.namespace);
 
         pods.create(&PostParams::default(), &self.build_pod())
@@ -699,13 +755,15 @@ impl PodRun {
                 self.name, self.timeout
             ))),
             Ok(Err(e)) => Err(e),
-            Ok(Ok((phase, logs))) => {
+            Ok(Ok((end, logs))) => {
                 let (logs, logs_truncated) = truncate_logs(logs, self.max_log_bytes);
                 Ok(PodRunOutput {
-                    success: phase == "Succeeded",
+                    success: end.phase == "Succeeded",
                     logs,
-                    phase,
+                    phase: end.phase,
                     logs_truncated,
+                    exit_code: end.exit_code,
+                    reason: end.reason,
                 })
             }
         }
@@ -715,19 +773,25 @@ impl PodRun {
     ///
     /// The whole log stream is fetched and cut afterwards: `LogParams::limit_bytes`
     /// would keep the head, while the tail is what explains a failure.
-    async fn wait_terminal(&self, pods: &Api<Pod>) -> Result<(String, String), OperationError> {
+    async fn wait_terminal(
+        &self,
+        pods: &Api<Pod>,
+    ) -> Result<(Termination, String), OperationError> {
         loop {
             let pod = pods.get(&self.name).await.map_err(k8s_external)?;
-            let phase = pod.status.and_then(|s| s.phase).unwrap_or_default();
+            let end = pod
+                .status
+                .as_ref()
+                .and_then(|status| Termination::of(status, &self.name));
 
-            if phase == "Succeeded" || phase == "Failed" {
+            if let Some(end) = end {
                 // Logs are best-effort: a terminal pod with no readable log
                 // stream still yields a valid result.
                 let logs = pods
                     .logs(&self.name, &LogParams::default())
                     .await
                     .unwrap_or_default();
-                return Ok((phase, logs));
+                return Ok((end, logs));
             }
 
             sleep(self.poll_interval).await;

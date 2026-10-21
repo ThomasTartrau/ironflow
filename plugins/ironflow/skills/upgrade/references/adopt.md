@@ -344,3 +344,37 @@ after its handler) and `label` tags its run. The step names change: bump the han
 +     .collect();
 + let outcomes = ctx.workflows_with(&Delegate, wave).await?;
 ```
+
+## pod-run-exit-stdin
+- kind: adopt
+- since: ironflow-ops-k8s after 0.1.41 (#216)
+- detect: `\.phase == "Failed"`
+
+A `PodRun` script that needed an input, its exit code, or to tell a deadline from a
+failure used to wrap its command in `sh`: the input in an env var piped to the command
+(refused by Linux past 128 KiB), the exit code printed on a marked last line of the logs,
+and a `Failed` pod without that line taken for a timeout. `PodRunOutput` now carries
+`exit_code` and `reason` (`DeadlineExceeded` for a pod killed by `active_deadline_seconds`,
+with no `exit_code`), `.stdin(input)` feeds the command up to 255 KiB, and `.sandboxed()`
+replaces the hand-set hardening options (and adds a read-only root, so the script writes
+only to `/tmp` and its volumes). `logs` still interleaves stdout and stderr: keep
+`2>/dev/null` in the command to parse stdout alone. A test building `PodRunOutput { .. }`
+by hand gains the two fields.
+
+```diff
+- let wrapped = format!("printf '%s' \"$INPUT\" | {cmd} 2>/dev/null; printf '\\n{marker} %s\\n' \"$?\"");
+- let out = ctx.operation("script", &PodRun::new(&kube, name, image, &wrapped)
+-     .env("INPUT", &input)
+-     .security(spec)
+-     .allow_privilege_escalation(false)
+-     .automount_service_account_token(false)
+-     .active_deadline_seconds(deadline)).await?;
+- let timed_out = out.phase == "Failed" && !out.logs.contains(&marker);
++ let out = ctx.operation("script", &PodRun::new(&kube, name, image, &format!("{cmd} 2>/dev/null"))
++     .stdin(input)
++     .security(spec)   // keeps its uid; without it, a sandboxed pod runs as 10001
++     .sandboxed()
++     .active_deadline_seconds(deadline)).await?;
++ let timed_out = out.reason.as_deref() == Some("DeadlineExceeded");
++ let code = out.exit_code;
+```

@@ -69,6 +69,43 @@ not an error; an `OperationError::External { origin: "kubernetes", .. }` is
 returned only for infrastructure failures (create, wait, timeout). The pod/Job
 is always deleted, including on timeout.
 
+`PodRunOutput` also carries `exit_code` (the container's `terminated.exitCode`)
+and `reason`: the pod's own reason when Kubernetes set one (`DeadlineExceeded`
+for a pod killed by `active_deadline_seconds`, `Evicted`), else the
+container's (`Completed`, `Error`, `OOMKilled`). A pod killed by its deadline
+has a `reason` and no `exit_code`. `logs` interleaves stdout and stderr, as the
+pod log API serves them: redirect stderr in the command (`2>/dev/null`) to
+parse stdout alone.
+
+`PodRun::stdin(input)` feeds `input` to the command's stdin, up to 255 KiB
+(`MAX_STDIN_BYTES`). It is stored in the `ironflow.io/stdin` annotation and
+projected into a read-only file by a downward API volume: no extra RBAC, no
+object to clean up, but readable by whoever can read the pod, so keep secrets
+in a Secret.
+
+`PodRun::sandboxed()` hardens the pod for a command you do not trust:
+read-only root filesystem, all capabilities dropped, seccomp `RuntimeDefault`,
+no privilege escalation, non-root (uid `10001` unless `.security(..)` sets
+one), `/tmp` on a 512Mi `emptyDir` (`.tmp_size_limit("2Gi")`), no service
+account token.
+
+```rust,ignore
+let out = ctx
+    .operation(
+        "extract",
+        &PodRun::new(&kube, "extract", "python:3.13-slim", "python /scripts/extract.py")
+            .sandboxed()
+            .stdin(document_json)
+            .active_deadline_seconds(Duration::from_secs(60)),
+    )
+    .await?;
+match (out.exit_code, out.reason.as_deref()) {
+    (_, Some("DeadlineExceeded")) => { /* timed out */ }
+    (Some(0), _) => { /* out.logs is the script's output */ }
+    (code, reason) => { /* failed: code, reason */ }
+}
+```
+
 `PodRun::runtime_class("gvisor")` sets `spec.runtimeClassName` to run the pod
 under a sandboxed runtime; left unset, the cluster default applies.
 
