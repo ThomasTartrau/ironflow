@@ -34,6 +34,7 @@ use crate::operation::NoopSecretResolver;
 use crate::operation::{OperationContext, SecretResolver};
 use crate::plan::{SharedPlanRecorder, lock_plan};
 
+use super::cost::BudgetReservation;
 use super::{HandlerResolver, WorkflowContext};
 
 impl WorkflowContext {
@@ -62,6 +63,7 @@ impl WorkflowContext {
             total_duration_ms: 0,
             max_cost_usd: None,
             inherited_cost_usd: Decimal::ZERO,
+            shared_cost: None,
             replay_steps: HashMap::new(),
             replay_wave_steps: HashMap::new(),
             granted_approvals: HashMap::new(),
@@ -84,6 +86,7 @@ impl WorkflowContext {
             plan: None,
             output: None,
             worker_tags: None,
+            sibling_suspensions: Vec::new(),
         }
     }
 
@@ -113,6 +116,7 @@ impl WorkflowContext {
             total_duration_ms: 0,
             max_cost_usd: None,
             inherited_cost_usd: Decimal::ZERO,
+            shared_cost: None,
             replay_steps: HashMap::new(),
             replay_wave_steps: HashMap::new(),
             granted_approvals: HashMap::new(),
@@ -135,6 +139,7 @@ impl WorkflowContext {
             plan: None,
             output: None,
             worker_tags: None,
+            sibling_suspensions: Vec::new(),
         }
     }
 
@@ -329,6 +334,12 @@ impl WorkflowContext {
         self.output.as_ref()
     }
 
+    /// Suspensions of wave children that the error the run returned does not
+    /// carry, each one still to publish.
+    pub(crate) fn sibling_suspensions(&self) -> &[EngineError] {
+        &self.sibling_suspensions
+    }
+
     /// Seed the context with the run's attempt number and the totals already
     /// accumulated by previous attempts.
     ///
@@ -404,8 +415,22 @@ impl WorkflowContext {
     ///
     /// For a top-level run this equals [`total_cost_usd`](Self::total_cost_usd).
     /// For a sub-workflow it also includes what the parent chain already spent.
+    /// Inside a [`workflows_with`](Self::workflows_with) wave it is the live
+    /// total of the whole run tree, siblings included.
     pub fn charged_cost_usd(&self) -> Decimal {
-        self.inherited_cost_usd + self.total_cost_usd
+        match &self.shared_cost {
+            Some(shared) => shared.spent(),
+            None => self.inherited_cost_usd + self.total_cost_usd,
+        }
+    }
+
+    /// Add the cost a step of this run reported, to the run and to the live
+    /// total it shares with its wave, if any.
+    pub(super) fn charge_cost(&mut self, cost: Decimal) {
+        self.total_cost_usd += cost;
+        if let Some(shared) = &self.shared_cost {
+            shared.charge(cost);
+        }
     }
 
     /// Reject the upcoming agent work when it would cross the run's cost cap.
@@ -414,19 +439,37 @@ impl WorkflowContext {
     /// for a parallel wave). Called *before* any step record is created so a
     /// refused run never launches the work it could not afford.
     ///
+    /// Inside a wave, the admitted budget stays reserved in the live total
+    /// until the returned reservation is dropped: a sibling checking the cap
+    /// meanwhile counts it, so concurrent steps never share the same room.
+    /// Keep the reservation until the step's cost has been charged.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineError::RunBudgetExceeded`] when
-    /// `charged_cost + step_budget` exceeds the cap.
-    pub(super) fn check_run_budget(&self, step_budget: Decimal) -> Result<(), EngineError> {
+    /// `charged_cost + step_budget` exceeds the cap, the charged cost
+    /// including, inside a wave, the budgets reserved by running siblings.
+    pub(super) fn check_run_budget(
+        &self,
+        step_budget: Decimal,
+    ) -> Result<BudgetReservation, EngineError> {
         let Some(limit) = self.max_cost_usd else {
-            return Ok(());
+            return Ok(BudgetReservation::none());
         };
 
-        let spent = self.charged_cost_usd();
-        if spent + step_budget <= limit {
-            return Ok(());
-        }
+        let spent = match &self.shared_cost {
+            Some(shared) => match shared.reserve(step_budget, limit) {
+                Ok(reservation) => return Ok(reservation),
+                Err(committed) => committed,
+            },
+            None => {
+                let spent = self.charged_cost_usd();
+                if spent + step_budget <= limit {
+                    return Ok(BudgetReservation::none());
+                }
+                spent
+            }
+        };
 
         error!(
             run_id = %self.run_id,

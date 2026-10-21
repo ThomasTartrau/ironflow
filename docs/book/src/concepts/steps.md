@@ -175,6 +175,32 @@ if let Some(child) = outcome.output().filter(|c| c.status() == RunStatus::Failed
 }
 ```
 
+### Step names and labels
+
+`WorkflowOptions` names the parent's step and labels the child run:
+
+```rust,ignore
+let options = WorkflowOptions::new()
+    .step_name(format!("delegate-{tour}-{agent}"))
+    .label("team.example/tour", tour.to_string())
+    .label("team.example/agent", agent.as_str());
+ctx.workflow_with(&Delegate, DelegateInput { agent: agent.clone() }, options).await?;
+```
+
+- The step is named after the child handler by default. The name identifies the step in
+  the run timeline and on resume: a handler that delegates to the same child several times
+  gives each call its own name. An empty or blank name panics.
+- The child inherits the labels of its parent run; a label set here replaces an inherited
+  one with the same key. `ironflow.io/*` keys are set by the engine
+  (`ironflow.io/parent-run-id`, `ironflow.io/root-run-id`) and panic.
+
+### Children in parallel
+
+`ctx.workflows_with(&Child, children)` takes one `(input, WorkflowOptions)` per child and
+runs the whole wave concurrently, with a `Workflow` step per child at the same position.
+The cost cap of the root holds for the whole wave. See
+[Parallel Execution](../guides/parallel-execution.md#sub-workflows-in-parallel).
+
 ### Suspension of a child
 
 A child may suspend like any run: an approval, a human input, a signal wait or
@@ -193,6 +219,12 @@ usual API routes. Resuming the child resumes the root run: it replays its
 completed steps (a child that already completed is not run again) and
 re-enters the same child run, which picks up where it stopped. Rejecting an
 approval gate inside the child fails the child and every ancestor.
+
+Several children of a `workflows_with` wave may be suspended at once. Each one
+publishes its own event (approval requested, signal awaited) and resumes the
+root on its own. A child resolved while a sibling already resumed the root waits
+for the root to stop, then resumes it again unless the root re-entered it in the
+meantime: the root never runs twice at once and no child is failed for it.
 
 ### Cancellation and stopped parents
 

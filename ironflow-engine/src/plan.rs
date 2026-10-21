@@ -399,6 +399,11 @@ impl PlanRecorder {
         self.last_names = names;
     }
 
+    /// The dependency frontier the next recorded step depends on.
+    pub(crate) fn last(&self) -> &[String] {
+        &self.last_names
+    }
+
     /// Allocate a fresh parallel group name.
     pub(crate) fn next_group(&mut self) -> String {
         self.parallel_groups += 1;

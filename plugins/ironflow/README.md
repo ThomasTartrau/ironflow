@@ -46,7 +46,7 @@ plugins/ironflow/
   skills/
     ironflow/      hub (user-invocable)
     setup/         scaffold script, project template in assets/, options in references/
-    workflow/      handler recipe, step catalogue, approval replay pitfalls
+    workflow/      handler recipe, step catalogue, sub-workflows, approval replay pitfalls
     operation/     Operation trait recipe, HTTP JSON and GitLab issue examples
     test/          end-to-end test recipe
     upgrade/       upgrade and audit procedure, migration catalogue in references/,

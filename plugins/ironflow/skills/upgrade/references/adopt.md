@@ -315,3 +315,32 @@ schedule instead; a catch-up run reads its occurrence from
 +     .with_catchup(CatchupPolicy::All)        // or Latest (default), Skip
 +     .with_overlap(OverlapPolicy::Skip)       // instead of an active-run check in the handler
 ```
+
+## workflow-waves
+- kind: adopt
+- since: ironflow-engine after 2.53.0 (#215)
+
+A parent that hands the same child to several subjects (one per agent, repository or
+issue) used to call `ctx.workflow` in a loop, one child after the other, or enqueue root
+runs and poll them, which loses the parent link, the shared cost cap and the replay.
+`ctx.workflows_with` runs the children concurrently as one wave, each with its own input
+and `WorkflowOptions`, and returns the outcomes in the order of the entries.
+`WorkflowOptions::step_name` names each child's step (by default every child is named
+after its handler) and `label` tags its run. The step names change: bump the handler's
+`version()`. Section: Sub-workflow (`sub-workflows.md`).
+
+```diff
+- for agent in &agents {
+-     ctx.workflow(&Delegate, DelegateInput { agent: agent.clone() }).await?;
+- }
++ let wave = agents
++     .iter()
++     .map(|agent| {
++         let options = WorkflowOptions::new()
++             .step_name(format!("delegate-{agent}"))
++             .label("team.example/agent", agent.as_str());
++         (DelegateInput { agent: agent.clone() }, options)
++     })
++     .collect();
++ let outcomes = ctx.workflows_with(&Delegate, wave).await?;
+```

@@ -36,6 +36,7 @@ use crate::notify::{
 use crate::plan::{lock_plan, planned_output};
 
 use super::WorkflowContext;
+use super::cost::BudgetReservation;
 use super::failure::{
     allowed_failure_output, extract_debug_messages_from_error, extract_partial_usage_from_error,
     extract_raw_response_from_error, is_step_retryable, record_retry_metric,
@@ -248,7 +249,8 @@ impl WorkflowContext {
                 // Every step executed again at this position records the same
                 // child run, so repeated interruptions all point to one child.
                 if recorded_child_run_id(&step).is_some() {
-                    self.interrupted_children.insert(step.position, step);
+                    self.interrupted_children
+                        .insert((step.position, step.name.clone()), step);
                 }
                 continue;
             }
@@ -452,10 +454,14 @@ impl WorkflowContext {
         self.check_not_paused().await?;
 
         // Cost cap: refuse before creating the step record, so a run that hits
-        // its cap never launches the work it cannot afford.
-        if let StepConfig::Agent(ref agent_config) = config {
-            self.check_run_budget(step_budget_usd(agent_config.max_budget_usd))?;
-        }
+        // its cap never launches the work it cannot afford. Inside a wave the
+        // budget stays reserved until the step's cost is charged below.
+        let _reservation = match &config {
+            StepConfig::Agent(agent_config) => {
+                self.check_run_budget(step_budget_usd(agent_config.max_budget_usd))?
+            }
+            _ => BudgetReservation::none(),
+        };
 
         // Create step record in Pending.
         let trace_id = step_trace_id(self.run_id, name, position);
@@ -572,7 +578,7 @@ impl WorkflowContext {
 
         match execution {
             Ok(output) => {
-                self.total_cost_usd += output.cost_usd;
+                self.charge_cost(output.cost_usd);
                 self.total_duration_ms += output.duration_ms;
 
                 // Record token usage in the guard for agent steps.
@@ -655,7 +661,7 @@ impl WorkflowContext {
 
                 if let Some(ref usage) = partial {
                     if let Some(cost) = usage.cost_usd {
-                        self.total_cost_usd += cost;
+                        self.charge_cost(cost);
                     }
                     if let Some(dur) = usage.duration_ms {
                         self.total_duration_ms += dur;
@@ -773,9 +779,14 @@ impl WorkflowContext {
         // A retry resumes the agent session the first try created.
         let config = &retry_in_session(config);
         for attempt in 0..policy.max_retries() {
-            if let StepConfig::Agent(agent_config) = config {
-                self.check_run_budget(step_budget_usd(agent_config.max_budget_usd))?;
-            }
+            // Held for this try: the budget of the first one stays reserved by
+            // the caller until the step's cost is charged.
+            let _reservation = match config {
+                StepConfig::Agent(agent_config) => {
+                    self.check_run_budget(step_budget_usd(agent_config.max_budget_usd))?
+                }
+                _ => BudgetReservation::none(),
+            };
 
             let delay = policy.delay_for_attempt(attempt);
             info!(

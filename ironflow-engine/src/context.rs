@@ -26,6 +26,7 @@
 
 mod accessors;
 mod artifacts;
+mod cost;
 mod error_handlers;
 mod failure;
 mod guard;
@@ -57,6 +58,7 @@ use ironflow_store::store::Store;
 
 use crate::artifact::ArtifactSink;
 use crate::config::StepConfig;
+use crate::error::EngineError;
 use crate::executor::{StepInterceptor, StepResult};
 use crate::guard::{SharedGuardState, WorkflowGuardConfig};
 use crate::handler::WorkflowHandler;
@@ -64,6 +66,8 @@ use crate::log_sender::LogSender;
 use crate::notify::WorkflowEventBus;
 use crate::operation::OperationContext;
 use crate::plan::SharedPlanRecorder;
+
+use cost::SharedCost;
 
 /// Label set on every child run of a sub-workflow step, holding the id of the
 /// run that started it. Defined by the store, which follows it to list the
@@ -138,6 +142,11 @@ pub struct WorkflowContext {
     /// Cost already spent by ancestor runs when this context belongs to a
     /// sub-workflow. Zero for a top-level run.
     inherited_cost_usd: Decimal,
+    /// Live cost of the run tree, set when this run belongs to a
+    /// [`workflows_with`](Self::workflows_with) wave or descends from one:
+    /// siblings run at the same time, so the cap is checked against what the
+    /// whole tree spends and reserves, not against a snapshot.
+    shared_cost: Option<SharedCost>,
     /// Steps from a previous execution of the *same* attempt, keyed by position.
     /// Used when resuming after approval to replay completed steps.
     replay_steps: HashMap<u32, Step>,
@@ -156,9 +165,11 @@ pub struct WorkflowContext {
     /// a retry never asks a human to answer the same input twice.
     answered_inputs: HashMap<u32, (u32, Value)>,
     /// `Workflow` steps of the current attempt interrupted by a lost worker
-    /// lease, keyed by position. The step executed again at that position
-    /// re-enters the child run they recorded instead of starting a new one.
-    interrupted_children: HashMap<u32, Step>,
+    /// lease, keyed by `(position, step name)`: the children of a
+    /// [`workflows_with`](Self::workflows_with) wave share one position. The
+    /// step executed again there re-enters the child run they recorded
+    /// instead of starting a new one.
+    interrupted_children: HashMap<(u32, String), Step>,
     /// Which run attempt this context is executing (1-based).
     attempt: u32,
     /// Wall-clock duration already recorded on the run by previous attempts.
@@ -203,6 +214,10 @@ pub struct WorkflowContext {
     /// engine of a tagged worker. A sub-workflow requiring a tag missing from
     /// this list is refused. `None` outside a worker: no check.
     worker_tags: Option<Arc<Vec<String>>>,
+    /// Suspensions of wave children that the error this run returns does not
+    /// carry: a wave reports its first suspended child, the engine publishes
+    /// the event of every other one from here.
+    sibling_suspensions: Vec<EngineError>,
 }
 
 /// A registered error handler that fires when a subsequent step fails.

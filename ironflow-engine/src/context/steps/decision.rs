@@ -242,7 +242,7 @@ impl WorkflowContext {
         };
 
         // Impute cost and duration to the run, like an agent step.
-        self.total_cost_usd += execution.cost_usd;
+        self.charge_cost(execution.cost_usd);
         self.total_duration_ms += execution.duration_ms;
 
         let output_value = to_value(&execution.output)?;

@@ -1,11 +1,15 @@
 //! Configuration for workflow (sub-workflow) steps.
 
+use std::collections::HashMap;
 use std::ops::Not;
 
 use ironflow_core::retry::RetryPolicy;
 use ironflow_store::entities::{MAX_CONCURRENCY_KEY_LEN, validate_priority};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// Prefix of the run labels the engine sets itself on a child run.
+const ENGINE_LABEL_PREFIX: &str = "ironflow.io/";
 
 /// Configuration for invoking a registered workflow as a sub-step.
 ///
@@ -46,6 +50,12 @@ pub struct WorkflowStepConfig {
     /// in its output instead of failing the parent.
     #[serde(default, skip_serializing_if = "Not::not")]
     pub allow_failure: bool,
+    /// Labels set on the child run, over the ones it inherits from the
+    /// parent run.
+    ///
+    /// Set through [`WorkflowOptions::label`] and recorded in the step input.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub labels: HashMap<String, String>,
 }
 
 impl WorkflowStepConfig {
@@ -68,6 +78,7 @@ impl WorkflowStepConfig {
             concurrency_key: None,
             priority: None,
             allow_failure: false,
+            labels: HashMap::new(),
         }
     }
 
@@ -109,7 +120,8 @@ impl WorkflowStepConfig {
 }
 
 /// Options of a sub-workflow step started with
-/// [`workflow_with`](crate::context::WorkflowContext::workflow_with).
+/// [`workflow_with`](crate::context::WorkflowContext::workflow_with) or
+/// [`workflows_with`](crate::context::WorkflowContext::workflows_with).
 ///
 /// # Examples
 ///
@@ -126,6 +138,8 @@ pub struct WorkflowOptions {
     pub allow_failure: bool,
     concurrency_key: Option<String>,
     priority: Option<i16>,
+    step_name: Option<String>,
+    labels: HashMap<String, String>,
 }
 
 impl WorkflowOptions {
@@ -256,9 +270,140 @@ impl WorkflowOptions {
         self.priority
     }
 
-    /// Consume the options and return the concurrency key and the priority.
-    pub(crate) fn into_parts(self) -> (Option<String>, Option<i16>) {
-        (self.concurrency_key, self.priority)
+    /// Name the `Workflow` step of the parent run.
+    ///
+    /// The step is named after the child handler by default. The name is what
+    /// the run timeline shows and what identifies the step on resume: a
+    /// handler that delegates to the same child several times gives each call
+    /// its own name.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` is empty or only whitespace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// let options = WorkflowOptions::new().step_name("delegate-1-alice");
+    /// assert_eq!(options.step_name_ref(), Some("delegate-1-alice"));
+    /// ```
+    ///
+    /// ```should_panic
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// WorkflowOptions::new().step_name(" ");
+    /// ```
+    pub fn step_name(mut self, name: impl Into<String>) -> Self {
+        let name = name.into();
+        assert!(!name.trim().is_empty(), "step name must not be empty");
+        self.step_name = Some(name);
+        self
+    }
+
+    /// The step name, if one was set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// assert_eq!(WorkflowOptions::new().step_name_ref(), None);
+    /// ```
+    pub fn step_name_ref(&self) -> Option<&str> {
+        self.step_name.as_deref()
+    }
+
+    /// Set a label on the child run.
+    ///
+    /// The child inherits the labels of its parent run; a label set here
+    /// replaces an inherited one with the same key. The last value set for a
+    /// key wins.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` starts with `ironflow.io/`: those labels link the child
+    /// to its parent and root runs and are set by the engine.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// let options = WorkflowOptions::new().label("paperflow.io/agent", "alice");
+    /// assert_eq!(options.labels_ref()["paperflow.io/agent"], "alice");
+    /// ```
+    ///
+    /// ```should_panic
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// WorkflowOptions::new().label("ironflow.io/parent-run-id", "x");
+    /// ```
+    pub fn label(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        let key = key.into();
+        assert!(
+            !key.starts_with(ENGINE_LABEL_PREFIX),
+            "label {key:?} is reserved for the engine"
+        );
+        self.labels.insert(key, value.into());
+        self
+    }
+
+    /// Set several labels on the child run, as [`label`](Self::label) does
+    /// for each pair in order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a key starts with `ironflow.io/`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// let options = WorkflowOptions::new().labels([("tour", "1"), ("agent", "alice")]);
+    /// assert_eq!(options.labels_ref().len(), 2);
+    /// ```
+    pub fn labels<K, V>(self, labels: impl IntoIterator<Item = (K, V)>) -> Self
+    where
+        K: Into<String>,
+        V: Into<String>,
+    {
+        labels
+            .into_iter()
+            .fold(self, |options, (key, value)| options.label(key, value))
+    }
+
+    /// The labels set on the child run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// assert!(WorkflowOptions::new().labels_ref().is_empty());
+    /// ```
+    pub fn labels_ref(&self) -> &HashMap<String, String> {
+        &self.labels
+    }
+
+    /// Consume the options and build the step config for `workflow_name`,
+    /// with the name of the step: the one set, otherwise the handler name.
+    pub(crate) fn into_step_config(
+        self,
+        workflow_name: &str,
+        payload: Value,
+    ) -> (String, WorkflowStepConfig) {
+        let step_name = self.step_name.unwrap_or_else(|| workflow_name.to_string());
+        let config = WorkflowStepConfig {
+            concurrency_key: self.concurrency_key,
+            priority: self.priority,
+            allow_failure: self.allow_failure,
+            labels: self.labels,
+            ..WorkflowStepConfig::new(workflow_name, payload)
+        };
+        (step_name, config)
     }
 }
 
@@ -312,7 +457,8 @@ mod tests {
     fn options_carry_the_concurrency_key() {
         let options = WorkflowOptions::new().concurrency_key("issue:12");
         assert_eq!(options.concurrency_key_ref(), Some("issue:12"));
-        assert_eq!(options.into_parts().0.as_deref(), Some("issue:12"));
+        let (_, config) = options.into_step_config("build", json!({}));
+        assert_eq!(config.concurrency_key.as_deref(), Some("issue:12"));
         assert!(WorkflowOptions::new().concurrency_key_ref().is_none());
     }
 
@@ -347,9 +493,9 @@ mod tests {
             .concurrency_key("issue:12")
             .priority(MAX_PRIORITY);
         assert_eq!(options.priority_ref(), Some(MAX_PRIORITY));
-        let (key, priority) = options.into_parts();
-        assert_eq!(key.as_deref(), Some("issue:12"));
-        assert_eq!(priority, Some(MAX_PRIORITY));
+        let (_, config) = options.into_step_config("build", json!({}));
+        assert_eq!(config.concurrency_key.as_deref(), Some("issue:12"));
+        assert_eq!(config.priority, Some(MAX_PRIORITY));
         assert_eq!(
             WorkflowOptions::new().priority(MIN_PRIORITY).priority_ref(),
             Some(MIN_PRIORITY)
@@ -411,6 +557,100 @@ mod tests {
     fn options_builder_sets_allow_failure() {
         assert!(!WorkflowOptions::new().allow_failure);
         assert!(WorkflowOptions::new().allow_failure().allow_failure);
+    }
+
+    #[test]
+    fn options_carry_the_step_name() {
+        let options = WorkflowOptions::new().step_name("delegate-1-alice");
+        assert_eq!(options.step_name_ref(), Some("delegate-1-alice"));
+        assert!(WorkflowOptions::new().step_name_ref().is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "step name must not be empty")]
+    fn options_reject_an_empty_step_name() {
+        let _ = WorkflowOptions::new().step_name("");
+    }
+
+    #[test]
+    #[should_panic(expected = "step name must not be empty")]
+    fn options_reject_a_blank_step_name() {
+        let _ = WorkflowOptions::new().step_name(" \n ");
+    }
+
+    #[test]
+    fn options_merge_labels_and_the_last_value_wins() {
+        let options = WorkflowOptions::new()
+            .label("paperflow.io/tour", "1")
+            .labels([("paperflow.io/agent", "alice"), ("paperflow.io/tour", "2")]);
+        let labels = options.labels_ref();
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels["paperflow.io/tour"], "2");
+        assert_eq!(labels["paperflow.io/agent"], "alice");
+        assert!(WorkflowOptions::new().labels_ref().is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "reserved for the engine")]
+    fn options_reject_an_engine_label() {
+        let _ = WorkflowOptions::new().label("ironflow.io/parent-run-id", "x");
+    }
+
+    #[test]
+    #[should_panic(expected = "reserved for the engine")]
+    fn options_reject_an_engine_label_among_several() {
+        let _ = WorkflowOptions::new().labels([("team", "a"), ("ironflow.io/root-run-id", "x")]);
+    }
+
+    #[test]
+    fn step_config_defaults_the_step_name_to_the_handler() {
+        let (name, config) = WorkflowOptions::new().into_step_config("review", json!({}));
+        assert_eq!(name, "review");
+        assert_eq!(config.workflow_name, "review");
+        assert!(config.labels.is_empty());
+    }
+
+    #[test]
+    fn step_config_takes_every_option() {
+        let (name, config) = WorkflowOptions::new()
+            .step_name("delegate-1-alice")
+            .label("agent", "alice")
+            .concurrency_key("issue:12")
+            .priority(7)
+            .allow_failure()
+            .into_step_config("review", json!({"n": 1}));
+        assert_eq!(name, "delegate-1-alice");
+        assert_eq!(config.workflow_name, "review");
+        assert_eq!(config.payload, json!({"n": 1}));
+        assert_eq!(config.labels["agent"], "alice");
+        assert_eq!(config.concurrency_key.as_deref(), Some("issue:12"));
+        assert_eq!(config.priority, Some(7));
+        assert!(config.allow_failure);
+    }
+
+    #[test]
+    fn step_config_labels_are_omitted_when_empty_and_round_trip() {
+        let config = WorkflowStepConfig::new("build", json!({}));
+        assert!(
+            to_value(&config)
+                .expect("serialize")
+                .get("labels")
+                .is_none()
+        );
+
+        let (_, config) = WorkflowOptions::new()
+            .label("agent", "alice")
+            .into_step_config("build", json!({}));
+        let back: WorkflowStepConfig =
+            from_str(&to_string(&config).expect("serialize")).expect("deserialize");
+        assert_eq!(back.labels["agent"], "alice");
+    }
+
+    #[test]
+    fn a_config_predating_labels_still_deserializes() {
+        let config: WorkflowStepConfig =
+            from_str(r#"{"workflow_name":"build","payload":{}}"#).expect("deserialize");
+        assert!(config.labels.is_empty());
     }
 
     #[test]

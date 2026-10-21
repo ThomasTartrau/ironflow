@@ -17,6 +17,7 @@
 //! ```
 
 use std::fmt;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -282,12 +283,20 @@ pub struct WorkflowGuardState {
     depth: u32,
     /// Call chain for cycle detection (stack of workflow names).
     call_chain: Vec<String>,
-    /// Total number of workflow invocations in this run tree.
-    total_invocations: u32,
-    /// Cumulative tokens consumed across all agent steps.
-    total_tokens_used: u64,
+    /// Counters of the whole run tree, shared with every branch.
+    totals: Arc<GuardTotals>,
     /// When the root workflow started.
     started_at: Instant,
+}
+
+/// Counters a run tree shares across the branches of its concurrent
+/// sub-workflows.
+#[derive(Debug, Default)]
+struct GuardTotals {
+    /// Total number of workflow invocations in this run tree.
+    invocations: AtomicU32,
+    /// Cumulative tokens consumed across all agent steps.
+    tokens_used: AtomicU64,
 }
 
 impl WorkflowGuardState {
@@ -306,9 +315,27 @@ impl WorkflowGuardState {
         Self {
             depth: 0,
             call_chain: Vec::new(),
-            total_invocations: 0,
-            total_tokens_used: 0,
+            totals: Arc::new(GuardTotals::default()),
             started_at: Instant::now(),
+        }
+    }
+
+    /// The state of a `target_workflow` child running concurrently with its
+    /// siblings, its invocation already claimed by
+    /// [`enter_wave`](Self::enter_wave).
+    ///
+    /// The branch is one level below this state, `target_workflow` on top of
+    /// its call chain, and keeps its own depth and chain from then on, so
+    /// siblings never push to, or pop from, each other's chain. Invocations,
+    /// tokens and the start time stay shared with the whole run tree.
+    pub(crate) fn branch_into(&self, target_workflow: &str) -> Self {
+        let mut call_chain = self.call_chain.clone();
+        call_chain.push(target_workflow.to_string());
+        Self {
+            depth: self.depth + 1,
+            call_chain,
+            totals: self.totals.clone(),
+            started_at: self.started_at,
         }
     }
 
@@ -319,12 +346,12 @@ impl WorkflowGuardState {
 
     /// Total workflow invocations so far.
     pub fn total_invocations(&self) -> u32 {
-        self.total_invocations
+        self.totals.invocations.load(Ordering::Relaxed)
     }
 
     /// Total tokens consumed so far.
     pub fn total_tokens_used(&self) -> u64 {
-        self.total_tokens_used
+        self.totals.tokens_used.load(Ordering::Relaxed)
     }
 
     /// The current call chain (workflow name stack).
@@ -377,16 +404,18 @@ impl WorkflowGuardState {
             });
         }
 
-        if self.total_invocations >= config.max_fan_out {
+        let invocations = self.total_invocations();
+        if invocations >= config.max_fan_out {
             return Err(WorkflowRejection::MaxFanOutExceeded {
-                invocations: self.total_invocations,
+                invocations,
                 max: config.max_fan_out,
             });
         }
 
-        if self.total_tokens_used >= config.max_workflow_tokens {
+        let used = self.total_tokens_used();
+        if used >= config.max_workflow_tokens {
             return Err(WorkflowRejection::TokenBudgetExhausted {
-                used: self.total_tokens_used,
+                used,
                 max: config.max_workflow_tokens,
             });
         }
@@ -400,6 +429,56 @@ impl WorkflowGuardState {
         }
 
         Ok(())
+    }
+
+    /// [`check`](Self::check) `target_workflow`, then claim its invocation
+    /// and record it like [`record_invocation`](Self::record_invocation).
+    ///
+    /// The fan-out slot is claimed atomically: branches running concurrently
+    /// never cross `max_fan_out` together.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`WorkflowRejection`] the invocation would violate; nothing
+    /// is recorded then.
+    pub(crate) fn enter(
+        &mut self,
+        config: &WorkflowGuardConfig,
+        target_workflow: &str,
+    ) -> Result<(), WorkflowRejection> {
+        self.enter_wave(config, target_workflow, 1)?;
+        self.depth += 1;
+        self.call_chain.push(target_workflow.to_string());
+        Ok(())
+    }
+
+    /// [`check`](Self::check) a wave of `count` concurrent invocations of
+    /// `target_workflow`, then claim all of them at once. Each child then
+    /// runs on its own [`branch_into`](Self::branch_into).
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`WorkflowRejection`] the wave would violate; a wave that
+    /// does not fit whole is refused whole and claims nothing.
+    pub(crate) fn enter_wave(
+        &self,
+        config: &WorkflowGuardConfig,
+        target_workflow: &str,
+        count: u32,
+    ) -> Result<(), WorkflowRejection> {
+        self.check(config, target_workflow)?;
+        self.totals
+            .invocations
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |taken| {
+                taken
+                    .checked_add(count)
+                    .filter(|total| *total <= config.max_fan_out)
+            })
+            .map(|_| ())
+            .map_err(|taken| WorkflowRejection::MaxFanOutExceeded {
+                invocations: taken.saturating_add(count),
+                max: config.max_fan_out,
+            })
     }
 
     /// Record that a sub-workflow invocation is starting.
@@ -420,7 +499,7 @@ impl WorkflowGuardState {
     /// ```
     pub fn record_invocation(&mut self, target_workflow: &str) {
         self.depth += 1;
-        self.total_invocations += 1;
+        self.totals.invocations.fetch_add(1, Ordering::Relaxed);
         self.call_chain.push(target_workflow.to_string());
     }
 
@@ -473,14 +552,18 @@ impl WorkflowGuardState {
         config: &WorkflowGuardConfig,
         tokens_used: u64,
     ) -> Result<u64, WorkflowRejection> {
-        self.total_tokens_used += tokens_used;
-        if self.total_tokens_used > config.max_workflow_tokens {
+        let used = self
+            .totals
+            .tokens_used
+            .fetch_add(tokens_used, Ordering::Relaxed)
+            .saturating_add(tokens_used);
+        if used > config.max_workflow_tokens {
             return Err(WorkflowRejection::TokenBudgetExhausted {
-                used: self.total_tokens_used,
+                used,
                 max: config.max_workflow_tokens,
             });
         }
-        Ok(config.max_workflow_tokens - self.total_tokens_used)
+        Ok(config.max_workflow_tokens - used)
     }
 }
 
@@ -845,5 +928,71 @@ mod tests {
         let mut state = shared.lock().unwrap();
         state.record_invocation("test");
         assert_eq!(state.depth(), 1);
+    }
+
+    #[test]
+    fn a_branch_keeps_its_own_chain_and_shares_the_totals() {
+        let mut root = WorkflowGuardState::new();
+        root.record_invocation("parent");
+        let config = WorkflowGuardConfig::new().with_max_workflow_tokens(10);
+        root.enter_wave(&config, "child", 2).expect("room for two");
+        let mut left = root.branch_into("child");
+        let mut right = root.branch_into("child");
+        left.enter(&config, "leaf").expect("no cycle on the left");
+
+        assert_eq!(left.call_chain(), ["parent", "child", "leaf"]);
+        assert_eq!(right.call_chain(), ["parent", "child"]);
+        assert_eq!(right.depth(), 2);
+        assert_eq!(root.call_chain(), ["parent"]);
+        assert_eq!(root.total_invocations(), 4);
+
+        assert_eq!(left.record_tokens(&config, 6), Ok(4));
+        assert!(
+            right.record_tokens(&config, 6).is_err(),
+            "tokens are shared"
+        );
+    }
+
+    #[test]
+    fn enter_wave_claims_room_for_every_child_or_none() {
+        let mut state = WorkflowGuardState::new();
+        state.record_invocation("earlier");
+        state.record_return();
+        let config = WorkflowGuardConfig::new().with_max_fan_out(3);
+
+        assert_eq!(
+            state.enter_wave(&config, "child", 3),
+            Err(WorkflowRejection::MaxFanOutExceeded {
+                invocations: 4,
+                max: 3
+            })
+        );
+        assert_eq!(
+            state.total_invocations(),
+            1,
+            "a refused wave claims nothing"
+        );
+        assert_eq!(state.enter_wave(&config, "child", 2), Ok(()));
+        assert_eq!(state.total_invocations(), 3);
+    }
+
+    #[test]
+    fn enter_claims_the_last_slot_once_across_branches() {
+        let root = WorkflowGuardState::new();
+        let config = WorkflowGuardConfig::new().with_max_fan_out(3);
+        root.enter_wave(&config, "child", 2).expect("room for two");
+        let mut left = root.branch_into("child");
+        let mut right = root.branch_into("child");
+
+        assert_eq!(left.enter(&config, "leaf"), Ok(()));
+        assert_eq!(
+            right.enter(&config, "leaf"),
+            Err(WorkflowRejection::MaxFanOutExceeded {
+                invocations: 3,
+                max: 3
+            })
+        );
+        assert_eq!(right.depth(), 1, "a refused invocation records nothing");
+        assert_eq!(right.call_chain(), ["child"]);
     }
 }
