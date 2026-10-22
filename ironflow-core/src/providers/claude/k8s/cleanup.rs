@@ -1,13 +1,16 @@
 //! Deletion of what a previous attempt left running, before new work starts.
 //!
-//! Two scopes share [`delete_and_wait`]:
+//! Three scopes share [`delete_and_wait`]:
 //!
 //! * a step ([`step_selection`]): before the ephemeral provider starts the
 //!   pod of a step again, it deletes the pods of the previous attempt of the
 //!   same step of the same run;
 //! * a run ([`release_run`]): before the engine executes a run again, every
 //!   pod, Job and prompt ConfigMap carrying the run id, or the run as root of
-//!   a sub-workflow, is deleted.
+//!   a sub-workflow, is deleted;
+//! * a worker pod ([`owner_selection`]): at boot, every object with an
+//!   `ownerReference` to the worker pod, left by a previous process of the
+//!   same pod, is deleted.
 //!
 //! In both cases the pods must be gone before the call returns: two agents
 //! never work side by side on the same state.
@@ -18,6 +21,7 @@ use std::time::Duration;
 use futures_util::future::join_all;
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::{ConfigMap, Pod};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::api::{Api, DeleteParams, ListParams};
 use kube::runtime::wait::{await_condition, conditions};
 use kube::{Client, Error as KubeError};
@@ -28,14 +32,28 @@ use crate::error::AgentError;
 use crate::provider::{LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP, sanitize_label_value};
 
 use super::common::{K8sClusterConfig, create_client};
-use super::ephemeral::{MANAGED_SELECTOR, PROMPT_SELECTOR, RUNNER_SELECTOR};
+use super::ephemeral::{MANAGED_SELECTOR, PROMPT_SELECTOR, RUNNER_SELECTOR, has_owner};
 
 /// The label selectors of one cleanup, and what it is about for messages.
 pub(super) struct Selection {
     pods: Vec<String>,
     jobs: Vec<String>,
     configmaps: Vec<String>,
+    /// When set, only the objects with an `ownerReference` to this uid are
+    /// deleted, plus the pods of the Jobs deleted.
+    owner_uid: Option<String>,
     what: String,
+}
+
+impl Selection {
+    /// Whether `meta` passes the owner filter, `jobs` being the uids of the
+    /// Jobs deleted by this cleanup.
+    fn keeps(&self, meta: &ObjectMeta, jobs: &[String]) -> bool {
+        match &self.owner_uid {
+            None => true,
+            Some(owner) => has_owner(meta, |uid| uid == owner || jobs.iter().any(|j| j == uid)),
+        }
+    }
 }
 
 /// The agent pods and prompt ConfigMaps of a previous attempt of `step` in
@@ -46,7 +64,21 @@ pub(super) fn step_selection(run_id: &str, step: &str) -> Selection {
         pods: vec![format!("{RUNNER_SELECTOR},{scope}")],
         jobs: Vec::new(),
         configmaps: vec![format!("{PROMPT_SELECTOR},{scope}")],
+        owner_uid: None,
         what: format!("the previous attempt of step {step} of run {run_id}"),
+    }
+}
+
+/// Every ironflow pod and Job, and every prompt ConfigMap, with an
+/// `ownerReference` to the worker pod `name` of uid `uid`, and the pods of
+/// those Jobs.
+pub(super) fn owner_selection(name: &str, uid: &str) -> Selection {
+    Selection {
+        pods: vec![MANAGED_SELECTOR.to_string()],
+        jobs: vec![MANAGED_SELECTOR.to_string()],
+        configmaps: vec![PROMPT_SELECTOR.to_string()],
+        owner_uid: Some(uid.to_string()),
+        what: format!("the worker pod {name}"),
     }
 }
 
@@ -66,6 +98,7 @@ fn run_selection(run_id: &str) -> Selection {
             .iter()
             .map(|s| format!("{PROMPT_SELECTOR},{s}"))
             .collect(),
+        owner_uid: None,
         what: format!("run {run_id}"),
     }
 }
@@ -117,7 +150,7 @@ pub(super) async fn delete_and_wait(
     limit: Duration,
 ) -> Result<usize, AgentError> {
     let what = &selection.what;
-    delete_jobs(&Api::namespaced(client.clone(), namespace), selection).await?;
+    let jobs = delete_jobs(&Api::namespaced(client.clone(), namespace), selection).await?;
 
     let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
     // A pod may match several selectors: keyed by uid, deleted once.
@@ -125,7 +158,11 @@ pub(super) async fn delete_and_wait(
     for selector in &selection.pods {
         let list = pods.list(&ListParams::default().labels(selector)).await;
         let list = list.map_err(|e| failure(format!("failed to list pods of {what}: {e}")))?;
-        for pod in list.items {
+        let kept = list
+            .items
+            .into_iter()
+            .filter(|p| selection.keeps(&p.metadata, &jobs));
+        for pod in kept {
             if let (Some(name), Some(uid)) = (pod.metadata.name, pod.metadata.uid) {
                 listed.insert(uid, name);
             }
@@ -163,8 +200,10 @@ pub(super) async fn delete_and_wait(
     Ok(deleted.len())
 }
 
-async fn delete_jobs(jobs: &Api<Job>, selection: &Selection) -> Result<(), AgentError> {
+/// Delete the Jobs of `selection`, returning the uids of those deleted.
+async fn delete_jobs(jobs: &Api<Job>, selection: &Selection) -> Result<Vec<String>, AgentError> {
     let what = &selection.what;
+    let mut deleted: Vec<String> = Vec::new();
     for selector in &selection.jobs {
         let list = match jobs.list(&ListParams::default().labels(selector)).await {
             Ok(list) => list,
@@ -174,10 +213,16 @@ async fn delete_jobs(jobs: &Api<Job>, selection: &Selection) -> Result<(), Agent
             }
             Err(e) => return Err(failure(format!("failed to list Jobs of {what}: {e}"))),
         };
-        for name in list.items.into_iter().filter_map(|job| job.metadata.name) {
+        let kept = list
+            .items
+            .into_iter()
+            .filter(|job| selection.keeps(&job.metadata, &[]));
+        for (name, uid) in kept.filter_map(|job| job.metadata.name.zip(job.metadata.uid)) {
             match jobs.delete(&name, &DeleteParams::background()).await {
-                Ok(_) => {}
-                Err(KubeError::Api(e)) if e.code == 404 => {}
+                // A Job already gone may still have pods terminating: its
+                // uid lets the owner filter keep them.
+                Ok(_) => deleted.push(uid),
+                Err(KubeError::Api(e)) if e.code == 404 => deleted.push(uid),
                 Err(e) => {
                     return Err(failure(format!(
                         "failed to delete Job '{name}' of {what}: {e}"
@@ -186,7 +231,7 @@ async fn delete_jobs(jobs: &Api<Job>, selection: &Selection) -> Result<(), Agent
             }
         }
     }
-    Ok(())
+    Ok(deleted)
 }
 
 /// Delete the prompt ConfigMaps: best effort, a leftover is only data and
@@ -198,7 +243,12 @@ async fn delete_configmaps(configmaps: &Api<ConfigMap>, selection: &Selection) {
             .list(&ListParams::default().labels(selector))
             .await
         {
-            Ok(list) => names.extend(list.items.into_iter().filter_map(|cm| cm.metadata.name)),
+            Ok(list) => names.extend(
+                list.items
+                    .into_iter()
+                    .filter(|cm| selection.keeps(&cm.metadata, &[]))
+                    .filter_map(|cm| cm.metadata.name),
+            ),
             Err(e) => warn!(error = %e, "failed to list prompt ConfigMaps of {}", selection.what),
         }
     }

@@ -23,6 +23,7 @@ use crate::conventions::{
     ironflow_labels,
 };
 use crate::error::k8s_external;
+use crate::pod_run::owner::OwnerPod;
 use crate::pod_run::{
     DEFAULT_MAX_LOG_BYTES, PvcMount, active_deadline_secs, build_env_vars, build_pvc_volumes,
     new_pvc_mount, push_volume, truncate_logs,
@@ -114,6 +115,7 @@ pub struct JobRun {
     expiry_margin: Duration,
     poll_interval: Duration,
     max_log_bytes: usize,
+    owner: Option<OwnerPod>,
 }
 
 impl JobRun {
@@ -140,6 +142,7 @@ impl JobRun {
             expiry_margin: DEFAULT_EXPIRY_MARGIN,
             poll_interval: DEFAULT_POLL_INTERVAL,
             max_log_bytes: DEFAULT_MAX_LOG_BYTES,
+            owner: None,
         }
     }
 
@@ -383,6 +386,31 @@ impl JobRun {
         self
     }
 
+    /// Tie the Job to the worker pod `name` of uid `uid`: the Job carries an
+    /// `ownerReference` to it, and the Kubernetes garbage collector deletes
+    /// the Job, then its pods, once the worker pod is gone. Same contract as
+    /// [`PodRun::owner_pod`](crate::pod_run::PodRun::owner_pod): the worker
+    /// must run in the namespace of the Job, checked by [`run`](Self::run)
+    /// before creating anything.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_k8s::job_run::JobRun;
+    /// # use ironflow_ops_k8s::KubeClient;
+    ///
+    /// # fn example(kube: &KubeClient, name: &str, uid: &str) {
+    /// let run = JobRun::new(kube, "migrate", "migrate:1.0", "migrate up")
+    ///     .owner_pod(name, uid);
+    /// # let _ = run;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn owner_pod(mut self, name: &str, uid: &str) -> Self {
+        self.owner = Some(OwnerPod::new(name, uid));
+        self
+    }
+
     /// Build the [`Job`] manifest for this run. Pure: performs no I/O.
     ///
     /// Exposed for testing the manifest without a cluster.
@@ -428,6 +456,7 @@ impl JobRun {
                 namespace: Some(self.namespace.clone()),
                 labels: Some(labels.clone()),
                 annotations: Some(expiry_annotation(self.timeout + self.expiry_margin)),
+                owner_references: self.owner.as_ref().map(|o| vec![o.reference()]),
                 ..Default::default()
             },
             spec: Some(JobSpec {
@@ -464,10 +493,14 @@ impl JobRun {
     /// # Errors
     ///
     /// Returns [`OperationError::External`] with `origin: "kubernetes"` if the
-    /// Job cannot be created, the wait loop fails, or the wall-clock timeout is
-    /// exceeded. A Job that ran and failed is **not** an error; it is reported
-    /// via [`JobRunOutput::success`].
+    /// [`owner_pod`](Self::owner_pod) is empty, missing from the namespace or
+    /// of another uid (no Job is created), the Job cannot be created, the wait
+    /// loop fails, or the wall-clock timeout is exceeded. A Job that ran and
+    /// failed is **not** an error; it is reported via [`JobRunOutput::success`].
     pub async fn run(&self) -> Result<JobRunOutput, OperationError> {
+        if let Some(owner) = &self.owner {
+            owner.check(&self.client, &self.namespace).await?;
+        }
         let jobs: Api<Job> = Api::namespaced(self.client.clone(), &self.namespace);
 
         jobs.create(&PostParams::default(), &self.build_job())

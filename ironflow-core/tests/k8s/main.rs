@@ -7,5 +7,7 @@
 #![cfg(feature = "transport-k8s")]
 
 mod fake_api;
+mod owner;
 mod reaper;
+mod release_owned;
 mod release_run;
