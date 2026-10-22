@@ -243,6 +243,14 @@ fn push_effort(args: &mut Vec<String>, config: &AgentConfig) {
     }
 }
 
+/// Push `--tools <list>` when the offered tools are set, `--tools ""` for
+/// none: without the flag the CLI offers its whole default set.
+fn push_available_tools(args: &mut Vec<String>, config: &AgentConfig) {
+    if let Some(ref tools) = config.available_tools {
+        push_flag(args, "--tools", &tools.join(","));
+    }
+}
+
 /// Push the session flags: `--resume <id>` when a session is resumed,
 /// otherwise `--session-id <id>` when the session id is fixed. Never both:
 /// the CLI refuses to create a session it is asked to resume.
@@ -357,6 +365,7 @@ pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
     );
     push_flag(&mut args, "--model", &config.model);
     push_effort(&mut args, config);
+    push_available_tools(&mut args, config);
     if !config.allowed_tools.is_empty() {
         push_flag(&mut args, "--allowedTools", &config.allowed_tools.join(","));
     }
@@ -461,6 +470,7 @@ pub fn build_command(config: &AgentConfig) -> Result<BuiltCommand, AgentError> {
     );
     push_flag(&mut args, "--model", &config.model);
     push_effort(&mut args, config);
+    push_available_tools(&mut args, config);
     if !config.allowed_tools.is_empty() {
         push_flag(&mut args, "--allowedTools", &config.allowed_tools.join(","));
     }

@@ -84,7 +84,8 @@ Anthropic API provider; other HTTP providers ignore it. Without it no flag is se
 model default applies.
 
 Tools are an enum: `.allow_tool(Tool::Bash)`, `Tool::Custom("mcp__server__tool".into())`
-for anything else. A step can have tools and structured output: with
+for anything else. `.available_tools([Tool::Read])` bounds the built-in tools the Claude CLI
+offers (`--tools`), where `allow_tool` only pre-approves. A step can have tools and structured output: with
 `.allow_tool(Tool::Read).output::<Verdict>()` the agent reads what it needs, then
 `ctx.agent` returns the `Verdict`. Claude Code fills the structured answer with tools
 active (tested with 2.1.296 and 2.1.304); count one more turn in `max_turns` per round
