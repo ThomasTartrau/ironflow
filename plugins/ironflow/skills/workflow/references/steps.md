@@ -216,6 +216,11 @@ A structured answer that does not match its type fails the step with
 Claude CLI providers receive `--effort`, the Anthropic API provider `output_config.effort`;
 other HTTP providers ignore it, and without the call no flag is sent.
 
+`.available_tools([Tool::Read, Tool::Edit])` sets the built-in tools the Claude CLI session
+offers (`--tools`, empty for none). `.allow_tool` only pre-approves: in `dontAsk`, a read-only
+`Bash` or `Monitor` command outside the allowlist still runs, so a step without a shell sets
+both. MCP tools stay offered; HTTP providers ignore it.
+
 On an HTTP provider (OpenAI, Anthropic API, ...), tools live on the worker, grouped in
 named profiles (see the setup skill, `references/options.md`). A step picks one with
 `.tool_profile(BUG)`, a `ToolProfile` constant shared with the worker, and sees only

@@ -3,7 +3,8 @@
 use strum::Display;
 
 /// A tool an agent can call, for [`AgentConfig::allow_tool`](super::AgentConfig::allow_tool)
-/// and [`AgentConfig::disallowed_tools`](super::AgentConfig::disallowed_tools).
+/// [`AgentConfig::disallowed_tools`](super::AgentConfig::disallowed_tools)
+/// and [`AgentConfig::available_tools`](super::AgentConfig::available_tools).
 ///
 /// The known variants are the Claude Code built-in tools; a misspelled
 /// variant does not compile, where a misspelled string is silently ignored by

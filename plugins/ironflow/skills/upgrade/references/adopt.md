@@ -24,6 +24,23 @@ step does both now (tested with Claude Code 2.1.296 and 2.1.304).
 
 Raise `max_turns` by one per round of tool calls. Section: Agent.
 
+## available-tools
+- kind: adopt
+- since: ironflow-core after 4.16.0 (#217)
+- detect: `disallowed_tools\(\[[^]]*Tool::Bash`
+
+`.disallowed_tools([Tool::Bash])` kept a step from running a shell through `Bash` only:
+`Monitor` still runs a read-only command, and so does `Bash` itself when it is merely left
+out of `allow_tool` in `dontAsk` (tested with Claude Code 2.1.296 and 2.1.308).
+`.available_tools(...)` offers only the listed built-in tools; MCP tools stay offered.
+
+```diff
+- let config = AgentStepConfig::new(&prompt).allow_tool(Tool::Read).disallowed_tools([Tool::Bash]);
++ let config = AgentStepConfig::new(&prompt).allow_tool(Tool::Read).available_tools([Tool::Read]);
+```
+
+Section: Agent.
+
 ## wait-for-signal
 - kind: adopt
 - since: ironflow-engine 2.43.0 (#146)

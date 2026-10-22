@@ -199,6 +199,15 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default)]
     pub disallowed_tools: Vec<String>,
 
+    /// Built-in tools the session offers, `None` for the provider's default set.
+    ///
+    /// Maps to `--tools` on the Claude CLI; HTTP providers ignore it. A tool
+    /// left out cannot be called, where [`allowed_tools`](Self::allowed_tools)
+    /// only pre-approves: in `dontAsk`, Claude Code still runs a read-only
+    /// `Bash` or `Monitor` command missing from it. MCP tools stay offered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_tools: Option<Vec<String>>,
+
     /// Named tool profile the provider exposes to this step.
     ///
     /// Set it with [`AgentConfig::tool_profile`]. `None` means the provider's
@@ -430,6 +439,7 @@ impl AgentConfig {
             model: Model::SONNET.to_string(),
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
+            available_tools: None,
             tool_profile: None,
             max_turns: None,
             max_parallel_tools: 4,
@@ -660,6 +670,29 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         I: IntoIterator<Item = Tool>,
     {
         self.disallowed_tools = tools.into_iter().map(|tool| tool.to_string()).collect();
+        self
+    }
+
+    /// Replace the set of built-in tools the session offers.
+    ///
+    /// Maps to `--tools` on the Claude CLI; an empty list offers none. Like
+    /// [`disallowed_tools`](AgentConfig::disallowed_tools), it leaves the
+    /// typestate unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::{AgentConfig, Tool};
+    ///
+    /// let config = AgentConfig::new("fix the typo")
+    ///     .available_tools([Tool::Read, Tool::Edit]);
+    /// assert_eq!(config.available_tools, Some(vec!["Read".into(), "Edit".into()]));
+    /// ```
+    pub fn available_tools<I>(mut self, tools: I) -> Self
+    where
+        I: IntoIterator<Item = Tool>,
+    {
+        self.available_tools = Some(tools.into_iter().map(|tool| tool.to_string()).collect());
         self
     }
 
@@ -1299,6 +1332,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             model: self.model,
             allowed_tools: self.allowed_tools,
             disallowed_tools: self.disallowed_tools,
+            available_tools: self.available_tools,
             tool_profile: self.tool_profile,
             max_turns: self.max_turns,
             max_parallel_tools: self.max_parallel_tools,
@@ -1941,6 +1975,7 @@ mod tests {
             model: Model::OPUS.to_string(),
             allowed_tools: vec!["Read".to_string(), "Write".to_string()],
             disallowed_tools: vec!["Bash".to_string()],
+            available_tools: Some(vec!["Read".to_string(), "Write".to_string()]),
             tool_profile: None,
             max_turns: Some(10),
             max_parallel_tools: 2,
@@ -2001,6 +2036,7 @@ mod tests {
             model: Model::HAIKU.to_string(),
             allowed_tools: vec![],
             disallowed_tools: vec![],
+            available_tools: None,
             tool_profile: None,
             max_turns: None,
             max_parallel_tools: 4,

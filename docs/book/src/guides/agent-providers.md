@@ -28,6 +28,16 @@ in [Transports](transports.md).
 Kubernetes) pass it as `--effort`, also when a session is resumed, and `AnthropicApiProvider`
 sends `output_config.effort`. The other HTTP providers ignore it. When unset, no flag is sent.
 
+## Offered tools
+
+`AgentConfig::available_tools([Tool::Read, Tool::Edit])` sets the built-in tools the Claude
+Code session offers (`--tools`); an empty list offers none, and without the call the CLI
+offers its default set. `allow_tool` only pre-approves: in `dontAsk`, Claude Code still runs a
+read-only `Bash` or `Monitor` command that the allowlist leaves out, so a step that must not
+run a shell sets both. Only built-in tools are filtered, the tools of `--mcp-config` stay
+offered; the CLI ignores an unknown name or a permission pattern (`Bash(git log:*)`) without
+error. HTTP providers ignore the field.
+
 ## HTTP providers
 
 HTTP providers are used exactly like the local one:
