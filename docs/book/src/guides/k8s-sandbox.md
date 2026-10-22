@@ -298,6 +298,54 @@ other's pod, so the engine fails such a group before creating any step.
 Deleting `JobRun` Jobs needs `list` and `delete` on `jobs`; without them, Jobs
 are skipped with a warning and the pods are still released.
 
+## Tying pods to the worker pod
+
+`release_run` only runs when the run executes again, after the worker lease
+expired. Until then, the agent pod of a killed worker keeps running, and
+writing to shared state. `.owner_pod(name, uid)` puts an `ownerReference` to
+the worker pod on every agent pod and prompt ConfigMap (`controller: false`,
+`blockOwnerDeletion: false`): the Kubernetes garbage collector deletes them as
+soon as the worker pod is gone. `PodRun::owner_pod` and `JobRun::owner_pod`
+do the same for the pods and Jobs of `ironflow-ops-k8s`; a Job takes its pods
+with it.
+
+The worker reads its name and uid through the downward API:
+
+```yaml
+env:
+  - name: POD_NAME
+    valueFrom: { fieldRef: { fieldPath: metadata.name } }
+  - name: POD_UID
+    valueFrom: { fieldRef: { fieldPath: metadata.uid } }
+```
+
+```rust,ignore
+let (name, uid) = (var("POD_NAME")?, var("POD_UID")?);
+let provider = K8sEphemeralProvider::sandboxed(&image)
+    .namespace(&namespace)
+    .owner_pod(&name, &uid);
+// A container restarted in the same pod (OOM, crash) keeps its pod, so the
+// garbage collector leaves its agents running: release them at boot.
+provider.release_owned().await?;
+let check = PodRun::new(&kube, "check", &image, "cargo test")
+    .namespace(&namespace)
+    .owner_pod(&name, &uid);
+```
+
+An owner reference only holds in the namespace of its owner: with an owner the
+garbage collector cannot find in the namespace of the pod, it deletes the pod
+right after its creation. The worker must therefore run in the namespace of
+its agent pods, unlike the two-namespace layout of
+`examples/k8s/sandbox/namespace-rbac.yaml`. Before creating anything, each
+invocation, `PodRun::run` and `JobRun::run` read the owner pod there and fail
+when it is missing or carries another uid. An empty name or uid fails too,
+before any request.
+
+`release_owned` deletes the ironflow pods, `JobRun` Jobs (and their pods) and
+prompt ConfigMaps with an `ownerReference` to the owner's uid, and waits until
+the pods are gone (`.previous_attempt_timeout(d)`). Objects of another worker
+or without owner are left alone. It fails when no owner is set.
+
 `PodRun` and `JobRun` keep at most 1 MiB of logs: past that, only the tail is
 kept, behind a `[... N bytes truncated ...]` marker, and `logs_truncated` is
 set on the output. `.max_log_bytes(n)` changes the limit. A `PodRun` with

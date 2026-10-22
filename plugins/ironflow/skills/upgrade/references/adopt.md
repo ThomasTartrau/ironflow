@@ -39,6 +39,30 @@ out of `allow_tool` in `dontAsk` (tested with Claude Code 2.1.296 and 2.1.308).
 + let config = AgentStepConfig::new(&prompt).allow_tool(Tool::Read).available_tools([Tool::Read]);
 ```
 
+## owner-pod
+- kind: adopt
+- since: ironflow-core after 4.17.0, ironflow-ops-k8s after 0.1.43 (#218)
+
+A worker killed during a step left its agent pod, `PodRun` pod or `JobRun` Job running
+until the lease expired and the run was released, or until the orphan reaper passed: the
+agent kept writing to shared state, outside the run's cost. `.owner_pod(name, uid)` ties
+them to the worker pod, and the garbage collector deletes them with it. Only when the
+worker runs in the namespace of the pods it creates: an invocation fails otherwise.
+`release_owned()` at boot covers a container restarted in the same pod. Expose
+`metadata.name` and `metadata.uid` to the worker through the downward API first.
+
+```diff
+  let provider = K8sEphemeralProvider::sandboxed(&image)
+-     .namespace(&namespace);
++     .namespace(&namespace)
++     .owner_pod(&var("POD_NAME")?, &var("POD_UID")?);
++ provider.release_owned().await?;
+  let check = PodRun::new(&kube, "check", &image, "cargo test")
+-     .namespace(&namespace);
++     .namespace(&namespace)
++     .owner_pod(&var("POD_NAME")?, &var("POD_UID")?);
+```
+
 Section: Agent.
 
 ## wait-for-signal

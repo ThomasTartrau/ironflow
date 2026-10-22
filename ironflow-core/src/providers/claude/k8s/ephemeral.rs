@@ -74,6 +74,11 @@ use super::profile::{ClaudeProfile, build_profile_copy_prefix};
 use super::reaper::{ReapReport, reap_orphans};
 use super::toleration::K8sToleration;
 
+mod owner;
+
+use owner::OwnerPod;
+pub(super) use owner::has_owner;
+
 /// Environment variable carrying the OAuth credentials JSON read from a Secret.
 const CREDENTIALS_ENV_VAR: &str = "IRONFLOW_CLAUDE_CREDENTIALS";
 
@@ -381,6 +386,7 @@ pub struct K8sEphemeralProvider {
     proxied_secrets: Vec<ProxiedSecret>,
     environment: Option<EnvironmentVolume>,
     sessions_claim: Option<String>,
+    owner: Option<OwnerPod>,
 }
 
 /// Apply a Kubernetes `runtimeClassName` onto a built pod.
@@ -443,6 +449,7 @@ impl K8sEphemeralProvider {
             proxied_secrets: Vec::new(),
             environment: None,
             sessions_claim: None,
+            owner: None,
         }
     }
 
@@ -1762,6 +1769,9 @@ impl K8sEphemeralProvider {
         claude_common::validate_prompt_size(config)?;
         let built = claude_common::build_command(config)?;
         let merged = self.merged_pod_inputs(config)?;
+        if let Some(owner) = &self.owner {
+            owner.validate()?;
+        }
 
         let pod_name = generate_pod_name("claude-code");
         let creds_prefix = self.home_setup_prefix();
@@ -1769,6 +1779,9 @@ impl K8sEphemeralProvider {
         let start = Instant::now();
         let client = create_client(&self.cluster_config).await?;
         let pods: Api<Pod> = Api::namespaced(client.clone(), &self.namespace);
+        if let Some(owner) = &self.owner {
+            owner.check_present(&pods, &self.namespace).await?;
+        }
 
         let mut prompt_configmap_name: Option<String> = None;
         let configmaps: Api<ConfigMap> = Api::namespaced(client.clone(), &self.namespace);
@@ -1803,7 +1816,7 @@ impl K8sEphemeralProvider {
                 cm_labels.insert(LABEL_RUN_ID, run_id.as_str());
                 cm_labels.insert(LABEL_STEP, step.as_str());
             }
-            let cm: ConfigMap = from_value(json!({
+            let mut cm: ConfigMap = from_value(json!({
                 "apiVersion": "v1",
                 "kind": "ConfigMap",
                 "metadata": {
@@ -1820,6 +1833,7 @@ impl K8sEphemeralProvider {
                 exit_code: -1,
                 stderr: format!("failed to build prompt ConfigMap: {e}"),
             })?;
+            cm.metadata.owner_references = self.owner.as_ref().map(|o| vec![o.reference()]);
 
             configmaps
                 .create(&PostParams::default(), &cm)
@@ -1957,6 +1971,8 @@ impl K8sEphemeralProvider {
                 // carry these fields, so they are set on the built pod here.
                 apply_active_deadline_seconds(&mut pod_spec, self.effective_deadline());
                 apply_runtime_class(&mut pod_spec, merged.runtime_class.as_deref());
+                pod_spec.metadata.owner_references =
+                    self.owner.as_ref().map(|o| vec![o.reference()]);
                 pods.create(&PostParams::default(), &pod_spec)
                     .await
                     .map_err(|e| AgentError::ProcessFailed {

@@ -42,6 +42,10 @@ rules:
 # namespace (`ironflow` here), not in `ironflow-agents`: keep the agent
 # namespace for agent pods only. Adjust the subject to the namespace and name
 # the worker runs under.
+#
+# This layout rules out `owner_pod` (agent pods deleted with the worker pod):
+# an ownerReference only holds in the namespace of its owner. To use it, run
+# the worker in the namespace of its agent pods.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:

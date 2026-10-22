@@ -288,6 +288,35 @@ pub fn validate_pvc_sub_path(sub_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Check the worker pod given to an `owner_pod` builder: its name and uid
+/// must not be empty or whitespace-only, so no object is ever created with
+/// an empty `ownerReference`.
+///
+/// Called by `K8sEphemeralProvider` and by `PodRun` and `JobRun` of
+/// `ironflow-ops-k8s` before any request.
+///
+/// # Errors
+///
+/// Returns the reason as a message when the name or the uid is empty.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::provider::validate_owner_pod;
+///
+/// assert!(validate_owner_pod("worker-0", "6f1c2d3e-0000-4000-8000-000000000000").is_ok());
+/// assert!(validate_owner_pod("worker-0", "").is_err());
+/// assert!(validate_owner_pod(" ", "6f1c2d3e").is_err());
+/// ```
+pub fn validate_owner_pod(name: &str, uid: &str) -> Result<(), String> {
+    if name.trim().is_empty() || uid.trim().is_empty() {
+        return Err(format!(
+            "owner_pod needs the name and the uid of the worker pod, got name '{name}' and uid '{uid}'"
+        ));
+    }
+    Ok(())
+}
+
 /// Value of [`LABEL_COMPONENT`] on the PersistentVolumeClaims backing a
 /// persistent agent environment (see [`EnvironmentVolume`]).
 pub const COMPONENT_ENVIRONMENT: &str = "environment";

@@ -46,7 +46,7 @@ pub use pod::{
     LABEL_EXPIRES_AT, LABEL_MANAGED_BY, LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP,
     MANAGED_BY_IRONFLOW, PodSettings, PodVolumeSource, PvcVolume, ReadOnlyVolume, SecretEnvVar,
     StorageUnit, VolumeSize, assert_pod_label_allowed, is_reserved_pod_label, sanitize_label_value,
-    validate_pvc_sub_path,
+    validate_owner_pod, validate_pvc_sub_path,
 };
 pub(crate) use pod::{assert_environment_id_valid, upsert_proxied_secret, upsert_secret_env};
 pub use tool::Tool;

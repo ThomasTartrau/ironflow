@@ -26,6 +26,7 @@ use crate::conventions::{
 };
 use crate::error::k8s_external;
 
+pub(crate) mod owner;
 mod sandbox;
 mod stdin;
 mod termination;
@@ -37,6 +38,8 @@ use sandbox::Sandbox;
 pub use stdin::{MAX_STDIN_BYTES, STDIN_ANNOTATION};
 use stdin::{stdin_command, stdin_volume};
 use termination::Termination;
+
+use owner::OwnerPod;
 
 /// Default wall-clock timeout for a [`PodRun`] if none is configured.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -205,6 +208,7 @@ pub struct PodRun {
     max_log_bytes: usize,
     stdin: Option<String>,
     sandbox: Option<Sandbox>,
+    owner: Option<OwnerPod>,
 }
 
 impl PodRun {
@@ -240,6 +244,7 @@ impl PodRun {
             max_log_bytes: DEFAULT_MAX_LOG_BYTES,
             stdin: None,
             sandbox: None,
+            owner: None,
         }
     }
 
@@ -701,6 +706,7 @@ impl PodRun {
                 namespace: Some(self.namespace.clone()),
                 labels: Some(ironflow_labels(&self.labels, POD_RUN_COMPONENT)),
                 annotations: Some(annotations),
+                owner_references: self.owner.as_ref().map(|o| vec![o.reference()]),
                 ..Default::default()
             },
             spec: Some(PodSpec {
@@ -731,12 +737,16 @@ impl PodRun {
     /// # Errors
     ///
     /// Returns [`OperationError::External`] with `origin: "kubernetes"` if the
-    /// [`stdin`](Self::stdin) input exceeds [`MAX_STDIN_BYTES`] (no pod is
-    /// created), the pod cannot be created, the wait loop fails, or the
+    /// [`stdin`](Self::stdin) input exceeds [`MAX_STDIN_BYTES`] or the
+    /// [`owner_pod`](Self::owner_pod) is empty, missing from the namespace or
+    /// of another uid (no pod is created), the pod cannot be created, the wait loop fails, or the
     /// wall-clock timeout is exceeded. A command that ran and exited non-zero is **not** an error;
     /// it is reported via [`PodRunOutput::success`].
     pub async fn run(&self) -> Result<PodRunOutput, OperationError> {
         self.check_stdin()?;
+        if let Some(owner) = &self.owner {
+            owner.check(&self.client, &self.namespace).await?;
+        }
         let pods: Api<Pod> = Api::namespaced(self.client.clone(), &self.namespace);
 
         pods.create(&PostParams::default(), &self.build_pod())

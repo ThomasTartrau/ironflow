@@ -166,6 +166,61 @@ users:
             .await;
     }
 
+    /// Answer `GET pods/<name>` with a running pod of uid `uid`: the worker
+    /// pod named by `owner_pod`.
+    pub async fn owner(&self, name: &str, uid: &str) {
+        Mock::given(method("GET"))
+            .and(path(format!("{}/{name}", collection("pods"))))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": { "name": name, "namespace": NS, "uid": uid },
+                "spec": { "containers": [] },
+                "status": { "phase": "Running" },
+            })))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Answer `GET pods/<name>` with a 404: no such pod in [`NS`].
+    pub async fn owner_missing(&self, name: &str) {
+        Mock::given(method("GET"))
+            .and(path(format!("{}/{name}", collection("pods"))))
+            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+                "apiVersion": "v1",
+                "kind": "Status",
+                "status": "Failure",
+                "message": format!("pods \"{name}\" not found"),
+                "reason": "NotFound",
+                "code": 404,
+            })))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Accept the creation of any prompt ConfigMap.
+    pub async fn accept_configmaps(&self) {
+        Mock::given(method("POST"))
+            .and(path(collection("configmaps")))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": { "name": "accepted", "namespace": NS },
+            })))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Bodies of the objects POSTed to `<kind>`, in order.
+    pub async fn posted(&self, kind: &str) -> Vec<Value> {
+        let requests = self.server.received_requests().await.expect("recorded");
+        requests
+            .iter()
+            .filter(|r| r.method.as_str() == "POST" && r.url.path() == collection(kind))
+            .map(|r| r.body_json().expect("JSON body"))
+            .collect()
+    }
+
     /// Expect exactly `times` deletes of `<kind>/<name>`.
     pub async fn expect_delete(&self, kind: &str, name: &str, times: u64) {
         Mock::given(method("DELETE"))
@@ -246,6 +301,19 @@ pub fn owned_by_job(mut pod: Value, job: &str) -> Value {
         "controller": true,
     }]);
     pod
+}
+
+/// Add to `object` an `ownerReference` to the worker pod of uid `uid`.
+pub fn owned_by_worker(mut object: Value, uid: &str) -> Value {
+    object["metadata"]["ownerReferences"] = json!([{
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "name": format!("worker-{uid}"),
+        "uid": uid,
+        "controller": false,
+        "blockOwnerDeletion": false,
+    }]);
+    object
 }
 
 /// A Job of `JobRun`, failed with `failed_reason` when set.
