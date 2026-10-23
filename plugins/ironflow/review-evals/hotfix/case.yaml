@@ -1,0 +1,54 @@
+schema_version: "1.1"
+name: hotfix
+description: Three defects - input.ticket formatted into ShellConfig::new, a reqwest POST outside a step before the gate, the GitLab token formatted into a curl command.
+expected_outcome: blocker at hotfix.rs:37-43, blocker or bug at hotfix.rs:47-52, blocker at hotfix.rs:69-77, no other blocker or bug.
+tags: [review, multi, "phrasing:slash"]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 20
+  timeout_seconds: 600
+  allowed_tools: [Read, Glob, Grep, Skill, Agent]
+  prompt: |
+    /ironflow review src/hotfix.rs
+graders:
+  - name: dispatched
+    type: tool_used
+    tool: Agent
+    input_match: 'workflow-reviewer'
+  - name: located-injection
+    type: regex
+    weight: 2
+    flags: i
+    pattern: '(?:hotfix\.rs:|\b(?:lines?|lignes?|l\.|L)\s*)(?:3[7-9]|4[0-3])\b'
+  - name: located-side-effect
+    type: regex
+    weight: 2
+    flags: i
+    pattern: '(?:hotfix\.rs:|\b(?:lines?|lignes?|l\.|L)\s*)(?:4[7-9]|5[0-2])\b'
+  - name: located-secret
+    type: regex
+    weight: 2
+    flags: i
+    pattern: '(?:hotfix\.rs:|\b(?:lines?|lignes?|l\.|L)\s*)(?:69|7[0-7])\b'
+  - name: severity-injection
+    type: regex
+    target: trace
+    flags: i
+    pattern: '(?:\\n|\b)blocker[*_]*\s+\S*hotfix\.rs:(?:3[7-9]|4[0-3])\b'
+  - name: severity-side-effect
+    type: regex
+    target: trace
+    flags: i
+    pattern: '(?:\\n|\b)(?:blocker|bug)[*_]*\s+\S*hotfix\.rs:(?:4[7-9]|5[0-2])\b'
+  - name: severity-secret
+    type: regex
+    target: trace
+    flags: i
+    pattern: '(?:\\n|\b)blocker[*_]*\s+\S*hotfix\.rs:(?:69|7[0-7])\b'
+  - name: no-false-alarm
+    type: regex
+    target: trace
+    flags: i
+    match: not_contains
+    pattern: '(?:\\n|\b)(?:blocker|bug)[*_]*\s+\S*\.rs:(?!(?:3[7-9]|4[0-3]|4[7-9]|5[0-2]|69|7[0-7])\b)\d+'
