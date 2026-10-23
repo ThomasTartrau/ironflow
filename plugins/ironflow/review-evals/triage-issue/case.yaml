@@ -1,0 +1,29 @@
+schema_version: "1.1"
+name: triage-issue
+description: Clean handler - typed agent output, typed human input, the human answers passed to exec as arguments.
+expected_outcome: no blocker or bug, a concluding findings line.
+tags: [review, clean, "phrasing:slash"]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 20
+  timeout_seconds: 600
+  allowed_tools: [Read, Glob, Grep, Skill, Agent]
+  prompt: |
+    /ironflow review src/triage_issue.rs
+graders:
+  - name: dispatched
+    type: tool_used
+    tool: Agent
+    input_match: 'workflow-reviewer'
+  - name: concluded
+    type: regex
+    target: trace
+    flags: i
+    pattern: '(?:\\n|\b)(?:no|aucun[e]?|\d+)\s+(?:findings?|constats?|problèmes?|issues?|anomalies?|blockers?)\b|found nothing|nothing to (?:report|flag)|rien (?:à signaler|trouvé)'
+  - name: no-false-alarm
+    type: regex
+    target: trace
+    flags: i
+    match: not_contains
+    pattern: '(?:\\n|\b)(?:blocker|bug)[*_]*\s+\S*\.rs:\d+'

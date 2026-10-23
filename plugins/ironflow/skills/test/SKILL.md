@@ -59,6 +59,63 @@ Builders: `with_handler`, `with_mock_shell`, `with_mock_http`, `with_mock_agent`
 
 A handler that fails is not an `Err`: `result.status()` is `RunStatus::Failed` and `result.error()` carries the message. A non-zero `MockShellOutput::failed(1, "boom")` fails the step like a real non-zero exit; a non-2xx `MockHttpResponse` is a normal output, like a real 500. Without `with_mock_approval`, a gate suspends the run (`RunStatus::AwaitingApproval`) and `resume(run_id)` continues it. `with_mock_human_input(|name, cfg| HumanInputOutcome::Provided(json!({..})))` answers every `ctx.human_input` step with a value that must deserialize into the handler's type; `HumanInputOutcome::reject("reason")` makes the handler receive `EngineError::HumanInputRejected`. `with_mock_signal(|step, name, key| SignalOutcome::Received(json!({..})))` resolves every `ctx.wait_for_signal` step with that payload; `SignalOutcome::TimedOut` makes it return `None`.
 
+An approval gate, two ways. `with_mock_approval` takes an `ApprovalOutcome` value, not a
+closure: `ApprovalOutcome::Approved` or `ApprovalOutcome::reject("reason")`. To assert the
+suspension itself, leave the gate unmocked, then `resume` the same run:
+
+```rust,no_run
+use ironflow_engine::config::{ApprovalConfig, ShellConfig};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+use ironflow_engine::testing::{ApprovalOutcome, MockShellOutput, TestEngine};
+use ironflow_store::models::RunStatus;
+use serde_json::json;
+
+struct Release;
+
+impl WorkflowHandler for Release {
+    fn name(&self) -> &str {
+        "release"
+    }
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.shell("build", ShellConfig::new("cargo build")).await?;
+            ctx.approval("ship", ApprovalConfig::new("Publish?")).await?;
+            ctx.shell("publish", ShellConfig::new("./publish.sh")).await?;
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn release_waits_for_approval_then_publishes() {
+    let mut harness = TestEngine::new()
+        .with_handler(Release)
+        .with_mock_shell(|_cfg| Ok(MockShellOutput::ok("")));
+
+    let suspended = harness.run(json!({})).await.expect("the harness ran the handler");
+    assert_eq!(suspended.status(), RunStatus::AwaitingApproval);
+    assert_eq!(suspended.step_names(), vec!["build", "ship"]);
+
+    // Records the approval vote on the open gate and replays the handler.
+    let resumed = harness.resume(suspended.run_id()).await.expect("the run resumed");
+    assert_eq!(resumed.status(), RunStatus::Completed);
+    assert_eq!(resumed.step_names(), vec!["build", "ship", "publish"]);
+}
+
+#[tokio::test]
+async fn release_publishes_when_approved_upfront() {
+    let result = TestEngine::new()
+        .with_handler(Release)
+        .with_mock_shell(|_cfg| Ok(MockShellOutput::ok("")))
+        .with_mock_approval(ApprovalOutcome::Approved)
+        .run(json!({}))
+        .await
+        .expect("the harness ran the handler");
+    assert_eq!(result.status(), RunStatus::Completed);
+}
+```
+
 `result.output()` is the run output the handler set with `ctx.set_output` (`Value::Null` when it set none), not the last step's output: that one is `result.steps().last()`. Read it back into the handler's type:
 
 ```rust,no_run

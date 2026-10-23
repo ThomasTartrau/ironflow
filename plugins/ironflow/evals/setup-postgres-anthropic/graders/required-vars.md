@@ -1,0 +1,4 @@
+---
+type: regex
+pattern: 'DATABASE_URL[\s\S]*ANTHROPIC_API_KEY|ANTHROPIC_API_KEY[\s\S]*DATABASE_URL'
+---

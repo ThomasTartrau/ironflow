@@ -1,0 +1,34 @@
+schema_version: "1.1"
+name: release-gate
+description: Stringly-typed access - the exit code is read as tests.output["exitCode"] instead of exit_code().
+expected_outcome: bug or blocker at release_gate.rs:25-27, no other blocker or bug.
+tags: [review, stringly, "phrasing:natural"]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 20
+  timeout_seconds: 600
+  allowed_tools: [Read, Glob, Grep, Skill, Agent]
+  prompt: |
+    Peux-tu relire le handler `release-gate` avant que je le merge ? C'est `src/release_gate.rs`. Donne-moi le rapport, ne modifie rien.
+graders:
+  - name: dispatched
+    type: tool_used
+    tool: Agent
+    input_match: 'workflow-reviewer'
+  - name: located
+    type: regex
+    weight: 2
+    flags: i
+    pattern: '(?:release_gate\.rs:|\b(?:lines?|lignes?|l\.|L)\s*)2[5-7]\b'
+  - name: severity
+    type: regex
+    target: trace
+    flags: i
+    pattern: '(?:\\n|\b)(?:blocker|bug)[*_]*\s+\S*release_gate\.rs:2[5-7]\b'
+  - name: no-false-alarm
+    type: regex
+    target: trace
+    flags: i
+    match: not_contains
+    pattern: '(?:\\n|\b)(?:blocker|bug)[*_]*\s+\S*\.rs:(?!2[5-7]\b)\d+'

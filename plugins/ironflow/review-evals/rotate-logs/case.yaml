@@ -1,0 +1,34 @@
+schema_version: "1.1"
+name: rotate-logs
+description: Duplicate handler name - RotateLogs and PurgeCache both return "nightly-maintenance" from name().
+expected_outcome: bug or blocker at rotate_logs.rs:9-11, purge_cache.rs:9-11 or lib.rs:13-15, no other blocker or bug.
+tags: [review, registration, "phrasing:slash"]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 20
+  timeout_seconds: 600
+  allowed_tools: [Read, Glob, Grep, Skill, Agent]
+  prompt: |
+    /ironflow review src/rotate_logs.rs
+graders:
+  - name: dispatched
+    type: tool_used
+    tool: Agent
+    input_match: 'workflow-reviewer'
+  - name: located
+    type: regex
+    weight: 2
+    flags: i
+    pattern: '(?:(?:rotate_logs|purge_cache)\.rs:(?:9|1[01])|lib\.rs:1[3-5])\b|nightly-maintenance[^\n]{0,120}(?:dup|collid|collision|same|unique|identique|déjà)|(?:dup|collid|collision|same|unique|identique|déjà)[^\n]{0,120}nightly-maintenance'
+  - name: severity
+    type: regex
+    target: trace
+    flags: i
+    pattern: '(?:\\n|\b)(?:blocker|bug)[*_]*\s+\S*(?:(?:rotate_logs|purge_cache)\.rs:(?:9|1[01])|lib\.rs:1[3-5])\b'
+  - name: no-false-alarm
+    type: regex
+    target: trace
+    flags: i
+    match: not_contains
+    pattern: '(?:\\n|\b)(?:blocker|bug)[*_]*\s+\S*(?:(?:rotate_logs|purge_cache)\.rs:(?!(?:9|1[01])\b)\d+|lib\.rs:(?!1[3-5]\b)\d+)'

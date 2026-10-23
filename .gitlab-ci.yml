@@ -517,7 +517,7 @@ eval-plugin-skills:
       --model "${EVAL_MODEL}"
       --judge-model "${EVAL_JUDGE_MODEL}"
       --threshold 0.8
-      --max-cost-usd 5
+      --max-cost-usd 12
       --concurrency 4
       --output-dir plugin-eval
   artifacts:

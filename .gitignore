@@ -21,3 +21,7 @@ docs/book/book/
 
 # Local runs of `claude plugin eval`
 plugins/ironflow/evals/results/
+plugins/ironflow/review-evals/results/
+
+# Local state of `/claude-api hillclimb` runs (traces, reports)
+.claude/hillclimb/

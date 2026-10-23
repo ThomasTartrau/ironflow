@@ -39,6 +39,10 @@ pub mod workflow_steps {}
 #[doc = include_str!("../../../plugins/ironflow/skills/workflow/references/sub-workflows.md")]
 pub mod workflow_sub_workflows {}
 
+/// `skills/workflow/references/schedule.md`
+#[doc = include_str!("../../../plugins/ironflow/skills/workflow/references/schedule.md")]
+pub mod workflow_schedule {}
+
 /// `skills/workflow/references/approval-replay.md`
 #[doc = include_str!("../../../plugins/ironflow/skills/workflow/references/approval-replay.md")]
 pub mod workflow_approval_replay {}

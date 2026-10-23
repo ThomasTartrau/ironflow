@@ -1,0 +1,34 @@
+schema_version: "1.1"
+name: ping-hosts
+description: Colliding step name - ctx.shell("ping", ..) inside a loop without an index suffix.
+expected_outcome: bug or blocker at ping_hosts.rs:36-41, no other blocker or bug.
+tags: [review, step-name, "phrasing:slash"]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 20
+  timeout_seconds: 600
+  allowed_tools: [Read, Glob, Grep, Skill, Agent]
+  prompt: |
+    /ironflow review src/ping_hosts.rs
+graders:
+  - name: dispatched
+    type: tool_used
+    tool: Agent
+    input_match: 'workflow-reviewer'
+  - name: located
+    type: regex
+    weight: 2
+    flags: i
+    pattern: '(?:ping_hosts\.rs:|\b(?:lines?|lignes?|l\.|L)\s*)(?:3[6-9]|4[01])\b'
+  - name: severity
+    type: regex
+    target: trace
+    flags: i
+    pattern: '(?:\\n|\b)(?:blocker|bug)[*_]*\s+\S*ping_hosts\.rs:(?:3[6-9]|4[01])\b'
+  - name: no-false-alarm
+    type: regex
+    target: trace
+    flags: i
+    match: not_contains
+    pattern: '(?:\\n|\b)(?:blocker|bug)[*_]*\s+\S*\.rs:(?!(?:3[6-9]|4[01])\b)\d+'

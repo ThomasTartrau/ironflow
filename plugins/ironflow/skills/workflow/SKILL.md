@@ -122,7 +122,7 @@ Then add the source display, which needs the real file name:
     }
 ```
 
-Step catalogue with every config builder: `references/steps.md`. Read it before writing an agent, http, signal (`ctx.wait_for_signal`), secret or artifact step. Sub-workflows (`ctx.workflow`, `ctx.workflow_with`, children in parallel with `ctx.workflows_with`): `references/sub-workflows.md`.
+Step catalogue with every config builder: `references/steps.md`. Read it before writing an agent, http, signal (`ctx.wait_for_signal`), secret or artifact step. A workflow that runs on a cron schedule (a time of day, a timezone, no overlapping runs): `references/schedule.md`. Sub-workflows (`ctx.workflow`, `ctx.workflow_with`, children in parallel with `ctx.workflows_with`): `references/sub-workflows.md`.
 
 ## 3. Register
 

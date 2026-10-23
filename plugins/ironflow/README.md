@@ -46,7 +46,8 @@ plugins/ironflow/
   skills/
     ironflow/      hub (user-invocable)
     setup/         scaffold script, project template in assets/, options in references/
-    workflow/      handler recipe, step catalogue, sub-workflows, approval replay pitfalls
+    workflow/      handler recipe, step catalogue, sub-workflows, cron schedules,
+                   approval replay pitfalls
     operation/     Operation trait recipe, HTTP JSON and GitLab issue examples
     test/          end-to-end test recipe
     upgrade/       upgrade and audit procedure, migration catalogue in references/,
@@ -80,8 +81,12 @@ Three merge request jobs guard the plugin:
 
 Each directory under `evals/` is one case: a `prompt.md` phrased the way a user would ask,
 and graders under `graders/`. Every Ironflow case checks that the right skill fired
-(`tool_used: Skill`) and greps the reply for the API the skill teaches; `unrelated-request`
-checks that no skill fires on a request that is not about Ironflow. Prefer `regex` and
+(`tool_used: Skill`) and greps the reply for the API the skill teaches; `review-handler`
+asks an `llm` judge whether each pitfall of a broken handler was found. `unrelated-request`
+and the `near-miss-*` cases (another workflow engine, a CI workflow with an approval) check
+that no skill fires on a request that is not about Ironflow. A case earns its place when
+it can fail with the plugin loaded: a suite where every case scores 1.0 cannot tell a
+better skill from a worse one. Prefer `regex` and
 `tool_used` graders, which are free and deterministic, and keep `llm` graders for what a
 pattern cannot express. Format reference: <https://code.claude.com/docs/en/plugin-evals>.
 
