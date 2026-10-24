@@ -21,11 +21,15 @@
 
 # Pinned by digest so a rebuild of the same tag starts from the same base. To
 # move to a newer node image, replace the digest and bump <n> in IMAGE_TAG.
-FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
+# 22.23.4 fixes Node2Shell (CVE-2026-111497, Brotli decoder).
+FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
 
 ARG CLAUDE_CODE_VERSION
 
+# upgrade: the base image ships libbrotli1 1.0.9-2+b6 (CVE-2026-111497, decoded by
+# libcurl under git and curl), fixed in 1.0.9-2+deb12u1.
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates git curl \
     && rm -rf /var/lib/apt/lists/*
 
