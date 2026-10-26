@@ -59,6 +59,31 @@
 //! let endpoint = projects::Project::builder().project(42).build()?;
 //! let op = gitlab.op(endpoint);
 //! // op implements Operation -- pass it to ctx.operation("get-project", &op)
+//! // a job trace (plain text) goes through GitLab::trace_op, see "Job traces" below
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Job traces
+//!
+//! A job trace is plain text, so [`GitLab::trace_op`] reads it as a tracked step that returns
+//! a string: raw, decoded (ANSI sequences, runner timestamps and section markers removed) or
+//! condensed under a character budget, with a caller-supplied marker for the skipped parts:
+//!
+//! ```no_run
+//! use ironflow_ops_gitlab::GitLab;
+//! use ironflow_ops_gitlab::endpoints::jobs::JobTrace;
+//! use gitlab::api::common::NameOrId;
+//! use ironflow_core::operation::{OperationContext, NoopSecretResolver};
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let ctx = OperationContext::new(Arc::new(NoopSecretResolver));
+//! let gitlab = GitLab::from_context(&ctx).await?;
+//!
+//! let endpoint = JobTrace { project: NameOrId::from(42), job: 7 };
+//! let op = gitlab.trace_op(endpoint).condensed(8000, "[... trace truncated ...]");
+//! // ctx.operation("read-trace", &op) returns the condensed text
 //! # Ok(())
 //! # }
 //! ```
@@ -151,8 +176,12 @@ pub mod endpoints;
 mod masked;
 mod operation;
 mod paged_operation;
+mod trace;
+mod trace_operation;
 
 pub use client::GitLab;
 pub use gitlab;
 pub use operation::GitLabOp;
 pub use paged_operation::GitLabPagedOp;
+pub use trace::{decode_trace, strip_ansi, unwrap_runner_lines};
+pub use trace_operation::{GitLabTraceOp, TraceView};

@@ -60,6 +60,10 @@ The `helpers` module provides:
 - `reqwest_err` -- convert a `reqwest::Error` into an `OperationError`
 - `to_value` -- serialize any `Serialize` into `serde_json::Value`
 
+## Log condensing
+
+The `log` module condenses CI logs: `drop_noise` removes cargo/pnpm progress lines, `truncate_around_failure` keeps failure blocks, the tail and the lead-in of the first failure under a character budget, and `condense_log` chains both.
+
 ## Test utilities
 
 Enable the `test-utils` feature for `MapSecretResolver`, an in-memory secret store for testing:
