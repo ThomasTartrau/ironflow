@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.56.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.55.1...ironflow-engine-v2.56.0) - 2026-10-26
+
+### Added
+
+- #230 add AgentRole trait for reusable fixed-role agents
+
+
+### Fixed
+
+- #230 CI (attempt 1)
+
 ## [2.55.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.54.3...ironflow-engine-v2.55.0) - 2026-10-26
 
 ### Added
