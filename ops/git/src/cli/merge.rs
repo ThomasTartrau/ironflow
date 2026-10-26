@@ -19,12 +19,18 @@ use crate::repo_lock::lock_repo;
 
 /// Build a `git` command for the merge flow: no repository hook runs
 /// (`core.hooksPath=/dev/null`, which `--no-verify` alone does not
-/// guarantee), and no editor ever opens.
+/// guarantee), and no editor ever opens. A placeholder identity lets git
+/// merge on a host with none configured (the merge commits nothing, but git
+/// still wants a committer); `CliMergeCommit` overrides it with the real one.
 fn merge_command(creds: Option<&GitCredentials>, repo: &Path) -> Command {
     let mut cmd = git_command(creds, Some(repo));
     cmd.args(["-c", "core.hooksPath=/dev/null"]);
     cmd.env("GIT_EDITOR", "true")
-        .env("GIT_MERGE_AUTOEDIT", "no");
+        .env("GIT_MERGE_AUTOEDIT", "no")
+        .env("GIT_AUTHOR_NAME", "ironflow")
+        .env("GIT_AUTHOR_EMAIL", "ironflow@localhost")
+        .env("GIT_COMMITTER_NAME", "ironflow")
+        .env("GIT_COMMITTER_EMAIL", "ironflow@localhost");
     cmd
 }
 
@@ -238,10 +244,14 @@ impl CliMerge {
                 })
             }
             Err(err) => {
-                let files = conflicted_files(&self.repo_path).await?;
+                // A failing probe must not hide the real merge error.
+                let Ok(files) = conflicted_files(&self.repo_path).await else {
+                    return Err(err);
+                };
                 // Unmerged entries left by a stash pop or an interrupted
                 // cherry-pick make git refuse before any merge starts.
-                if files.is_empty() || !merge_in_progress(&self.repo_path).await? {
+                if files.is_empty() || !matches!(merge_in_progress(&self.repo_path).await, Ok(true))
+                {
                     return Err(err);
                 }
                 Ok(CliMergeOutput {

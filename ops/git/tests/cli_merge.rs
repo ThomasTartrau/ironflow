@@ -6,7 +6,7 @@ mod common;
 use std::env::set_var;
 use std::fs::{Permissions, create_dir, read_to_string, remove_file, set_permissions, write};
 use std::os::unix::fs::{PermissionsExt, symlink};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use std::sync::Arc;
 use std::time::Duration;
@@ -513,41 +513,49 @@ async fn merge_abort_without_merge_in_progress_is_an_error() {
     .expect("test timed out");
 }
 
+/// Blobless clone of a served repository whose `main` and `feature` conflict
+/// on `a.txt`, with a work tree on `main`. Returns the server (kept alive by
+/// the caller), the temp dir, the clone and the work tree.
+async fn blobless_conflict() -> (GitHttpServer, TempDir, PathBuf, PathBuf) {
+    let server = GitHttpServer::start_default().await;
+    server.seed("repo.git");
+    let bare = server.root().join("repo.git");
+    let dir = tempdir().unwrap();
+
+    // Conflicting commits on `main` and `feature`, pushed to the server.
+    let seed = dir.path().join("seed");
+    create_dir(&seed).unwrap();
+    let bare_str = bare.to_str().unwrap();
+    git(&seed, &["clone", "-q", bare_str, "."]);
+    write(seed.join("a.txt"), "base\nline 2\n").unwrap();
+    git(&seed, &["add", "."]);
+    git(&seed, &["commit", "-q", "-m", "base"]);
+    git(&seed, &["checkout", "-q", "-b", "feature"]);
+    write(seed.join("a.txt"), "feature\nline 2\n").unwrap();
+    git(&seed, &["commit", "-q", "-am", "feature"]);
+    git(&seed, &["checkout", "-q", "main"]);
+    write(seed.join("a.txt"), "main\nline 2\n").unwrap();
+    git(&seed, &["commit", "-q", "-am", "main"]);
+    git(&seed, &["push", "-q", bare_str, "main", "feature"]);
+    server.allow_filter("repo.git");
+
+    let clone = dir.path().join("clone");
+    let op = CliClone::new(server.url("repo.git"), &clone)
+        .blobless(true)
+        .checkout(false);
+    op.run(&ctx_with_token()).await.unwrap();
+    let wt = dir.path().join("wt");
+    CliWorktreeAdd::new(&clone, &wt, "main")
+        .run(&ctx_with_token())
+        .await
+        .unwrap();
+    (server, dir, clone, wt)
+}
+
 #[tokio::test]
 async fn conflicting_merge_in_blobless_clone_is_concluded() {
     timeout(LIMIT, async {
-        let server = GitHttpServer::start_default().await;
-        server.seed("repo.git");
-        let bare = server.root().join("repo.git");
-        let dir = tempdir().unwrap();
-
-        // Conflicting commits on `main` and `feature`, pushed to the server.
-        let seed = dir.path().join("seed");
-        create_dir(&seed).unwrap();
-        let bare_str = bare.to_str().unwrap();
-        git(&seed, &["clone", "-q", bare_str, "."]);
-        write(seed.join("a.txt"), "base\nline 2\n").unwrap();
-        git(&seed, &["add", "."]);
-        git(&seed, &["commit", "-q", "-m", "base"]);
-        git(&seed, &["checkout", "-q", "-b", "feature"]);
-        write(seed.join("a.txt"), "feature\nline 2\n").unwrap();
-        git(&seed, &["commit", "-q", "-am", "feature"]);
-        git(&seed, &["checkout", "-q", "main"]);
-        write(seed.join("a.txt"), "main\nline 2\n").unwrap();
-        git(&seed, &["commit", "-q", "-am", "main"]);
-        git(&seed, &["push", "-q", bare_str, "main", "feature"]);
-        server.allow_filter("repo.git");
-
-        let clone = dir.path().join("clone");
-        let op = CliClone::new(server.url("repo.git"), &clone)
-            .blobless(true)
-            .checkout(false);
-        op.run(&ctx_with_token()).await.unwrap();
-        let wt = dir.path().join("wt");
-        CliWorktreeAdd::new(&clone, &wt, "main")
-            .run(&ctx_with_token())
-            .await
-            .unwrap();
+        let (_server, _dir, _clone, wt) = blobless_conflict().await;
 
         let out = CliMerge::new(&wt, "origin/feature")
             .run(&ctx_with_token())
@@ -581,34 +589,7 @@ async fn conflicting_merge_in_blobless_clone_is_concluded() {
 #[tokio::test]
 async fn merge_error_never_contains_the_token() {
     timeout(LIMIT, async {
-        let server = GitHttpServer::start_default().await;
-        server.seed("repo.git");
-        let bare = server.root().join("repo.git");
-        let bare_str = bare.to_str().unwrap();
-        let dir = tempdir().unwrap();
-        let seed = dir.path().join("seed");
-        create_dir(&seed).unwrap();
-        git(&seed, &["clone", "-q", bare_str, "."]);
-        write(seed.join("a.txt"), "base\nline 2\n").unwrap();
-        git(&seed, &["add", "."]);
-        git(&seed, &["commit", "-q", "-m", "base"]);
-        git(&seed, &["checkout", "-q", "-b", "feature"]);
-        write(seed.join("a.txt"), "feature\nline 2\n").unwrap();
-        git(&seed, &["commit", "-q", "-am", "feature"]);
-        git(&seed, &["checkout", "-q", "main"]);
-        git(&seed, &["push", "-q", bare_str, "main", "feature"]);
-        server.allow_filter("repo.git");
-
-        let clone = dir.path().join("clone");
-        let op = CliClone::new(server.url("repo.git"), &clone)
-            .blobless(true)
-            .checkout(false);
-        op.run(&ctx_with_token()).await.unwrap();
-        let wt = dir.path().join("wt");
-        CliWorktreeAdd::new(&clone, &wt, "main")
-            .run(&ctx_with_token())
-            .await
-            .unwrap();
+        let (_server, _dir, clone, wt) = blobless_conflict().await;
 
         // The commits are known but the feature blobs are not, and the
         // remote is now unreachable: the authenticated lazy fetch fails.
@@ -619,6 +600,31 @@ async fn merge_error_never_contains_the_token() {
             .await
             .unwrap_err();
         assert!(!err.to_string().contains(TOKEN));
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn cli_merge_unmerged_index_without_merge_head_is_an_error() {
+    timeout(LIMIT, async {
+        // A conflicting cherry-pick leaves unmerged entries but no MERGE_HEAD:
+        // it is not a merge conflict, so git's own error must surface.
+        let dir = repo(false);
+        let p = dir.path();
+        let pick = StdCommand::new("git")
+            .arg("-C")
+            .arg(p)
+            .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+            .args(["cherry-pick", "feature"])
+            .output()
+            .unwrap();
+        assert!(!pick.status.success());
+        assert!(!merge_head(p));
+        assert_eq!(unmerged(p), "a.txt");
+
+        let result = CliMerge::new(p, "feature").run(&ctx()).await;
+        assert!(result.is_err());
     })
     .await
     .expect("test timed out");

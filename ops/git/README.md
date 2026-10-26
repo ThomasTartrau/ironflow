@@ -131,15 +131,22 @@ ctx.operation("push", &push).await?;
 A conflicting merge works on a partial clone too (the token only serves the lazy fetch of the missing blobs), and is concluded without editor, hook or signature:
 
 ```rust,ignore
-use ironflow_ops_git::cli::{CliAdd, CliConflictMarkers, CliMerge, CliMergeAbort, CliMergeCommit};
+use ironflow_ops_git::cli::{
+    CliAdd, CliConflictMarkers, CliConflictMarkersOutput, CliMerge, CliMergeAbort, CliMergeCommit,
+    CliMergeOutput,
+};
 
 let merge = CliMerge::new("/work/mr-42", "origin/main");
-let out = ctx.operation("merge", &merge).await?;
+let out = ctx.operation("merge", &merge).await?.json::<CliMergeOutput>()?;
 if out.has_conflicts {
     // ... resolve `out.conflicted_files` in the work tree ...
     let files = out.conflicted_files;
     let markers = CliConflictMarkers::new("/work/mr-42", files.clone());
-    if ctx.operation("markers", &markers).await?.files_with_markers.is_empty() {
+    let left = ctx
+        .operation("markers", &markers)
+        .await?
+        .json::<CliConflictMarkersOutput>()?;
+    if left.files_with_markers.is_empty() {
         ctx.operation("add", &CliAdd::new("/work/mr-42", files)).await?;
         let commit = CliMergeCommit::new("/work/mr-42", "Bot", "bot@example.com");
         ctx.operation("commit", &commit).await?;
