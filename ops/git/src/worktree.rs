@@ -32,6 +32,22 @@ pub struct WorktreeRemoveOutput {
 }
 
 /// A worktree and what its `HEAD` points at.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::PathBuf;
+///
+/// use ironflow_ops_git::worktree::WorktreeEntry;
+///
+/// let entry = WorktreeEntry {
+///     name: "wt-feature".to_string(),
+///     path: PathBuf::from("/path/to/worktree"),
+///     branch: Some("wt-feature".to_string()),
+///     commit: None,
+/// };
+/// assert_eq!(entry.branch.as_deref(), Some("wt-feature"));
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeEntry {
     /// Name of the worktree.
@@ -255,7 +271,7 @@ fn worktree_entry(repo: &Repository, name: &str) -> Result<WorktreeEntry, Error>
         Ok(wt_repo) => {
             let head = wt_repo.find_reference("HEAD")?;
             let branch = head
-                .symbolic_target()
+                .symbolic_target()?
                 .and_then(|target| target.strip_prefix("refs/heads/"))
                 .map(String::from);
             // An unborn branch resolves to NotFound; anything else is a real failure.

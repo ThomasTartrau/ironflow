@@ -648,9 +648,11 @@ mod tests {
     fn fork_repo(path: &Path) -> (Repository, Oid) {
         let init = init_repo(path);
         let repo = Repository::open(path).unwrap();
-        let commit = repo.find_commit(init).unwrap();
-        repo.branch("base", &commit, false).unwrap();
-        repo.branch("feature", &commit, false).unwrap();
+        {
+            let commit = repo.find_commit(init).unwrap();
+            repo.branch("base", &commit, false).unwrap();
+            repo.branch("feature", &commit, false).unwrap();
+        }
         repo.set_head("refs/heads/feature").unwrap();
         (repo, init)
     }
@@ -698,6 +700,49 @@ mod tests {
         assert_eq!(out.base_ref, "base");
         assert_eq!(out.merge_base, init.to_string());
         assert_eq!(out.files, ["committed.txt", "dir/é file.txt", "file.txt"]);
+    }
+
+    #[tokio::test]
+    async fn diff_against_ref_lists_deleted_tracked_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_repo, _init) = fork_repo(tmp.path());
+        fs::remove_file(tmp.path().join("file.txt")).unwrap();
+        let out = DiffAgainstRef::new(tmp.path(), "base")
+            .run(&ctx())
+            .await
+            .unwrap();
+        assert_eq!(out.files, ["file.txt"]);
+    }
+
+    #[tokio::test]
+    async fn diff_against_ref_lists_staged_only_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, _init) = fork_repo(tmp.path());
+        fs::write(tmp.path().join("staged.txt"), "s").unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_path(Path::new("staged.txt")).unwrap();
+        idx.write().unwrap();
+        let out = DiffAgainstRef::new(tmp.path(), "base")
+            .run(&ctx())
+            .await
+            .unwrap();
+        assert_eq!(out.files, ["staged.txt"]);
+    }
+
+    #[tokio::test]
+    async fn diff_against_ref_lists_both_paths_of_a_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, _init) = fork_repo(tmp.path());
+        fs::rename(tmp.path().join("file.txt"), tmp.path().join("renamed.txt")).unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.remove_path(Path::new("file.txt")).unwrap();
+        idx.add_path(Path::new("renamed.txt")).unwrap();
+        idx.write().unwrap();
+        let out = DiffAgainstRef::new(tmp.path(), "base")
+            .run(&ctx())
+            .await
+            .unwrap();
+        assert_eq!(out.files, ["file.txt", "renamed.txt"]);
     }
 
     #[tokio::test]
