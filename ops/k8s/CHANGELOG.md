@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.46](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.45...ironflow-ops-k8s-v0.1.46) - 2026-10-26
+
+### Added
+
+- #227 PodUp démarre un pod de service et attend qu'il soit prêt
+
 ## [0.1.44](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.43...ironflow-ops-k8s-v0.1.44) - 2026-10-22
 
 ### Added
