@@ -104,6 +104,7 @@ impl TestApiState {
 }
 
 /// Build a run JSON payload suitable for the stub API.
+#[allow(dead_code)]
 pub fn make_run_json(run_id: Uuid, workflow_name: &str, max_retries: u32) -> Value {
     json!({
         "id": run_id,
