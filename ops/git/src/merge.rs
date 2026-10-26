@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::helpers::{blocking, to_value};
+use crate::refname::check_ref_name;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergeBranchOutput {
@@ -68,7 +69,13 @@ impl MergeBranch {
     }
 
     /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::External`] if a name is not a valid ref name (checked
+    /// before the repository is opened), or if the git operation fails.
     pub async fn run(&self, _ctx: &OperationContext) -> Result<MergeBranchOutput, OperationError> {
+        check_ref_name("branch", &self.branch_name)?;
         let repo_path = self.repo_path.clone();
         let branch_name = self.branch_name.clone();
         blocking(move || {
@@ -369,6 +376,17 @@ mod tests {
 
     use super::*;
     use crate::test_helpers::ctx;
+
+    #[tokio::test]
+    async fn merge_branch_rejects_invalid_name_before_opening_repo() {
+        let missing = tempfile::tempdir().unwrap().path().join("nope");
+        let err = MergeBranch::new(&missing, "-bad")
+            .run(&ctx())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("invalid branch name"), "got: {err}");
+    }
 
     fn init_with_branch(path: &Path) -> (String, String) {
         use git2::build::CheckoutBuilder;

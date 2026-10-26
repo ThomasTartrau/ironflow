@@ -13,7 +13,7 @@ use ironflow_core::operation::{NoopSecretResolver, Operation, OperationContext};
 use ironflow_ops_git::blame::BlameFile;
 use ironflow_ops_git::branch::{BranchCheckout, BranchCreate, BranchList};
 use ironflow_ops_git::config::ConfigList;
-use ironflow_ops_git::diff::DiffIndexToWorkdir;
+use ironflow_ops_git::diff::{DiffAgainstRef, DiffIndexToWorkdir};
 use ironflow_ops_git::index::IndexAdd;
 use ironflow_ops_git::reflog::{ReflogAppend, ReflogRead};
 use ironflow_ops_git::remote::{RemoteList, RemoteLookup};
@@ -148,8 +148,11 @@ async fn all_ops_kind_git() {
     let remote: &dyn Operation = &RemoteCreate::new("/tmp/x", "o", "u");
     let status: &dyn Operation = &StatusList::new("/tmp/x");
     let diff: &dyn Operation = &DiffIndexToWorkdir::new("/tmp/x");
+    let against: &dyn Operation = &DiffAgainstRef::new("/tmp/x", "origin/main");
 
-    for op in [init, add, commit, branch, tag, remote, status, diff] {
+    for op in [
+        init, add, commit, branch, tag, remote, status, diff, against,
+    ] {
         assert_eq!(op.kind(), "git");
     }
 }
@@ -168,6 +171,11 @@ async fn ops_provide_input() {
     let input = commit.input().unwrap();
     assert_eq!(input["message"], "msg");
     assert!(input["author"].is_string());
+
+    let against = DiffAgainstRef::new("/tmp/test", "origin/main");
+    let input = against.input().unwrap();
+    assert_eq!(input["repo_path"], "/tmp/test");
+    assert_eq!(input["base_ref"], "origin/main");
 }
 
 #[test]
@@ -330,6 +338,12 @@ async fn worktree_list_and_remove_use_the_worktree_name() {
 
     let list = WorktreeList::new(tmp.path()).run(&ctx()).await.unwrap();
     assert_eq!(list.worktrees, vec!["feature-wt".to_string()]);
+    assert_eq!(list.entries.len(), 1);
+    let entry = &list.entries[0];
+    assert_eq!(entry.name, "feature-wt");
+    assert_eq!(entry.branch.as_deref(), Some("feature-wt"));
+    assert!(entry.commit.is_some());
+    assert!(entry.path.ends_with("wt"));
 
     let removed = WorktreeRemove::new(tmp.path(), "feature-wt")
         .run(&ctx())

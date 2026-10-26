@@ -94,26 +94,6 @@ pub(crate) async fn run_git(
     })
 }
 
-/// Check that `name` is a valid branch name, `kind` naming it in the error.
-///
-/// # Errors
-///
-/// Returns [`OperationError::External`] for an empty name, a name starting
-/// with `-`, or a name `git check-ref-format` rejects.
-pub(crate) async fn validate_ref_name(kind: &str, name: &str) -> Result<(), OperationError> {
-    let invalid = || external_error(format!("invalid {kind} name {name:?}"));
-    if name.is_empty() || name.starts_with('-') {
-        return Err(invalid());
-    }
-    let mut cmd = git_command(None, None);
-    let full = format!("refs/heads/{name}");
-    cmd.args(["check-ref-format", full.as_str()]);
-    run_git(cmd, "check-ref-format", None)
-        .await
-        .map_err(|e| external_error(format!("{}: {e}", invalid())))?;
-    Ok(())
-}
-
 /// Check that `remote` can only be read as a remote name or URL by git.
 ///
 /// # Errors
@@ -219,15 +199,6 @@ mod tests {
         };
         assert!(!format!("{auth:?}").contains(TOKEN));
         assert!(!format!("{:?}", creds(TOKEN).await).contains(TOKEN));
-    }
-
-    #[tokio::test]
-    async fn invalid_ref_names_are_rejected() {
-        for name in ["", "-bad", "a..b", "a b", "x~1"] {
-            let result = validate_ref_name("branch", name).await;
-            assert!(result.is_err(), "accepted: {name:?}");
-        }
-        validate_ref_name("branch", "feature/ok-1").await.unwrap();
     }
 
     #[test]

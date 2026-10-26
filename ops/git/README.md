@@ -44,13 +44,13 @@ ctx.operation("commit-changes", &commit).await?;
 | Module | Operations |
 |--------|------------|
 | `blame` | Blame |
-| `branch` | Create, delete, list, rename |
+| `branch` | Create, delete (idempotent), list, rename |
 | `checkout` | Checkout branch, file, commit |
 | `cli` | Clone (partial, atomic publication), fetch, worktree add, push to an expected URL (simple, force, force-with-lease), conclude a conflicting merge (merge, conflict markers, add, commit, abort), with the `git` binary |
 | `cherrypick` | Cherry-pick |
 | `commit` | Create, amend |
 | `config` | Get, set, list |
-| `diff` | Diff (tree, index, workdir) |
+| `diff` | Diff (tree, index, workdir, against a ref by name) |
 | `fetch` | Fetch |
 | `graph` | Ahead/behind, merge base |
 | `index` | Add, remove, reset |
@@ -59,6 +59,7 @@ ctx.operation("commit-changes", &commit).await?;
 | `object` | Read blob, tree entries |
 | `rebase` | Rebase |
 | `reflog` | Reflog entries |
+| `refname` | Validate a branch or tag name |
 | `refs` | Create, delete, list refs |
 | `remote` | Add, remove, list, push |
 | `repository` | Init, clone |
@@ -67,7 +68,7 @@ ctx.operation("commit-changes", &commit).await?;
 | `status` | Status |
 | `submodule` | Init, update, add, sync |
 | `tag` | Create, delete, list |
-| `worktree` | Add (optionally detached at a commit), remove, list, prune |
+| `worktree` | Add (optionally detached at a commit), remove, list (with the HEAD of each), prune |
 
 ## Authentication
 

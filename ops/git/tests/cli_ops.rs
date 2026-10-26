@@ -657,3 +657,15 @@ async fn cli_push_rejects_invalid_branch_name() {
     let op = CliPush::new(work.path(), ELSEWHERE, "main").mode(lease);
     op.run(&ctx).await.unwrap_err();
 }
+
+#[tokio::test]
+async fn cli_worktree_add_rejects_invalid_branch_name() {
+    let work = local_with_origin(ELSEWHERE);
+    let ctx = ctx_without_secret();
+    let dir = tempdir().unwrap();
+    for branch in ["-bad", "a..b", "x y", ""] {
+        let op = CliWorktreeAdd::new(work.path(), dir.path().join("wt"), "main").branch(branch);
+        let message = op.run(&ctx).await.unwrap_err().to_string();
+        assert!(message.contains("invalid branch name"), "got: {message}");
+    }
+}

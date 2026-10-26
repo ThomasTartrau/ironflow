@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::helpers::{blocking, to_value};
+use crate::refname::check_ref_name;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagLightweightOutput {
@@ -63,10 +64,16 @@ impl TagCreateLightweight {
     }
 
     /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::External`] if a name is not a valid ref name (checked
+    /// before the repository is opened), or if the git operation fails.
     pub async fn run(
         &self,
         _ctx: &OperationContext,
     ) -> Result<TagLightweightOutput, OperationError> {
+        check_ref_name("tag", &self.name)?;
         let repo_path = self.repo_path.clone();
         let name = self.name.clone();
         blocking(move || {
@@ -138,7 +145,13 @@ impl TagCreateAnnotated {
     }
 
     /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::External`] if a name is not a valid ref name (checked
+    /// before the repository is opened), or if the git operation fails.
     pub async fn run(&self, _ctx: &OperationContext) -> Result<TagAnnotatedOutput, OperationError> {
+        check_ref_name("tag", &self.name)?;
         let repo_path = self.repo_path.clone();
         let name = self.name.clone();
         let message = self.message.clone();
@@ -204,7 +217,13 @@ impl TagDelete {
     }
 
     /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::External`] if a name is not a valid ref name (checked
+    /// before the repository is opened), or if the git operation fails.
     pub async fn run(&self, _ctx: &OperationContext) -> Result<TagDeleteOutput, OperationError> {
+        check_ref_name("tag", &self.name)?;
         let repo_path = self.repo_path.clone();
         let name = self.name.clone();
         blocking(move || {
@@ -366,6 +385,29 @@ mod tests {
 
     use super::*;
     use crate::test_helpers::{ctx, init_repo};
+
+    #[tokio::test]
+    async fn tag_ops_reject_invalid_name_before_opening_repo() {
+        let missing = tempfile::tempdir().unwrap().path().join("nope");
+        let errors = [
+            TagCreateLightweight::new(&missing, "-bad")
+                .run(&ctx())
+                .await
+                .unwrap_err(),
+            TagCreateAnnotated::new(&missing, "a..b", "msg", "A", "a@t.com")
+                .run(&ctx())
+                .await
+                .unwrap_err(),
+            TagDelete::new(&missing, "x y")
+                .run(&ctx())
+                .await
+                .unwrap_err(),
+        ];
+        for err in errors {
+            let msg = err.to_string();
+            assert!(msg.contains("invalid tag name"), "got: {msg}");
+        }
+    }
 
     #[tokio::test]
     async fn annotated_tag_create_and_list() {
