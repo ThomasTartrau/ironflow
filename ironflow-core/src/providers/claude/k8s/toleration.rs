@@ -177,7 +177,7 @@ pub enum TolerationParseError {
 /// };
 /// assert_eq!(toleration.key, "dedicated");
 /// ```
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct K8sToleration {
     /// Taint key the toleration matches (e.g. `"dedicated"`).

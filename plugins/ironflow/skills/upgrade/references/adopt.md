@@ -503,7 +503,7 @@ secret values it read, and pass it to `with_secrets`.
 
 ## pod-run-scratch-tolerations
 - kind: adopt
-- since: ironflow-core after 4.18.1, ironflow-ops-k8s after 0.1.46 (#228)
+- since: ironflow-core after 4.19.0, ironflow-ops-k8s after 0.1.47 (#228)
 
 A `PodRun` that needed a writable scratch space built the `Volume` and `VolumeMount` by
 hand, and a toleration list read from a config string was parsed by hand once for the agent
