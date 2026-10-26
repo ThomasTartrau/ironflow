@@ -454,7 +454,7 @@ then, the gate stays admin-only, even once an account is created under that name
 
 ## gitlab-op-masks-secrets
 - kind: behavior
-- since: ironflow-ops-gitlab after 0.1.40 (#225)
+- since: ironflow-ops-gitlab after 0.1.41 (#225)
 
 `gitlab.op(endpoint)` replaces the client's token, the values added with
 `GitLab::with_secrets` and every `sk-ant-` / `glpat-` token in a form, JSON or `text/*`

@@ -32,12 +32,14 @@ mod stdin;
 mod termination;
 #[cfg(test)]
 mod tests;
+mod up;
 
 pub use sandbox::SANDBOX_UID;
 use sandbox::Sandbox;
 pub use stdin::{MAX_STDIN_BYTES, STDIN_ANNOTATION};
 use stdin::{stdin_command, stdin_volume};
 use termination::Termination;
+pub use up::{PodUp, PodUpOutput};
 
 use owner::OwnerPod;
 
@@ -669,7 +671,7 @@ impl PodRun {
             volumes.push(vol);
             volume_mounts.push(mount);
         }
-        let mut annotations = expiry_annotation(self.timeout + self.expiry_margin);
+        let mut annotations = expiry_annotation(self.timeout.saturating_add(self.expiry_margin));
         if let Some(input) = &self.stdin {
             let (vol, mount) = stdin_volume();
             volumes.push(vol);
@@ -743,15 +745,7 @@ impl PodRun {
     /// wall-clock timeout is exceeded. A command that ran and exited non-zero is **not** an error;
     /// it is reported via [`PodRunOutput::success`].
     pub async fn run(&self) -> Result<PodRunOutput, OperationError> {
-        self.check_stdin()?;
-        if let Some(owner) = &self.owner {
-            owner.check(&self.client, &self.namespace).await?;
-        }
-        let pods: Api<Pod> = Api::namespaced(self.client.clone(), &self.namespace);
-
-        pods.create(&PostParams::default(), &self.build_pod())
-            .await
-            .map_err(k8s_external)?;
+        let pods = self.create(&self.build_pod()).await?;
 
         // Wait for a terminal phase, bounded by the wall-clock timeout. The pod
         // is deleted best-effort on every path below, including timeout.
@@ -777,6 +771,22 @@ impl PodRun {
                 })
             }
         }
+    }
+
+    /// Check the [`stdin`](Self::stdin) size and the
+    /// [`owner_pod`](Self::owner_pod), then create `pod`.
+    ///
+    /// Shared by [`run`](Self::run) and [`PodUp::run`].
+    async fn create(&self, pod: &Pod) -> Result<Api<Pod>, OperationError> {
+        self.check_stdin()?;
+        if let Some(owner) = &self.owner {
+            owner.check(&self.client, &self.namespace).await?;
+        }
+        let pods: Api<Pod> = Api::namespaced(self.client.clone(), &self.namespace);
+        pods.create(&PostParams::default(), pod)
+            .await
+            .map_err(k8s_external)?;
+        Ok(pods)
     }
 
     /// Poll the pod until it reaches a terminal phase, then collect its logs.

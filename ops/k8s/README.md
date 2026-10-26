@@ -55,11 +55,12 @@ Verb structs in the `verb` module: `List`, `Get`, `Create`, `Update`, `Patch`, `
 
 ## Run-to-completion operations
 
-Higher-level operations that manage a full lifecycle as a single tracked step:
+Higher-level operations that manage a pod or an object as a single tracked step:
 
 | Operation | Description |
 |-----------|-------------|
 | `PodRun` | Create an ephemeral pod, run a `sh -c` command, wait for completion, collect logs, delete the pod |
+| `PodUp` | Start the pod of a `PodRun` as a service, wait until it is `Ready`, return its IP and leave it running |
 | `JobRun` | Same via a `batch/v1` Job (with `backoffLimit` retries) |
 | `ApplyConfigMap` | Server-side apply a `ConfigMap` from a key/value map |
 | `ApplySecret` | Server-side apply a `Secret` from a key/value map (`input()` logs keys only) |
@@ -125,6 +126,56 @@ let output = ctx.operation("run-tests", &run).await?;
 `.pvc()` is additive on both `PodRun` and `JobRun`: call it once per volume to
 mount several PVCs in the same pod (e.g. an RWX workspace plus a node-local
 cache). A single call reproduces the historical single-volume manifest exactly.
+
+### Service pods
+
+`PodUp` starts a pod that must outlive its step (a headless browser, a
+database, the app under test). It takes a configured `PodRun` and a lifetime,
+creates the pod with an optional readiness probe, and returns
+`PodUpOutput { pod, namespace, ip }` as soon as the pod is `Ready`. Without a
+probe, the pod is ready once its container runs.
+
+```rust,ignore
+use ironflow_ops_k8s::{PodRun, PodUp, PodUpOutput};
+use k8s_openapi::api::core::v1::{ExecAction, Probe};
+
+let db = ctx
+    .operation(
+        "db-up",
+        &PodUp::new(
+            PodRun::new(&kube, "db", "postgres:17", "docker-entrypoint.sh postgres")
+                .label(LABEL_RUN_ID, &ctx.run_id().to_string()),
+            Duration::from_secs(1800), // lifetime: steps that use it included
+        )
+        .readiness_probe(Probe {
+            exec: Some(ExecAction { command: Some(vec!["pg_isready".into()]) }),
+            period_seconds: Some(2),
+            ..Default::default()
+        })
+        .ready_timeout(Duration::from_secs(120)),
+    )
+    .await?
+    .json::<PodUpOutput>()?;
+// db.ip is reachable from the next steps.
+```
+
+The lifetime replaces the `PodRun` timeout: `ironflow.io/expires-at` is
+creation + lifetime + expiry margin, so the reaper leaves the service alone
+while the run needs it and deletes it afterwards. A pod that ends, or is not
+ready within `ready_timeout` (300s by default), fails the step with the reason
+(phase, reason and exit code, or why its container is waiting, such as
+`ImagePullBackOff`) and the last 40 lines of its log; that pod is deleted.
+
+`release_run` and the reaper run in the namespace of the Kubernetes agent
+provider only. A `PodUp` pod elsewhere, or under another provider, stays until
+a reaper of its namespace passes its `expires-at`, and a new attempt of the
+run cannot create a pod of the same name meanwhile: put the run id in its name.
+
+With the Kubernetes agent provider, every new execution of the run (a resume
+after an approval, a signal, a human input or a crashed worker) starts with
+`release_run`, which deletes the pods tagged with the run, while the `PodUp`
+step is replayed with the IP of the deleted pod. Keep the steps that use the
+service in the same execution as the `PodUp`, with no such gate in between.
 
 ### Orphans and retries
 
