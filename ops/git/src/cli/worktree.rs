@@ -8,8 +8,9 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::cli::command::{git_command, run_git, validate_ref_name};
+use crate::cli::command::{git_command, run_git};
 use crate::helpers::{GitAuth, auth_builders, external_error, to_value, token_builder};
+use crate::refname::check_ref_name;
 use crate::repo_lock::lock_repo;
 
 /// Output of [`CliWorktreeAdd`].
@@ -118,7 +119,7 @@ impl CliWorktreeAdd {
             return Err(external_error(message));
         }
         if let Some(branch) = &self.branch {
-            validate_ref_name("branch", branch).await?;
+            check_ref_name("branch", branch)?;
         }
         // `git -C <repo>` would resolve a relative worktree path from the
         // repository instead of the current directory.

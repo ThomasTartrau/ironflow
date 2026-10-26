@@ -131,7 +131,7 @@
 //! | [`repository`] | Init, Open, Clone, Discover, State |
 //! | [`index`] | Add, AddAll, Remove, RemoveAll, UpdateAll, WriteTree |
 //! | [`commit`] | Create, Find, Amend, Signed |
-//! | [`branch`] | Create, Delete, Rename, List, Lookup, IsHead, SetUpstream, Checkout |
+//! | [`branch`] | Create, Delete (idempotent), Rename, List, Lookup, IsHead, SetUpstream, Checkout |
 //! | [`tag`] | CreateLightweight, CreateAnnotated, Delete, List, ListMatch |
 //! | [`remote`] | Create, Delete, Rename, SetUrl, List, Lookup |
 //! | [`fetch`] | Fetch, Push, Prune, DefaultBranch |
@@ -139,14 +139,15 @@
 //! | [`rebase`] | Init, Next, Commit, Abort, Finish |
 //! | [`cherrypick`] | Cherrypick, CherrypickCommit, Revert, RevertCommit |
 //! | [`stash`] | Save, Apply, Pop, Drop, List |
-//! | [`diff`] | TreeToTree, TreeToIndex, IndexToWorkdir, Stats, FindSimilar, Apply |
+//! | [`diff`] | AgainstRef, TreeToTree, TreeToIndex, IndexToWorkdir, Stats, FindSimilar, Apply |
 //! | [`checkout`] | Head, Index, Tree |
 //! | [`blame`] | BlameFile |
 //! | [`log`] | RevwalkNew, RevwalkPushRange, RevwalkSimplifyFirstParent |
+//! | [`refname`] | validate_ref_name |
 //! | [`refs`] | Create, Delete, Rename, Lookup, NameToId |
 //! | [`reflog`] | Read, Append, Drop |
 //! | [`submodule`] | Add, Init, Update, Lookup, List |
-//! | [`worktree`] | Add (optionally detached at a commit), List, Validate, Prune, Remove |
+//! | [`worktree`] | Add (optionally detached at a commit), List (with the HEAD of each), Validate, Prune, Remove |
 //! | [`config`] | Get, Set, Delete, List |
 //! | [`status`] | File, List, ShouldIgnore |
 //! | [`reset`] | Reset (soft, mixed, hard) |
@@ -171,6 +172,7 @@ pub mod merge;
 pub mod object;
 pub mod rebase;
 pub mod reflog;
+pub mod refname;
 pub mod refs;
 pub mod remote;
 mod repo;

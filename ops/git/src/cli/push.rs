@@ -8,8 +8,9 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::cli::command::{git_command, run_git, validate_ref_name, validate_remote_name};
+use crate::cli::command::{git_command, run_git, validate_remote_name};
 use crate::helpers::{GitAuth, auth_builders, external_error, redact_url, to_value, token_builder};
+use crate::refname::check_ref_name;
 use crate::repo_lock::lock_repo;
 use crate::url::{normalize_url, validate_remote_url};
 
@@ -158,7 +159,7 @@ impl CliPush {
     /// appears in the message.
     pub async fn run(&self, ctx: &OperationContext) -> Result<CliPushOutput, OperationError> {
         validate_remote_url(&self.expected_url)?;
-        validate_ref_name("branch", &self.branch).await?;
+        check_ref_name("branch", &self.branch)?;
         validate_remote_name(&self.remote)?;
         let lease = match &self.mode {
             PushMode::ForceWithLease { expected } => expected.as_deref(),

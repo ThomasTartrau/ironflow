@@ -3,13 +3,14 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use git2::{ApplyLocation, Delta, Diff, Error, Oid, Repository};
+use git2::{ApplyLocation, Delta, Diff, DiffOptions, Error, Oid, Repository};
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::helpers::{blocking, to_value};
+use crate::refname::check_ref_name;
 
 /// A single delta entry in a diff.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -433,6 +434,115 @@ impl TypedOperation for DiffApply {
     type Output = DiffApplyOutput;
 }
 
+/// Output of [`DiffAgainstRef`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffAgainstRefOutput {
+    /// The base ref, as given.
+    pub base_ref: String,
+    /// The commit where HEAD forked from the base ref.
+    pub merge_base: String,
+    /// Paths changed since the merge base, sorted, without duplicates.
+    pub files: Vec<String>,
+}
+
+/// List the files changed since HEAD forked from a ref given by name.
+///
+/// The base ref is a short name such as `main` or `origin/main`. The list
+/// covers what is committed, staged, unstaged and untracked since the merge
+/// base of HEAD and the base ref (ignored files excluded). Paths are raw:
+/// never quoted or escaped as `git diff --name-only` would. A rename shows
+/// as the old path and the new path, both listed. `repo_path` may be a
+/// worktree.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_ops_git::diff::DiffAgainstRef;
+/// use ironflow_core::operation::Operation;
+///
+/// let op = DiffAgainstRef::new("/path/to/repo", "origin/main");
+/// assert_eq!(op.kind(), "git");
+/// ```
+pub struct DiffAgainstRef {
+    repo_path: PathBuf,
+    base_ref: String,
+}
+
+impl DiffAgainstRef {
+    /// Create a new diff-against-ref operation.
+    pub fn new(repo_path: impl Into<PathBuf>, base_ref: impl Into<String>) -> Self {
+        Self {
+            repo_path: repo_path.into(),
+            base_ref: base_ref.into(),
+        }
+    }
+
+    /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::External`] if the base ref is not a valid ref
+    /// name (checked before the repository is opened), the repository cannot
+    /// be opened, the base ref does not resolve, HEAD is unborn, or HEAD and
+    /// the base ref share no history.
+    pub async fn run(
+        &self,
+        _ctx: &OperationContext,
+    ) -> Result<DiffAgainstRefOutput, OperationError> {
+        check_ref_name("base ref", &self.base_ref)?;
+        let repo_path = self.repo_path.clone();
+        let base_ref = self.base_ref.clone();
+        blocking(move || {
+            let repo = Repository::open(&repo_path)?;
+            let base = repo
+                .resolve_reference_from_short_name(&base_ref)?
+                .peel_to_commit()?;
+            let head = repo.head()?.peel_to_commit()?;
+            let merge_base = repo.merge_base(head.id(), base.id())?;
+            let tree = repo.find_commit(merge_base)?.tree()?;
+            let mut opts = DiffOptions::new();
+            opts.include_untracked(true).recurse_untracked_dirs(true);
+            let diff = repo.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))?;
+            let mut files: Vec<String> = diff
+                .deltas()
+                .filter_map(|delta| {
+                    let file = if delta.status() == Delta::Deleted {
+                        delta.old_file()
+                    } else {
+                        delta.new_file()
+                    };
+                    file.path().map(|p| p.to_string_lossy().into_owned())
+                })
+                .collect();
+            files.sort();
+            files.dedup();
+            Ok(DiffAgainstRefOutput {
+                base_ref,
+                merge_base: merge_base.to_string(),
+                files,
+            })
+        })
+        .await
+    }
+}
+
+#[async_trait]
+impl Operation for DiffAgainstRef {
+    fn kind(&self) -> &str {
+        "git"
+    }
+    async fn execute(&self, ctx: &OperationContext) -> Result<Value, OperationError> {
+        to_value(&self.run(ctx).await?)
+    }
+    fn input(&self) -> Option<Value> {
+        Some(serde_json::json!({ "repo_path": self.repo_path, "base_ref": self.base_ref }))
+    }
+}
+
+impl TypedOperation for DiffAgainstRef {
+    type Output = DiffAgainstRefOutput;
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -442,7 +552,7 @@ mod tests {
     use ironflow_core::operation::Operation;
 
     use super::*;
-    use crate::test_helpers::ctx;
+    use crate::test_helpers::{ctx, init_repo};
 
     fn init_diff_repo(path: &Path) -> String {
         let repo = Repository::init(path).unwrap();
@@ -532,5 +642,172 @@ mod tests {
         init_diff_repo(tmp.path());
         let value = DiffStats::new(tmp.path()).execute(&ctx()).await.unwrap();
         assert_eq!(value["files_changed"], 0);
+    }
+
+    /// Fork `base` and `feature` off the init commit, `feature` checked out.
+    fn fork_repo(path: &Path) -> (Repository, Oid) {
+        let init = init_repo(path);
+        let repo = Repository::open(path).unwrap();
+        {
+            let commit = repo.find_commit(init).unwrap();
+            repo.branch("base", &commit, false).unwrap();
+            repo.branch("feature", &commit, false).unwrap();
+        }
+        repo.set_head("refs/heads/feature").unwrap();
+        (repo, init)
+    }
+
+    #[tokio::test]
+    async fn diff_against_ref_lists_untracked_files_since_merge_base() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, init) = fork_repo(tmp.path());
+        let sig = Signature::now("Test", "t@t.com").unwrap();
+        let init_commit = repo.find_commit(init).unwrap();
+
+        // A commit on base after the fork must not show up.
+        let mut builder = repo
+            .treebuilder(Some(&init_commit.tree().unwrap()))
+            .unwrap();
+        let blob = repo.blob(b"later").unwrap();
+        builder.insert("later.txt", blob, 0o100644).unwrap();
+        let later_tree = repo.find_tree(builder.write().unwrap()).unwrap();
+        repo.commit(
+            Some("refs/heads/base"),
+            &sig,
+            &sig,
+            "later",
+            &later_tree,
+            &[&init_commit],
+        )
+        .unwrap();
+
+        fs::write(tmp.path().join("committed.txt"), "c").unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_path(Path::new("committed.txt")).unwrap();
+        idx.write().unwrap();
+        let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "feature", &tree, &[&init_commit])
+            .unwrap();
+
+        fs::write(tmp.path().join("file.txt"), "changed").unwrap();
+        fs::create_dir(tmp.path().join("dir")).unwrap();
+        fs::write(tmp.path().join("dir/é file.txt"), "u").unwrap();
+
+        let out = DiffAgainstRef::new(tmp.path(), "base")
+            .run(&ctx())
+            .await
+            .unwrap();
+        assert_eq!(out.base_ref, "base");
+        assert_eq!(out.merge_base, init.to_string());
+        assert_eq!(out.files, ["committed.txt", "dir/é file.txt", "file.txt"]);
+    }
+
+    #[tokio::test]
+    async fn diff_against_ref_lists_deleted_tracked_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_repo, _init) = fork_repo(tmp.path());
+        fs::remove_file(tmp.path().join("file.txt")).unwrap();
+        let out = DiffAgainstRef::new(tmp.path(), "base")
+            .run(&ctx())
+            .await
+            .unwrap();
+        assert_eq!(out.files, ["file.txt"]);
+    }
+
+    #[tokio::test]
+    async fn diff_against_ref_lists_staged_only_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, _init) = fork_repo(tmp.path());
+        fs::write(tmp.path().join("staged.txt"), "s").unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_path(Path::new("staged.txt")).unwrap();
+        idx.write().unwrap();
+        let out = DiffAgainstRef::new(tmp.path(), "base")
+            .run(&ctx())
+            .await
+            .unwrap();
+        assert_eq!(out.files, ["staged.txt"]);
+    }
+
+    #[tokio::test]
+    async fn diff_against_ref_lists_both_paths_of_a_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, _init) = fork_repo(tmp.path());
+        fs::rename(tmp.path().join("file.txt"), tmp.path().join("renamed.txt")).unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.remove_path(Path::new("file.txt")).unwrap();
+        idx.add_path(Path::new("renamed.txt")).unwrap();
+        idx.write().unwrap();
+        let out = DiffAgainstRef::new(tmp.path(), "base")
+            .run(&ctx())
+            .await
+            .unwrap();
+        assert_eq!(out.files, ["file.txt", "renamed.txt"]);
+    }
+
+    #[tokio::test]
+    async fn diff_against_ref_resolves_remote_tracking_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let init = init_repo(tmp.path());
+        let repo = Repository::open(tmp.path()).unwrap();
+        repo.reference("refs/remotes/origin/main", init, false, "test")
+            .unwrap();
+        fs::write(tmp.path().join("new.txt"), "n").unwrap();
+        let out = DiffAgainstRef::new(tmp.path(), "origin/main")
+            .run(&ctx())
+            .await
+            .unwrap();
+        assert_eq!(out.merge_base, init.to_string());
+        assert_eq!(out.files, ["new.txt"]);
+    }
+
+    #[tokio::test]
+    async fn diff_against_ref_rejects_invalid_ref() {
+        let missing = tempfile::tempdir().unwrap().path().join("nope");
+        for name in ["-x", "a..b", "x y", ""] {
+            let err = DiffAgainstRef::new(&missing, name)
+                .run(&ctx())
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("invalid base ref name"), "got: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn diff_against_ref_unborn_head_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let init = init_repo(tmp.path());
+        let repo = Repository::open(tmp.path()).unwrap();
+        repo.branch("base", &repo.find_commit(init).unwrap(), false)
+            .unwrap();
+        repo.set_head("refs/heads/unborn").unwrap();
+        let result = DiffAgainstRef::new(tmp.path(), "base").run(&ctx()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn diff_against_ref_unrelated_histories_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        let repo = Repository::open(tmp.path()).unwrap();
+        let sig = Signature::now("Test", "t@t.com").unwrap();
+        let empty = repo
+            .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        repo.commit(Some("refs/heads/other"), &sig, &sig, "root", &empty, &[])
+            .unwrap();
+        let result = DiffAgainstRef::new(tmp.path(), "other").run(&ctx()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn diff_against_ref_unknown_ref_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        let result = DiffAgainstRef::new(tmp.path(), "no-such-ref")
+            .run(&ctx())
+            .await;
+        assert!(result.is_err());
     }
 }

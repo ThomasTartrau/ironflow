@@ -3,13 +3,14 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use git2::{Error, Repository, WorktreeAddOptions, WorktreePruneOptions};
+use git2::{Error, ErrorCode, Repository, WorktreeAddOptions, WorktreePruneOptions};
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::helpers::{blocking, to_value};
+use crate::refname::check_ref_name;
 use crate::repo_lock::lock_repo;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,9 +31,45 @@ pub struct WorktreeRemoveOutput {
     pub removed: bool,
 }
 
+/// A worktree and what its `HEAD` points at.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::PathBuf;
+///
+/// use ironflow_ops_git::worktree::WorktreeEntry;
+///
+/// let entry = WorktreeEntry {
+///     name: "wt-feature".to_string(),
+///     path: PathBuf::from("/path/to/worktree"),
+///     branch: Some("wt-feature".to_string()),
+///     commit: None,
+/// };
+/// assert_eq!(entry.branch.as_deref(), Some("wt-feature"));
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeEntry {
+    /// Name of the worktree.
+    pub name: String,
+    /// Working directory of the worktree.
+    pub path: PathBuf,
+    /// Short name of the branch `HEAD` is on, `None` when `HEAD` is detached
+    /// or the worktree directory cannot be opened.
+    pub branch: Option<String>,
+    /// SHA `HEAD` resolves to, `None` when `HEAD` is unborn or the worktree
+    /// directory cannot be opened.
+    pub commit: Option<String>,
+}
+
+/// Output of [`WorktreeList`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeListOutput {
+    /// Names of the worktrees.
     pub worktrees: Vec<String>,
+    /// The same worktrees with their path and `HEAD`.
+    #[serde(default)]
+    pub entries: Vec<WorktreeEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,9 +140,11 @@ impl WorktreeAdd {
     ///
     /// # Errors
     ///
-    /// Returns [`OperationError::External`] if the repository cannot be
+    /// Returns [`OperationError::External`] if the name is not a valid ref name
+    /// (checked before the repository is opened), the repository cannot be
     /// opened, the commit does not resolve, or the worktree cannot be added.
     pub async fn run(&self, _ctx: &OperationContext) -> Result<WorktreeAddOutput, OperationError> {
+        check_ref_name("worktree", &self.name)?;
         let _guard = lock_repo(&self.repo_path).await;
         let repo_path = self.repo_path.clone();
         let name = self.name.clone();
@@ -169,7 +208,10 @@ impl TypedOperation for WorktreeAdd {
     type Output = WorktreeAddOutput;
 }
 
-/// List all worktrees.
+/// List all worktrees, with the branch and commit each `HEAD` points at.
+///
+/// A worktree whose directory is gone is still listed, with no branch and no
+/// commit.
 ///
 /// # Examples
 ///
@@ -193,19 +235,63 @@ impl WorktreeList {
     }
 
     /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::External`] if the repository cannot be
+    /// opened or its worktrees cannot be read.
     pub async fn run(&self, _ctx: &OperationContext) -> Result<WorktreeListOutput, OperationError> {
         let repo_path = self.repo_path.clone();
         blocking(move || {
             let repo = Repository::open(&repo_path)?;
             let worktrees = repo.worktrees()?;
-            let list = worktrees
+            let list: Vec<String> = worktrees
                 .iter()
                 .filter_map(|w| w.ok().flatten().map(String::from))
                 .collect();
-            Ok(WorktreeListOutput { worktrees: list })
+            let entries = list
+                .iter()
+                .map(|name| worktree_entry(&repo, name))
+                .collect::<Result<Vec<_>, Error>>()?;
+            Ok(WorktreeListOutput {
+                worktrees: list,
+                entries,
+            })
         })
         .await
     }
+}
+
+/// Read the `HEAD` of the worktree `name` without failing on an unborn
+/// `HEAD` or a worktree whose directory cannot be opened.
+fn worktree_entry(repo: &Repository, name: &str) -> Result<WorktreeEntry, Error> {
+    let wt = repo.find_worktree(name)?;
+    let path = wt.path().to_path_buf();
+    let (branch, commit) = match Repository::open_from_worktree(&wt) {
+        Ok(wt_repo) => {
+            let head = wt_repo.find_reference("HEAD")?;
+            let branch = head
+                .symbolic_target()?
+                .and_then(|target| target.strip_prefix("refs/heads/"))
+                .map(String::from);
+            // An unborn branch resolves to NotFound; anything else is a real failure.
+            let commit = match head.resolve() {
+                Ok(resolved) => resolved.target().map(|oid| oid.to_string()),
+                Err(e) if e.code() == ErrorCode::NotFound => None,
+                Err(e) => return Err(e),
+            };
+            (branch, commit)
+        }
+        // A gone worktree directory resolves to NotFound; anything else is a real failure.
+        Err(e) if e.code() == ErrorCode::NotFound => (None, None),
+        Err(e) => return Err(e),
+    };
+    Ok(WorktreeEntry {
+        name: name.to_string(),
+        path,
+        branch,
+        commit,
+    })
 }
 
 #[async_trait]
@@ -434,6 +520,67 @@ mod tests {
 
     use super::*;
     use crate::test_helpers::{ctx, init_repo, make_two_commits};
+
+    #[tokio::test]
+    async fn list_reports_branch_head_of_each_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let init = init_repo(tmp.path());
+        let wt_path = tmp.path().join("wt-branch");
+        WorktreeAdd::new(tmp.path(), "wt-branch", &wt_path)
+            .run(&ctx())
+            .await
+            .unwrap();
+        let list = WorktreeList::new(tmp.path()).run(&ctx()).await.unwrap();
+        assert_eq!(list.entries.len(), 1);
+        let entry = &list.entries[0];
+        assert_eq!(entry.name, "wt-branch");
+        assert_eq!(entry.branch.as_deref(), Some("wt-branch"));
+        assert_eq!(entry.commit, Some(init.to_string()));
+        assert_eq!(entry.path.file_name(), wt_path.file_name());
+    }
+
+    #[tokio::test]
+    async fn list_reports_detached_head() {
+        let tmp = tempfile::tempdir().unwrap();
+        let init = init_repo(tmp.path()).to_string();
+        let wt_path = tmp.path().join("wt-detached");
+        WorktreeAdd::new(tmp.path(), "wt-detached", &wt_path)
+            .detached_at(init.clone())
+            .run(&ctx())
+            .await
+            .unwrap();
+        let list = WorktreeList::new(tmp.path()).run(&ctx()).await.unwrap();
+        let entry = &list.entries[0];
+        assert_eq!(entry.branch, None);
+        assert_eq!(entry.commit, Some(init));
+    }
+
+    #[tokio::test]
+    async fn list_keeps_worktree_whose_directory_is_gone() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        let wt_path = tmp.path().join("wt-gone");
+        WorktreeAdd::new(tmp.path(), "wt-gone", &wt_path)
+            .run(&ctx())
+            .await
+            .unwrap();
+        fs::remove_dir_all(&wt_path).unwrap();
+        let list = WorktreeList::new(tmp.path()).run(&ctx()).await.unwrap();
+        assert_eq!(list.worktrees, ["wt-gone"]);
+        assert_eq!(list.entries[0].branch, None);
+        assert_eq!(list.entries[0].commit, None);
+    }
+
+    #[tokio::test]
+    async fn add_rejects_invalid_name_before_opening_repo() {
+        let missing = tempfile::tempdir().unwrap().path().join("nope");
+        let err = WorktreeAdd::new(&missing, "a..b", missing.join("wt"))
+            .run(&ctx())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("invalid worktree name"), "got: {err}");
+    }
 
     #[tokio::test]
     async fn add_and_list() {

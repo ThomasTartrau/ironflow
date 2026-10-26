@@ -4,13 +4,14 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use git2::build::CheckoutBuilder;
-use git2::{BranchType, Repository};
+use git2::{BranchType, ErrorCode, Repository};
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::helpers::{blocking, to_value};
+use crate::refname::check_ref_name;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BranchCreateOutput {
@@ -20,6 +21,7 @@ pub struct BranchCreateOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BranchDeleteOutput {
     pub name: String,
+    /// `false` when the branch did not exist, so nothing was deleted.
     pub deleted: bool,
 }
 
@@ -88,7 +90,13 @@ impl BranchCreate {
     }
 
     /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::External`] if a name is not a valid ref name (checked
+    /// before the repository is opened), or if the git operation fails.
     pub async fn run(&self, _ctx: &OperationContext) -> Result<BranchCreateOutput, OperationError> {
+        check_ref_name("branch", &self.name)?;
         let repo_path = self.repo_path.clone();
         let name = self.name.clone();
         blocking(move || {
@@ -120,6 +128,9 @@ impl TypedOperation for BranchCreate {
 
 /// Delete a branch.
 ///
+/// Idempotent: deleting a branch that does not exist succeeds with
+/// `deleted == false`. Deleting the checked-out branch still fails.
+///
 /// # Examples
 ///
 /// ```no_run
@@ -138,7 +149,8 @@ pub struct BranchDelete {
 impl BranchDelete {
     /// Create a new branch-delete operation.
     ///
-    /// Set `remote` to `true` to delete a remote-tracking branch.
+    /// Set `remote` to `true` to delete a remote-tracking branch. A missing
+    /// branch is not an error: the output reports `deleted: false`.
     pub fn new(repo_path: impl Into<PathBuf>, name: impl Into<String>, remote: bool) -> Self {
         Self {
             repo_path: repo_path.into(),
@@ -148,7 +160,13 @@ impl BranchDelete {
     }
 
     /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::External`] if a name is not a valid ref name (checked
+    /// before the repository is opened), or if the git operation fails.
     pub async fn run(&self, _ctx: &OperationContext) -> Result<BranchDeleteOutput, OperationError> {
+        check_ref_name("branch", &self.name)?;
         let repo_path = self.repo_path.clone();
         let name = self.name.clone();
         let branch_type = if self.remote {
@@ -158,7 +176,16 @@ impl BranchDelete {
         };
         blocking(move || {
             let repo = Repository::open(&repo_path)?;
-            let mut branch = repo.find_branch(&name, branch_type)?;
+            let mut branch = match repo.find_branch(&name, branch_type) {
+                Ok(branch) => branch,
+                Err(e) if e.code() == ErrorCode::NotFound => {
+                    return Ok(BranchDeleteOutput {
+                        name,
+                        deleted: false,
+                    });
+                }
+                Err(e) => return Err(e),
+            };
             branch.delete()?;
             Ok(BranchDeleteOutput {
                 name,
@@ -223,7 +250,14 @@ impl BranchRename {
     }
 
     /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::External`] if a name is not a valid ref name (checked
+    /// before the repository is opened), or if the git operation fails.
     pub async fn run(&self, _ctx: &OperationContext) -> Result<BranchRenameOutput, OperationError> {
+        check_ref_name("branch", &self.old_name)?;
+        check_ref_name("branch", &self.new_name)?;
         let repo_path = self.repo_path.clone();
         let old = self.old_name.clone();
         let new = self.new_name.clone();
@@ -372,7 +406,13 @@ impl BranchLookup {
     }
 
     /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::External`] if a name is not a valid ref name (checked
+    /// before the repository is opened), or if the git operation fails.
     pub async fn run(&self, _ctx: &OperationContext) -> Result<BranchLookupOutput, OperationError> {
+        check_ref_name("branch", &self.name)?;
         let repo_path = self.repo_path.clone();
         let name = self.name.clone();
         let bt = if self.remote {
@@ -437,7 +477,13 @@ impl BranchIsHead {
     }
 
     /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::External`] if a name is not a valid ref name (checked
+    /// before the repository is opened), or if the git operation fails.
     pub async fn run(&self, _ctx: &OperationContext) -> Result<BranchIsHeadOutput, OperationError> {
+        check_ref_name("branch", &self.name)?;
         let repo_path = self.repo_path.clone();
         let name = self.name.clone();
         blocking(move || {
@@ -501,10 +547,17 @@ impl BranchSetUpstream {
     }
 
     /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::External`] if a name is not a valid ref name (checked
+    /// before the repository is opened), or if the git operation fails.
     pub async fn run(
         &self,
         _ctx: &OperationContext,
     ) -> Result<BranchSetUpstreamOutput, OperationError> {
+        check_ref_name("branch", &self.branch_name)?;
+        check_ref_name("branch", &self.upstream_name)?;
         let repo_path = self.repo_path.clone();
         let branch_name = self.branch_name.clone();
         let upstream = self.upstream_name.clone();
@@ -582,6 +635,7 @@ impl BranchCheckout {
         &self,
         _ctx: &OperationContext,
     ) -> Result<BranchCheckoutOutput, OperationError> {
+        check_ref_name("branch", &self.name)?;
         let repo_path = self.repo_path.clone();
         let name = self.name.clone();
         blocking(move || {
@@ -611,4 +665,81 @@ impl Operation for BranchCheckout {
 
 impl TypedOperation for BranchCheckout {
     type Output = BranchCheckoutOutput;
+}
+
+#[cfg(test)]
+mod tests {
+    use git2::Repository;
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::test_helpers::{ctx, init_repo};
+
+    #[tokio::test]
+    async fn branch_delete_missing_branch_is_a_noop() {
+        let dir = tempdir().unwrap();
+        init_repo(dir.path());
+        let out = BranchDelete::new(dir.path(), "ghost", false)
+            .run(&ctx())
+            .await
+            .unwrap();
+        assert!(!out.deleted);
+        assert_eq!(out.name, "ghost");
+    }
+
+    #[tokio::test]
+    async fn branch_delete_missing_remote_branch_is_a_noop() {
+        let dir = tempdir().unwrap();
+        init_repo(dir.path());
+        let out = BranchDelete::new(dir.path(), "origin/ghost", true)
+            .run(&ctx())
+            .await
+            .unwrap();
+        assert!(!out.deleted);
+    }
+
+    #[tokio::test]
+    async fn branch_delete_existing_branch_reports_deleted() {
+        let dir = tempdir().unwrap();
+        init_repo(dir.path());
+        BranchCreate::new(dir.path(), "topic")
+            .run(&ctx())
+            .await
+            .unwrap();
+        let out = BranchDelete::new(dir.path(), "topic", false)
+            .run(&ctx())
+            .await
+            .unwrap();
+        assert!(out.deleted);
+        let repo = Repository::open(dir.path()).unwrap();
+        assert!(repo.find_branch("topic", BranchType::Local).is_err());
+    }
+
+    #[tokio::test]
+    async fn branch_ops_reject_invalid_name_before_opening_repo() {
+        let missing = tempdir().unwrap().path().join("nope");
+        let ctx = ctx();
+        let results = [
+            BranchCreate::new(&missing, "-bad").run(&ctx).await.err(),
+            BranchDelete::new(&missing, "a..b", false)
+                .run(&ctx)
+                .await
+                .err(),
+            BranchRename::new(&missing, "ok", "x y", false)
+                .run(&ctx)
+                .await
+                .err(),
+            BranchLookup::new(&missing, "", false).run(&ctx).await.err(),
+            BranchIsHead::new(&missing, "a:b").run(&ctx).await.err(),
+            BranchSetUpstream::new(&missing, "ok", "-up")
+                .run(&ctx)
+                .await
+                .err(),
+            BranchCheckout::new(&missing, "x~1").run(&ctx).await.err(),
+        ];
+        for err in results {
+            let message = err.expect("invalid name accepted").to_string();
+            assert!(message.contains("invalid branch name"), "got: {message}");
+        }
+    }
 }
