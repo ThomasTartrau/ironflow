@@ -68,7 +68,7 @@ ctx.operation("commit-changes", &commit).await?;
 | `status` | Status |
 | `submodule` | Init, update, add, sync |
 | `tag` | Create, delete, list |
-| `worktree` | Add (optionally detached at a commit), remove, list (with the HEAD of each), prune |
+| `worktree` | Add (optionally detached at a commit), remove, list (with the HEAD of each; a worktree with an unreadable HEAD is listed without branch or commit), prune |
 
 ## Authentication
 

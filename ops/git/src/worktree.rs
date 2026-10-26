@@ -210,8 +210,8 @@ impl TypedOperation for WorktreeAdd {
 
 /// List all worktrees, with the branch and commit each `HEAD` points at.
 ///
-/// A worktree whose directory is gone is still listed, with no branch and no
-/// commit.
+/// A worktree whose directory is gone, or whose `HEAD` cannot be read, is
+/// still listed, with no branch and no commit.
 ///
 /// # Examples
 ///
@@ -262,30 +262,38 @@ impl WorktreeList {
     }
 }
 
+/// Read the branch and commit the `HEAD` of `wt_repo` points at.
+///
+/// An unborn branch keeps its name and has no commit.
+fn read_head(wt_repo: &Repository) -> Result<(Option<String>, Option<String>), Error> {
+    let head = wt_repo.find_reference("HEAD")?;
+    let branch = head
+        .symbolic_target()?
+        .and_then(|target| target.strip_prefix("refs/heads/"))
+        .map(String::from);
+    // An unborn branch resolves to NotFound; anything else is a real failure.
+    let commit = match head.resolve() {
+        Ok(resolved) => resolved.target().map(|oid| oid.to_string()),
+        Err(e) if e.code() == ErrorCode::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    Ok((branch, commit))
+}
+
 /// Read the `HEAD` of the worktree `name` without failing on an unborn
-/// `HEAD` or a worktree whose directory cannot be opened.
+/// `HEAD`, a worktree whose directory cannot be opened or a `HEAD` that
+/// cannot be read.
 fn worktree_entry(repo: &Repository, name: &str) -> Result<WorktreeEntry, Error> {
     let wt = repo.find_worktree(name)?;
     let path = wt.path().to_path_buf();
-    let (branch, commit) = match Repository::open_from_worktree(&wt) {
-        Ok(wt_repo) => {
-            let head = wt_repo.find_reference("HEAD")?;
-            let branch = head
-                .symbolic_target()?
-                .and_then(|target| target.strip_prefix("refs/heads/"))
-                .map(String::from);
-            // An unborn branch resolves to NotFound; anything else is a real failure.
-            let commit = match head.resolve() {
-                Ok(resolved) => resolved.target().map(|oid| oid.to_string()),
-                Err(e) if e.code() == ErrorCode::NotFound => None,
-                Err(e) => return Err(e),
-            };
-            (branch, commit)
-        }
-        // A gone worktree directory resolves to NotFound; anything else is a real failure.
-        Err(e) if e.code() == ErrorCode::NotFound => (None, None),
-        Err(e) => return Err(e),
-    };
+    // A worktree that cannot be read must stay listed with no branch and no
+    // commit, otherwise one corrupted worktree (e.g. a killed run) prevents
+    // sweeping all the others. The error is dropped on purpose for that reason.
+    let (branch, commit) =
+        match Repository::open_from_worktree(&wt).and_then(|wt_repo| read_head(&wt_repo)) {
+            Ok(head) => head,
+            Err(_) => (None, None),
+        };
     Ok(WorktreeEntry {
         name: name.to_string(),
         path,
@@ -569,6 +577,38 @@ mod tests {
         assert_eq!(list.worktrees, ["wt-gone"]);
         assert_eq!(list.entries[0].branch, None);
         assert_eq!(list.entries[0].commit, None);
+    }
+
+    #[tokio::test]
+    async fn list_keeps_worktree_with_unreadable_head() {
+        let tmp = tempfile::tempdir().unwrap();
+        let init = init_repo(tmp.path());
+        for name in ["wt-ok", "wt-corrupt"] {
+            WorktreeAdd::new(tmp.path(), name, tmp.path().join(name))
+                .run(&ctx())
+                .await
+                .unwrap();
+        }
+        fs::write(
+            tmp.path().join(".git/worktrees/wt-corrupt/HEAD"),
+            [0xff, 0xfe, 0x00, b'x'],
+        )
+        .unwrap();
+        let list = WorktreeList::new(tmp.path()).run(&ctx()).await.unwrap();
+        let mut names = list.worktrees.clone();
+        names.sort();
+        assert_eq!(names, ["wt-corrupt", "wt-ok"]);
+        let corrupt = list
+            .entries
+            .iter()
+            .find(|e| e.name == "wt-corrupt")
+            .unwrap();
+        assert_eq!(corrupt.branch, None);
+        assert_eq!(corrupt.commit, None);
+        assert_eq!(corrupt.path.file_name(), Some("wt-corrupt".as_ref()));
+        let ok = list.entries.iter().find(|e| e.name == "wt-ok").unwrap();
+        assert_eq!(ok.branch.as_deref(), Some("wt-ok"));
+        assert_eq!(ok.commit, Some(init.to_string()));
     }
 
     #[tokio::test]
