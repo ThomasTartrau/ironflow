@@ -8,6 +8,7 @@ use crate::pricing::{CostBreakdown, StaticPricing};
 use crate::provider::AgentConfig;
 use crate::providers::http::adapter::{HttpAgentAdapter, HttpToolCall, HttpUsage, TurnResult};
 use crate::providers::http::sse::SseDelta;
+use crate::providers::http::tools::ToolRegistry;
 use crate::schema_transform::transform_schema;
 
 /// Known Anthropic model identifiers for the Messages API.
@@ -68,10 +69,14 @@ fn requires_output_config_format(model: &str) -> bool {
 
 /// Adapter for the Anthropic Messages API (`/v1/messages`).
 ///
-/// Uses tool forcing for structured output: defines a synthetic `output` tool
-/// with the requested JSON schema and forces the model to call it.
+/// Uses tool forcing for structured output: defines a synthetic
+/// `structured_output` tool with the requested JSON schema and forces the model
+/// to call it. When registry tools are attached, they are merged next to the
+/// synthetic tool and `tool_choice` becomes `any`, so the model can call
+/// registry tools before answering through `structured_output`.
 pub struct AnthropicApiAdapter {
     api_key: String,
+    base_url: String,
     anthropic_version: String,
     default_model: String,
 }
@@ -81,9 +86,25 @@ impl AnthropicApiAdapter {
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
+            base_url: "https://api.anthropic.com".to_string(),
             anthropic_version: "2023-06-01".to_string(),
             default_model: AnthropicModel::SONNET_5.to_string(),
         }
+    }
+
+    /// Override the API base URL (default `https://api.anthropic.com`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::providers::http::anthropic::adapter::AnthropicApiAdapter;
+    ///
+    /// let adapter = AnthropicApiAdapter::new("key".to_string())
+    ///     .with_base_url("http://127.0.0.1:8080".to_string());
+    /// ```
+    pub fn with_base_url(mut self, base_url: String) -> Self {
+        self.base_url = base_url;
+        self
     }
 
     /// Override the default model.
@@ -99,7 +120,7 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
     }
 
     fn endpoint_url(&self, _model: &str) -> String {
-        "https://api.anthropic.com/v1/messages".to_string()
+        format!("{}/v1/messages", self.base_url)
     }
 
     fn auth_headers(&self) -> Vec<(String, String)> {
@@ -183,6 +204,7 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
         let mut text_parts: Vec<String> = Vec::new();
         let mut tool_calls: Vec<HttpToolCall> = Vec::new();
         let mut structured_value: Option<Value> = None;
+        let mut structured_from_tool = false;
 
         if let Some(blocks) = content {
             for block in blocks {
@@ -208,6 +230,7 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
 
                         if config.json_schema.is_some() && name == "structured_output" {
                             structured_value = Some(input);
+                            structured_from_tool = true;
                         } else {
                             tool_calls.push(HttpToolCall { id, name, input });
                         }
@@ -217,12 +240,20 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
             }
         }
 
+        // The structured answer ends the conversation: registry calls of the
+        // same turn are dropped, they would leave `structured_output` without
+        // a `tool_result` in the next request.
+        if structured_from_tool {
+            tool_calls.clear();
+        }
+
         let stop_reason = body
             .get("stop_reason")
             .and_then(|s| s.as_str())
             .unwrap_or("end_turn");
 
-        let is_final = stop_reason == "end_turn" || stop_reason == "max_tokens";
+        let is_final =
+            structured_from_tool || stop_reason == "end_turn" || stop_reason == "max_tokens";
 
         let usage = parse_anthropic_usage(body);
 
@@ -379,7 +410,11 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
         let mut tool_calls: Vec<HttpToolCall> = Vec::new();
 
         for builder in tool_builders {
-            let name = builder.name.unwrap_or_default();
+            // Builders are indexed by content block: a text block leaves a
+            // nameless placeholder that is not a tool call.
+            let Some(name) = builder.name else {
+                continue;
+            };
             let id = builder.id.unwrap_or_default();
             let input: Value = serde_json::from_str(&builder.args).unwrap_or(json!({}));
 
@@ -396,6 +431,11 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
             Some(text_parts.join(""))
         };
 
+        // Same rule as `parse_response`: the structured answer wins.
+        if structured_value.is_some() {
+            tool_calls.clear();
+        }
+
         let is_final = tool_calls.is_empty();
         Ok(TurnResult {
             text,
@@ -411,6 +451,61 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
             },
             model: None,
         })
+    }
+
+    fn attach_tools(&self, request_body: &mut Value, registry: &ToolRegistry) {
+        let mut tools: Vec<Value> = request_body
+            .get("tools")
+            .and_then(|t| t.as_array())
+            .cloned()
+            .unwrap_or_default();
+        tools.extend(registry.to_anthropic_tools());
+        request_body["tools"] = Value::Array(tools);
+
+        // A forced `tool_choice` naming `structured_output` would block registry
+        // calls. `any` makes the model call a tool every turn, either a registry
+        // tool (the loop continues) or `structured_output` (the answer), which
+        // keeps the schema guarantee instead of a free-text reply.
+        if request_body.get("tool_choice").is_some() {
+            request_body["tool_choice"] = json!({"type": "any"});
+        }
+    }
+
+    fn assistant_tool_message(&self, turn: &TurnResult) -> Value {
+        let mut blocks: Vec<Value> = Vec::new();
+        if let Some(text) = turn.text.as_deref().filter(|t| !t.is_empty()) {
+            blocks.push(json!({"type": "text", "text": text}));
+        }
+        blocks.extend(turn.tool_calls.iter().map(|tc| {
+            json!({
+                "type": "tool_use",
+                "id": tc.id,
+                "name": tc.name,
+                "input": tc.input
+            })
+        }));
+        json!({"role": "assistant", "content": blocks})
+    }
+
+    fn tool_result_messages(
+        &self,
+        calls: &[HttpToolCall],
+        results: &[(String, bool)],
+    ) -> Vec<Value> {
+        // The API requires every result of a turn in one user message.
+        let blocks: Vec<Value> = calls
+            .iter()
+            .zip(results)
+            .map(|(call, (content, is_error))| {
+                json!({
+                    "type": "tool_result",
+                    "tool_use_id": call.id,
+                    "content": content,
+                    "is_error": is_error
+                })
+            })
+            .collect();
+        vec![json!({"role": "user", "content": blocks})]
     }
 
     fn compute_cost(&self, model: &str, usage: &HttpUsage) -> Option<f64> {
@@ -463,10 +558,14 @@ struct ToolBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
+
     use serde_json::json;
 
     use super::*;
     use crate::operations::agent::Effort;
+    use crate::providers::http::tools::{Tool, ToolError, ToolOutput};
 
     fn adapter() -> AnthropicApiAdapter {
         AnthropicApiAdapter::new("test-key".to_string())
@@ -847,6 +946,252 @@ mod tests {
                 .iter()
                 .any(|(k, v)| k == "anthropic-version" && v == "2023-06-01")
         );
+    }
+
+    struct LookupTool {
+        name: &'static str,
+    }
+
+    impl Tool for LookupTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn description(&self) -> &str {
+            "Looks something up"
+        }
+        fn parameters_schema(&self) -> Value {
+            json!({"type": "object", "properties": {"q": {"type": "string"}}})
+        }
+        fn execute(
+            &self,
+            _input: Value,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + '_>> {
+            Box::pin(async { Ok(ToolOutput::success("found")) })
+        }
+    }
+
+    fn registry() -> ToolRegistry {
+        ToolRegistry::new()
+            .register(LookupTool { name: "lookup" })
+            .register(LookupTool { name: "search" })
+    }
+
+    const X_SCHEMA: &str = r#"{"type":"object","properties":{"x":{"type":"integer"}}}"#;
+
+    fn tool_names(body: &Value) -> Vec<&str> {
+        body["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect()
+    }
+
+    #[test]
+    fn attach_tools_keeps_structured_output_next_to_registry_tools() {
+        let a = adapter();
+        let config = AgentConfig::new("Give x")
+            .model(AnthropicModel::HAIKU_5_5)
+            .output_schema_raw(X_SCHEMA)
+            .into();
+        let mut body = a.build_request(&config).expect("build_request failed");
+        a.attach_tools(&mut body, &registry());
+
+        assert_eq!(
+            tool_names(&body),
+            vec!["structured_output", "lookup", "search"]
+        );
+        assert!(body["tools"][1]["input_schema"].is_object());
+        assert_eq!(body["tool_choice"], json!({"type": "any"}));
+        if let Some(name) = body["tool_choice"].get("name").and_then(|n| n.as_str()) {
+            assert!(tool_names(&body).contains(&name));
+        }
+    }
+
+    #[test]
+    fn attach_tools_without_schema_sets_no_tool_choice() {
+        let a = adapter();
+        let mut body = a
+            .build_request(&AgentConfig::new("Hi"))
+            .expect("build_request failed");
+        a.attach_tools(&mut body, &registry());
+
+        assert_eq!(tool_names(&body), vec!["lookup", "search"]);
+        assert!(body.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn attach_tools_on_output_config_format_model_adds_only_registry_tools() {
+        let a = adapter();
+        let config = AgentConfig::new("Give x")
+            .model(AnthropicModel::SONNET_5_5)
+            .output_schema_raw(X_SCHEMA)
+            .into();
+        let mut body = a.build_request(&config).expect("build_request failed");
+        a.attach_tools(&mut body, &registry());
+
+        assert_eq!(tool_names(&body), vec!["lookup", "search"]);
+        assert!(body.get("tool_choice").is_none());
+        assert_eq!(body["output_config"]["format"]["type"], "json_schema");
+    }
+
+    fn turn(text: Option<&str>, calls: Vec<HttpToolCall>) -> TurnResult {
+        TurnResult {
+            text: text.map(String::from),
+            tool_calls: calls,
+            is_final: false,
+            structured_value: None,
+            usage: HttpUsage::default(),
+            model: None,
+        }
+    }
+
+    fn call(id: &str, name: &str) -> HttpToolCall {
+        HttpToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
+            input: json!({"q": "a"}),
+        }
+    }
+
+    #[test]
+    fn assistant_tool_message_uses_tool_use_blocks() {
+        let a = adapter();
+        let msg = a.assistant_tool_message(&turn(
+            Some("thinking"),
+            vec![call("tu_1", "lookup"), call("tu_2", "search")],
+        ));
+
+        assert_eq!(msg["role"], "assistant");
+        assert_eq!(
+            msg["content"][0],
+            json!({"type": "text", "text": "thinking"})
+        );
+        assert_eq!(msg["content"][1]["type"], "tool_use");
+        assert_eq!(msg["content"][1]["id"], "tu_1");
+        assert_eq!(msg["content"][1]["input"], json!({"q": "a"}));
+        assert_eq!(msg["content"][2]["name"], "search");
+
+        let no_text = a.assistant_tool_message(&turn(Some(""), vec![call("tu_1", "lookup")]));
+        assert_eq!(no_text["content"].as_array().map(Vec::len), Some(1));
+        assert_eq!(no_text["content"][0]["type"], "tool_use");
+    }
+
+    #[test]
+    fn tool_result_messages_group_results_in_one_user_message() {
+        let a = adapter();
+        let calls = vec![call("tu_1", "lookup"), call("tu_2", "search")];
+        let results = vec![("found".to_string(), false), ("boom".to_string(), true)];
+        let messages = a.tool_result_messages(&calls, &results);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        let blocks = messages[0]["content"].as_array().expect("blocks");
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "tool_result");
+        assert_eq!(blocks[0]["tool_use_id"], "tu_1");
+        assert_eq!(blocks[0]["content"], "found");
+        assert_eq!(blocks[0]["is_error"], false);
+        assert_eq!(blocks[1]["tool_use_id"], "tu_2");
+        assert_eq!(blocks[1]["is_error"], true);
+    }
+
+    #[test]
+    fn parse_response_structured_output_with_registry_call_is_final() {
+        let a = adapter();
+        let body = json!({
+            "content": [
+                {"type": "tool_use", "id": "tu_1", "name": "lookup", "input": {"q": "a"}},
+                {"type": "tool_use", "id": "tu_2", "name": "structured_output", "input": {"x": 1}},
+                {"type": "tool_use", "id": "tu_3", "name": "search", "input": {"q": "b"}}
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+            "model": "claude-haiku-5-5"
+        });
+        let config = AgentConfig::new("Give x")
+            .output_schema_raw(X_SCHEMA)
+            .into();
+        let result = a.parse_response(&body, &config).expect("parse failed");
+
+        assert!(result.is_final);
+        assert!(result.tool_calls.is_empty());
+        assert_eq!(result.structured_value, Some(json!({"x": 1})));
+    }
+
+    #[test]
+    fn fold_sse_deltas_skips_nameless_text_block_builder() {
+        let a = adapter();
+        let deltas = vec![
+            SseDelta::Text("let me check".to_string()),
+            SseDelta::ToolCallDelta {
+                index: 1,
+                id: Some("tu_1".to_string()),
+                name: Some("lookup".to_string()),
+                args_fragment: String::new(),
+            },
+            SseDelta::ToolCallDelta {
+                index: 1,
+                id: None,
+                name: None,
+                args_fragment: r#"{"q":"a"}"#.to_string(),
+            },
+            SseDelta::Done,
+        ];
+        let result = a
+            .fold_sse_deltas(deltas, &AgentConfig::new("Hi"))
+            .expect("fold failed");
+
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(result.tool_calls[0].name, "lookup");
+        assert_eq!(result.tool_calls[0].input, json!({"q": "a"}));
+        assert!(!result.is_final);
+    }
+
+    #[test]
+    fn fold_sse_deltas_structured_output_with_registry_call_is_final() {
+        let a = adapter();
+        let deltas = vec![
+            SseDelta::ToolCallDelta {
+                index: 0,
+                id: Some("tu_1".to_string()),
+                name: Some("lookup".to_string()),
+                args_fragment: r#"{"q":"a"}"#.to_string(),
+            },
+            SseDelta::ToolCallDelta {
+                index: 1,
+                id: Some("tu_2".to_string()),
+                name: Some("structured_output".to_string()),
+                args_fragment: String::new(),
+            },
+            SseDelta::ToolCallDelta {
+                index: 1,
+                id: None,
+                name: None,
+                args_fragment: r#"{"x":1}"#.to_string(),
+            },
+            SseDelta::ToolCallDelta {
+                index: 2,
+                id: Some("tu_3".to_string()),
+                name: Some("search".to_string()),
+                args_fragment: r#"{"q":"b"}"#.to_string(),
+            },
+            SseDelta::Done,
+        ];
+        let config = AgentConfig::new("Give x")
+            .output_schema_raw(X_SCHEMA)
+            .into();
+        let result = a.fold_sse_deltas(deltas, &config).expect("fold failed");
+
+        assert!(result.is_final);
+        assert!(result.tool_calls.is_empty());
+        assert_eq!(result.structured_value, Some(json!({"x": 1})));
+    }
+
+    #[test]
+    fn endpoint_url_uses_base_url() {
+        let a = adapter().with_base_url("http://127.0.0.1:9".to_string());
+        assert_eq!(a.endpoint_url("any"), "http://127.0.0.1:9/v1/messages");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Tool registry: stores tools and converts them to OpenAI format.
+//! Tool registry: stores tools and converts them to the format of each HTTP API.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -9,8 +9,9 @@ use super::tool_trait::{Tool, ToolError, ToolOutput};
 
 /// Registry of client-side tools available to the HTTP agent provider.
 ///
-/// Converts registered tools to the OpenAI `tools` array format and routes
-/// tool call execution to the correct tool implementation.
+/// Converts registered tools to the tool format of each HTTP API (OpenAI,
+/// Anthropic, Gemini) and routes tool call execution to the correct tool
+/// implementation.
 ///
 /// # Examples
 ///
@@ -121,6 +122,69 @@ impl ToolRegistry {
                         "description": tool.description(),
                         "parameters": tool.parameters_schema()
                     }
+                })
+            })
+            .collect()
+    }
+
+    /// Convert all registered tools to the Anthropic Messages API `tools` format.
+    ///
+    /// Each tool is represented as:
+    /// ```json
+    /// {
+    ///   "name": "tool_name",
+    ///   "description": "tool description",
+    ///   "input_schema": { ... json schema ... }
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::providers::http::tools::ToolRegistry;
+    ///
+    /// assert!(ToolRegistry::new().to_anthropic_tools().is_empty());
+    /// ```
+    pub fn to_anthropic_tools(&self) -> Vec<Value> {
+        self.tools
+            .iter()
+            .map(|tool| {
+                json!({
+                    "name": tool.name(),
+                    "description": tool.description(),
+                    "input_schema": tool.parameters_schema()
+                })
+            })
+            .collect()
+    }
+
+    /// Convert all registered tools to function declarations with a raw JSON
+    /// schema, the base of the Gemini `functionDeclarations` format.
+    ///
+    /// Each tool is represented as:
+    /// ```json
+    /// {
+    ///   "name": "tool_name",
+    ///   "description": "tool description",
+    ///   "parameters": { ... json schema ... }
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::providers::http::tools::ToolRegistry;
+    ///
+    /// assert!(ToolRegistry::new().to_function_declarations().is_empty());
+    /// ```
+    pub fn to_function_declarations(&self) -> Vec<Value> {
+        self.tools
+            .iter()
+            .map(|tool| {
+                json!({
+                    "name": tool.name(),
+                    "description": tool.description(),
+                    "parameters": tool.parameters_schema()
                 })
             })
             .collect()
@@ -317,6 +381,44 @@ mod tests {
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0]["function"]["name"], "add");
         assert_eq!(tools[1]["function"]["name"], "echo");
+    }
+
+    #[test]
+    fn to_anthropic_tools_format() {
+        let registry = ToolRegistry::new().register(AddTool);
+        let tools = registry.to_anthropic_tools();
+
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "add");
+        assert_eq!(tools[0]["description"], "Adds two numbers");
+        assert_eq!(tools[0]["input_schema"]["type"], "object");
+        assert!(tools[0].get("type").is_none());
+        assert!(tools[0].get("function").is_none());
+    }
+
+    #[test]
+    fn to_function_declarations_format() {
+        let registry = ToolRegistry::new().register(AddTool);
+        let declarations = registry.to_function_declarations();
+
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(declarations[0]["name"], "add");
+        assert_eq!(declarations[0]["description"], "Adds two numbers");
+        assert_eq!(declarations[0]["parameters"]["type"], "object");
+        assert!(declarations[0]["parameters"]["properties"]["a"].is_object());
+    }
+
+    #[test]
+    fn provider_tool_formats_keep_registration_order() {
+        let registry = ToolRegistry::new().register(EchoTool).register(AddTool);
+
+        let anthropic = registry.to_anthropic_tools();
+        assert_eq!(anthropic[0]["name"], "echo");
+        assert_eq!(anthropic[1]["name"], "add");
+
+        let declarations = registry.to_function_declarations();
+        assert_eq!(declarations[0]["name"], "echo");
+        assert_eq!(declarations[1]["name"], "add");
     }
 
     #[tokio::test]

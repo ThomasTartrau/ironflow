@@ -100,6 +100,69 @@ pub trait HttpAgentAdapter: Send + Sync + 'static {
 
     /// Resolve model alias (e.g. "sonnet") to a provider-specific model ID.
     fn resolve_model(&self, model: &str) -> String;
+
+    /// Request-body key holding the conversation history (default: `"messages"`).
+    fn history_field(&self) -> &'static str {
+        "messages"
+    }
+
+    /// Put the registry tools in the request body.
+    ///
+    /// The default writes the OpenAI `tools` array, replacing any existing value.
+    fn attach_tools(&self, request_body: &mut Value, registry: &ToolRegistry) {
+        request_body["tools"] = Value::Array(registry.to_openai_tools());
+    }
+
+    /// Assistant message recording the tool calls of `turn` in the history.
+    ///
+    /// The default uses the OpenAI `tool_calls` shape.
+    fn assistant_tool_message(&self, turn: &TurnResult) -> Value {
+        let assistant_tool_calls: Vec<Value> = turn
+            .tool_calls
+            .iter()
+            .map(|tc| {
+                json!({
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": tc.input.to_string()
+                    }
+                })
+            })
+            .collect();
+
+        let mut assistant_msg = json!({"role": "assistant"});
+        if let Some(ref text) = turn.text {
+            assistant_msg["content"] = Value::String(text.clone());
+        } else {
+            assistant_msg["content"] = Value::Null;
+        }
+        assistant_msg["tool_calls"] = Value::Array(assistant_tool_calls);
+        assistant_msg
+    }
+
+    /// Messages carrying the tool results back, `results[i]` answering `calls[i]`
+    /// as a `(content, is_error)` pair.
+    ///
+    /// The default emits one OpenAI `role: "tool"` message per call.
+    fn tool_result_messages(
+        &self,
+        calls: &[HttpToolCall],
+        results: &[(String, bool)],
+    ) -> Vec<Value> {
+        calls
+            .iter()
+            .zip(results)
+            .map(|(tc, (content, _))| {
+                json!({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": content
+                })
+            })
+            .collect()
+    }
 }
 
 /// Default timeout for HTTP provider requests.
@@ -146,7 +209,7 @@ impl<A: HttpAgentAdapter> HttpAgentProvider<A> {
     ///
     /// The default tools go to every step that selects no tool profile. When
     /// tools are selected, the provider will:
-    /// 1. Include the tools in every request (OpenAI `tools` format).
+    /// 1. Include the tools in every request (in the format of the adapter's API).
     /// 2. Execute tool calls returned by the model.
     /// 3. Loop until the model produces a final response or limits are hit.
     pub fn with_tools(mut self, registry: ToolRegistry) -> Self {
@@ -472,23 +535,23 @@ impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
             if let Some(registry) = tool_registry
                 && !registry.is_empty()
             {
-                let tools_array = registry.to_openai_tools();
-                request_body["tools"] = Value::Array(tools_array);
+                self.adapter.attach_tools(&mut request_body, registry);
             }
 
             let max_turns = config.max_turns.unwrap_or(25) as usize;
             let max_budget = config.max_budget_usd.unwrap_or(f64::MAX);
             let mut state = LoopState::new(Instant::now(), config.verbose);
 
-            // Messages array for multi-turn
+            // History array for multi-turn
+            let history_field = self.adapter.history_field();
             let mut messages: Vec<Value> = request_body
-                .get("messages")
+                .get(history_field)
                 .and_then(|m| m.as_array())
                 .cloned()
                 .unwrap_or_default();
 
             for turn in 0..max_turns {
-                request_body["messages"] = Value::Array(messages.clone());
+                request_body[history_field] = Value::Array(messages.clone());
                 let turn_result = self.execute_turn(&request_body, config).await?;
 
                 // Accumulate usage
@@ -582,30 +645,8 @@ impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
                     return Ok(state.into_output(extract_text_value(&turn_result)));
                 }
 
-                // Build assistant message with tool_calls for conversation history
-                let assistant_tool_calls: Vec<Value> = turn_result
-                    .tool_calls
-                    .iter()
-                    .map(|tc| {
-                        json!({
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                "arguments": tc.input.to_string()
-                            }
-                        })
-                    })
-                    .collect();
-
-                let mut assistant_msg = json!({"role": "assistant"});
-                if let Some(ref text) = turn_result.text {
-                    assistant_msg["content"] = Value::String(text.clone());
-                } else {
-                    assistant_msg["content"] = Value::Null;
-                }
-                assistant_msg["tool_calls"] = Value::Array(assistant_tool_calls);
-                messages.push(assistant_msg);
+                // Record the assistant tool calls in the conversation history
+                messages.push(self.adapter.assistant_tool_message(&turn_result));
 
                 // Execute tool calls (consecutive read-only calls run concurrently)
                 let max_parallel = config.max_parallel_tools.max(1);
@@ -617,19 +658,18 @@ impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
                 )
                 .await;
 
-                let mut tool_results_debug: Vec<DebugToolResult> = Vec::new();
-                for (tc, (content, is_error)) in turn_result.tool_calls.iter().zip(results) {
-                    messages.push(json!({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": content
-                    }));
+                messages.extend(
+                    self.adapter
+                        .tool_result_messages(&turn_result.tool_calls, &results),
+                );
 
+                let mut tool_results_debug: Vec<DebugToolResult> = Vec::new();
+                for (tc, (content, is_error)) in turn_result.tool_calls.iter().zip(results.iter()) {
                     if config.verbose {
                         tool_results_debug.push(DebugToolResult {
                             tool_use_id: Some(tc.id.clone()),
                             content: Value::String(content.clone()),
-                            is_error,
+                            is_error: *is_error,
                         });
                     }
                 }
