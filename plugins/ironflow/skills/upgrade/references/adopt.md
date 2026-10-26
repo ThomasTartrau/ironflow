@@ -479,3 +479,29 @@ secret values it read, and pass it to `with_secrets`.
 + }
 + ctx.operation("notify-mr", &op).await?;
 ```
+
+## pod-run-scratch-tolerations
+- kind: adopt
+- since: ironflow-core after 4.18.1, ironflow-ops-k8s after 0.1.46 (#228)
+
+A `PodRun` that needed a writable scratch space built the `Volume` and `VolumeMount` by
+hand, and a toleration list read from a config string was parsed by hand once for the agent
+providers and converted again to `k8s_openapi` for the pod. `.scratch_volume(..)` adds a
+bounded `emptyDir` (no storage class) or an ephemeral claim deleted with the pod, and
+`K8sToleration::parse_list` parses `key[=value]:Effect` entries once for both the providers
+and `PodRun::k8s_tolerations`.
+
+```diff
+- let run = PodRun::new(&kube, name, image, cmd)
+-     .volume(
+-         Volume { name: "scratch".into(), empty_dir: Some(EmptyDirVolumeSource {
+-             size_limit: Some(Quantity("10Gi".into())), ..Default::default() }), ..Default::default() },
+-         VolumeMount { name: "scratch".into(), mount_path: "/scratch".into(), ..Default::default() },
+-     )
+-     .toleration(Toleration { key: Some(key), operator: Some("Equal".into()), value: Some(value),
+-         effect: Some("NoSchedule".into()), ..Default::default() });
++ let tolerations = K8sToleration::parse_list(&cfg.tolerations)?;
++ let run = PodRun::new(&kube, name, image, cmd)
++     .scratch_volume("scratch", "/scratch", "10Gi", None)
++     .k8s_tolerations(tolerations);
+```

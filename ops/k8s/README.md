@@ -59,7 +59,7 @@ Higher-level operations that manage a pod or an object as a single tracked step:
 
 | Operation | Description |
 |-----------|-------------|
-| `PodRun` | Create an ephemeral pod, run a `sh -c` command, wait for completion, collect logs, delete the pod |
+| `PodRun` | Create an ephemeral pod, run a `sh -c` command, wait for completion, collect logs, delete the pod (`scratch_volume` for a bounded scratch volume, `k8s_tolerations` for tolerations parsed by `K8sToleration::parse_list`) |
 | `PodUp` | Start the pod of a `PodRun` as a service, wait until it is `Ready`, return its IP and leave it running |
 | `JobRun` | Same via a `batch/v1` Job (with `backoffLimit` retries) |
 | `ApplyConfigMap` | Server-side apply a `ConfigMap` from a key/value map |

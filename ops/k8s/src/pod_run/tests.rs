@@ -11,6 +11,7 @@ use http::{Method, Request, Response, StatusCode};
 use hyper::body::Bytes;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::Operation;
+use ironflow_core::providers::claude::K8sToleration;
 use tower::Service;
 use tower::service_fn;
 
@@ -1111,4 +1112,142 @@ async fn pvc_volume_rejects_absolute_sub_path() {
         Some("/abs"),
         false,
     );
+}
+
+#[tokio::test]
+async fn build_pod_applies_parsed_k8s_tolerations() {
+    let tolerations = K8sToleration::parse_list("dedicated=worker:NoSchedule,gpu:NoExecute")
+        .expect("valid toleration list");
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .k8s_tolerations(tolerations)
+        .build_pod();
+    let tolerations = pod.spec.unwrap().tolerations.unwrap();
+    assert_eq!(tolerations.len(), 2);
+    assert_eq!(tolerations[0].key.as_deref(), Some("dedicated"));
+    assert_eq!(tolerations[0].operator.as_deref(), Some("Equal"));
+    assert_eq!(tolerations[0].value.as_deref(), Some("worker"));
+    assert_eq!(tolerations[0].effect.as_deref(), Some("NoSchedule"));
+    assert_eq!(tolerations[1].key.as_deref(), Some("gpu"));
+    assert_eq!(tolerations[1].operator.as_deref(), Some("Exists"));
+    assert_eq!(tolerations[1].value, None);
+    assert_eq!(tolerations[1].effect.as_deref(), Some("NoExecute"));
+}
+
+#[tokio::test]
+async fn build_pod_applies_single_k8s_toleration_after_raw_one() {
+    let parsed: K8sToleration = "gpu:NoSchedule".parse().expect("valid toleration");
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .toleration(Toleration {
+            key: Some("raw".to_string()),
+            ..Default::default()
+        })
+        .k8s_toleration(&parsed)
+        .build_pod();
+    let tolerations = pod.spec.unwrap().tolerations.unwrap();
+    assert_eq!(tolerations[0].key.as_deref(), Some("raw"));
+    assert_eq!(tolerations[1].key.as_deref(), Some("gpu"));
+}
+
+#[tokio::test]
+async fn build_pod_empty_k8s_tolerations_leaves_field_absent() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .k8s_tolerations(Vec::new())
+        .build_pod();
+    assert!(pod.spec.unwrap().tolerations.is_none());
+}
+
+#[tokio::test]
+async fn build_pod_scratch_volume_without_class_is_bounded_empty_dir() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .scratch_volume("scratch", "/scratch", "2Gi", None)
+        .build_pod();
+    let spec = pod.spec.unwrap();
+    let volumes = spec.volumes.as_ref().unwrap();
+    assert_eq!(volumes.len(), 1);
+    assert_eq!(volumes[0].name, "scratch");
+    assert_eq!(
+        volumes[0]
+            .empty_dir
+            .as_ref()
+            .unwrap()
+            .size_limit
+            .as_ref()
+            .unwrap()
+            .0,
+        "2Gi"
+    );
+    assert!(volumes[0].ephemeral.is_none());
+    let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+    assert_eq!(mounts[0].name, "scratch");
+    assert_eq!(mounts[0].mount_path, "/scratch");
+}
+
+#[tokio::test]
+async fn build_pod_scratch_volume_with_class_is_ephemeral_claim() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .scratch_volume("scratch", "/scratch", "20Gi", Some("fast-ssd"))
+        .build_pod();
+    let spec = pod.spec.unwrap();
+    let volumes = spec.volumes.as_ref().unwrap();
+    assert!(volumes[0].empty_dir.is_none());
+    let claim_spec = &volumes[0]
+        .ephemeral
+        .as_ref()
+        .unwrap()
+        .volume_claim_template
+        .as_ref()
+        .unwrap()
+        .spec;
+    assert_eq!(claim_spec.storage_class_name.as_deref(), Some("fast-ssd"));
+    assert_eq!(
+        claim_spec.access_modes.as_deref(),
+        Some(&["ReadWriteOnce".to_string()][..])
+    );
+    let requests = claim_spec
+        .resources
+        .as_ref()
+        .unwrap()
+        .requests
+        .as_ref()
+        .unwrap();
+    assert_eq!(requests["storage"].0, "20Gi");
+    let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+    assert_eq!(mounts[0].mount_path, "/scratch");
+}
+
+#[tokio::test]
+#[should_panic(expected = "size must not be blank")]
+async fn build_pod_scratch_volume_panics_on_blank_size() {
+    let _ = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .scratch_volume("scratch", "/scratch", "  ", None);
+}
+
+#[tokio::test]
+#[should_panic(expected = "storage class must not be blank")]
+async fn build_pod_scratch_volume_panics_on_blank_class() {
+    let _ = PodRun::new(&dummy_kube(), "p", "busybox", "true").scratch_volume(
+        "scratch",
+        "/scratch",
+        "1Gi",
+        Some(" "),
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "reserved for .pvc()")]
+async fn build_pod_scratch_volume_panics_on_reserved_name() {
+    let _ = PodRun::new(&dummy_kube(), "p", "busybox", "true").scratch_volume(
+        "workspace",
+        "/scratch",
+        "1Gi",
+        None,
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "already used")]
+async fn build_pod_scratch_volume_panics_on_duplicate_name() {
+    let _ = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .scratch_volume("scratch", "/a", "1Gi", None)
+        .scratch_volume("scratch", "/b", "1Gi", None);
 }

@@ -386,6 +386,26 @@ let out = ctx
 let timed_out = out.reason.as_deref() == Some("DeadlineExceeded");
 ```
 
+A read-only root needs writable volumes: `.scratch_volume(name, mount_path, size,
+storage_class)` adds one. Without a storage class it is an `emptyDir` bounded by
+`size`; with one it is an ephemeral claim created and deleted with the pod.
+Tolerations written as `key[=value]:Effect` (comma-separated, `key` alone means
+`Exists`) are parsed once by `K8sToleration::parse_list` and apply to the agent
+providers and to a `PodRun` alike, through `.k8s_tolerations(..)`.
+
+```rust,ignore
+let tolerations = K8sToleration::parse_list("dedicated=worker:NoSchedule,gpu:NoExecute")?;
+let provider = tolerations
+    .iter()
+    .cloned()
+    .fold(K8sEphemeralProvider::sandboxed(&image), |p, t| p.toleration(t));
+let run = PodRun::new(&kube, "build", &image, "make")
+    .sandboxed()
+    .k8s_tolerations(tolerations)
+    .scratch_volume("target", "/target", "10Gi", None)
+    .scratch_volume("cache", "/cache", "50Gi", Some("fast-ssd"));
+```
+
 ## Persistent environment
 
 By default an agent pod starts from an empty working directory and loses
