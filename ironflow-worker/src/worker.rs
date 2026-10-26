@@ -691,7 +691,7 @@ impl Worker {
             })?;
             spawn(async move {
                 if let Err(e) = exporter.await {
-                    error!(error = %e, "prometheus exporter stopped");
+                    error!(error = ?e, "prometheus exporter stopped");
                 }
             });
             info!(%addr, "prometheus metrics endpoint listening");

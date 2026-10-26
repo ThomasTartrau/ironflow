@@ -6,7 +6,6 @@
 
 mod helpers;
 
-use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,19 +16,13 @@ use reqwest::get;
 use tokio::spawn;
 use tokio::time::{sleep, timeout};
 
-use helpers::{TestApiState, spawn_test_api};
+use helpers::{TestApiState, free_loopback_addr, spawn_test_api};
 
 /// Wall-clock budget for the whole flow.
 const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long the endpoint may take to come up and expose the poll counter.
 const SERVE_DEADLINE: Duration = Duration::from_secs(15);
-
-/// Reserve a free loopback port: bind port 0, read it back, release it.
-fn free_loopback_addr() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind a free port");
-    listener.local_addr().expect("local addr")
-}
 
 #[tokio::test]
 async fn metrics_addr_serves_worker_metrics_in_prometheus_format() {

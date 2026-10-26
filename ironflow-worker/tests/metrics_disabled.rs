@@ -6,7 +6,6 @@
 
 mod helpers;
 
-use std::net::TcpListener;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -19,7 +18,7 @@ use tokio::spawn;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
-use helpers::{TestApiState, make_run_json, spawn_test_api};
+use helpers::{TestApiState, free_loopback_addr, make_run_json, spawn_test_api};
 
 #[tokio::test]
 async fn worker_without_metrics_addr_installs_no_recorder_and_listens_nowhere() {
@@ -30,10 +29,7 @@ async fn worker_without_metrics_addr_installs_no_recorder_and_listens_nowhere() 
             0,
         )]));
         let api_url = spawn_test_api(state.clone()).await;
-        let addr = TcpListener::bind("127.0.0.1:0")
-            .expect("bind a free port")
-            .local_addr()
-            .expect("local addr");
+        let addr = free_loopback_addr();
 
         let worker = WorkerBuilder::new(&api_url, "test-token")
             .provider(Arc::new(ClaudeCodeProvider::new()))

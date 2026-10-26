@@ -6,7 +6,6 @@
 
 mod helpers;
 
-use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,7 +14,7 @@ use ironflow_worker::{WorkerBuilder, WorkerError};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tokio::time::timeout;
 
-use helpers::{TestApiState, spawn_test_api};
+use helpers::{TestApiState, free_loopback_addr, spawn_test_api};
 
 #[tokio::test]
 async fn run_fails_when_a_metrics_recorder_is_already_installed() {
@@ -24,10 +23,7 @@ async fn run_fails_when_a_metrics_recorder_is_already_installed() {
         .expect("install the first recorder");
 
     let api_url = spawn_test_api(Arc::new(TestApiState::new(vec![]))).await;
-    let addr = TcpListener::bind("127.0.0.1:0")
-        .expect("bind a free port")
-        .local_addr()
-        .expect("local addr");
+    let addr = free_loopback_addr();
 
     let worker = WorkerBuilder::new(&api_url, "test-token")
         .provider(Arc::new(ClaudeCodeProvider::new()))
