@@ -66,7 +66,9 @@
 //! # Missing endpoints
 //!
 //! Some GitLab REST routes are not implemented by the `gitlab` crate. This crate fills
-//! those gaps under [`endpoints`], wired the same way as any other endpoint:
+//! those gaps under [`endpoints`], wired the same way as any other endpoint. Besides merge
+//! request replies and versions, it covers issue and commit discussions, single note reads,
+//! releases and file uploads (`endpoints::{discussions, notes, releases, uploads}`):
 //!
 //! ```no_run
 //! use ironflow_ops_gitlab::GitLab;
