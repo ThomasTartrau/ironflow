@@ -289,11 +289,9 @@ fn worktree_entry(repo: &Repository, name: &str) -> Result<WorktreeEntry, Error>
     // A worktree that cannot be read must stay listed with no branch and no
     // commit, otherwise one corrupted worktree (e.g. a killed run) prevents
     // sweeping all the others. The error is dropped on purpose for that reason.
-    let (branch, commit) =
-        match Repository::open_from_worktree(&wt).and_then(|wt_repo| read_head(&wt_repo)) {
-            Ok(head) => head,
-            Err(_) => (None, None),
-        };
+    let (branch, commit) = Repository::open_from_worktree(&wt)
+        .and_then(|wt_repo| read_head(&wt_repo))
+        .unwrap_or_default();
     Ok(WorktreeEntry {
         name: name.to_string(),
         path,
