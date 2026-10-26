@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.2.8](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-git-v0.2.7...ironflow-ops-git-v0.2.8) - 2026-10-26
+
+### Fixed
+
+- #232 CI (attempt 1)
+
+- #232 WorktreeList keeps listing when a worktree HEAD is unreadable
+
 ## [0.2.7](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-git-v0.2.6...ironflow-ops-git-v0.2.7) - 2026-10-26
 
 ### Added
