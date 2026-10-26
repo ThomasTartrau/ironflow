@@ -35,4 +35,4 @@ pub use reaper::{
     ReapReason, ReapReport, configmap_expired, job_reap_reason, pvc_expired, reap_orphans,
     reap_reason,
 };
-pub use toleration::{K8sToleration, TolerationEffect, TolerationOperator};
+pub use toleration::{K8sToleration, TolerationEffect, TolerationOperator, TolerationParseError};

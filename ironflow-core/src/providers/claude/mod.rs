@@ -36,5 +36,5 @@ pub use docker::DockerProvider;
 pub use k8s::{
     ImagePullPolicy, K8sClusterConfig, K8sEphemeralProvider, K8sPersistentProvider, K8sResources,
     K8sToleration, PodHardening, ReapReason, ReapReport, SandboxSettings, TolerationEffect,
-    TolerationOperator,
+    TolerationOperator, TolerationParseError,
 };

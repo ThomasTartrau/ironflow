@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use ironflow_core::provider::{assert_pod_label_allowed, validate_pvc_sub_path};
+use ironflow_core::providers::claude::K8sToleration;
 use k8s_openapi::api::core::v1::{
     Container, EnvVar, LocalObjectReference, PersistentVolumeClaimVolumeSource, Pod,
     PodSecurityContext, PodSpec, ResourceRequirements, SecurityContext, Toleration, Volume,
@@ -28,17 +29,21 @@ use crate::error::k8s_external;
 
 pub(crate) mod owner;
 mod sandbox;
+mod scratch;
 mod stdin;
 mod termination;
 #[cfg(test)]
 mod tests;
+mod toleration;
 mod up;
 
 pub use sandbox::SANDBOX_UID;
 use sandbox::Sandbox;
+use scratch::scratch_volume;
 pub use stdin::{MAX_STDIN_BYTES, STDIN_ANNOTATION};
 use stdin::{stdin_command, stdin_volume};
 use termination::Termination;
+use toleration::to_k8s_toleration;
 pub use up::{PodUp, PodUpOutput};
 
 use owner::OwnerPod;
@@ -363,6 +368,59 @@ impl PodRun {
         self
     }
 
+    /// Add one parsed [`K8sToleration`], like [`toleration`](Self::toleration)
+    /// but without writing the `k8s_openapi` conversion by hand.
+    ///
+    /// Additive: the toleration is appended after the ones already set.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sToleration;
+    /// use ironflow_ops_k8s::pod_run::PodRun;
+    /// # use ironflow_ops_k8s::KubeClient;
+    ///
+    /// # fn example(kube: &KubeClient) -> Result<(), Box<dyn std::error::Error>> {
+    /// let toleration: K8sToleration = "dedicated=worker:NoSchedule".parse()?;
+    /// let run = PodRun::new(kube, "run-tests", "rust:1.94", "cargo test").k8s_toleration(&toleration);
+    /// # let _ = run;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn k8s_toleration(mut self, toleration: &K8sToleration) -> Self {
+        self.tolerations.push(to_k8s_toleration(toleration));
+        self
+    }
+
+    /// Add several parsed [`K8sToleration`]s, in iteration order.
+    ///
+    /// The same list parsed once with [`K8sToleration::parse_list`] can be given
+    /// to the agent providers (`K8sPersistentProvider::toleration`) and to the
+    /// pod of this operation. Additive, like [`toleration`](Self::toleration).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sToleration;
+    /// use ironflow_ops_k8s::pod_run::PodRun;
+    /// # use ironflow_ops_k8s::KubeClient;
+    ///
+    /// # fn example(kube: &KubeClient, cfg: &str) -> Result<(), Box<dyn std::error::Error>> {
+    /// let tolerations = K8sToleration::parse_list(cfg)?;
+    /// let run = PodRun::new(kube, "run-tests", "rust:1.94", "cargo test")
+    ///     .k8s_tolerations(tolerations);
+    /// # let _ = run;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn k8s_tolerations(mut self, tolerations: impl IntoIterator<Item = K8sToleration>) -> Self {
+        self.tolerations
+            .extend(tolerations.into_iter().map(|t| to_k8s_toleration(&t)));
+        self
+    }
+
     /// Set an `imagePullSecret` used to pull the container image.
     #[must_use]
     pub fn image_pull_secret(mut self, secret_name: &str) -> Self {
@@ -441,6 +499,45 @@ impl PodRun {
     pub fn volume(mut self, volume: Volume, mount: VolumeMount) -> Self {
         push_volume(&mut self.volumes, volume, mount);
         self
+    }
+
+    /// Add a writable scratch volume of `size` mounted at `mount_path`.
+    ///
+    /// Without `storage_class` the volume is an `emptyDir` whose size limit is
+    /// `size` (no claim is created). With a `storage_class` it is a generic
+    /// ephemeral volume: a `ReadWriteOnce` claim of `size` that lives and is
+    /// deleted with the pod. It composes with [`sandboxed`](Self::sandboxed),
+    /// whose read-only root filesystem needs writable volumes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` or `storage_class` is blank, if `name` is `"workspace"`
+    /// or starts with `"workspace-"`, or if `name` is already used by a previous
+    /// [`volume`](Self::volume) or `scratch_volume` call.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_k8s::pod_run::PodRun;
+    /// # use ironflow_ops_k8s::KubeClient;
+    ///
+    /// # fn example(kube: &KubeClient) {
+    /// let run = PodRun::new(kube, "build", "rust:1.94", "cargo build")
+    ///     .scratch_volume("target", "/target", "10Gi", None)
+    ///     .scratch_volume("cache", "/cache", "50Gi", Some("fast-ssd"));
+    /// # let _ = run;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn scratch_volume(
+        self,
+        name: &str,
+        mount_path: &str,
+        size: &str,
+        storage_class: Option<&str>,
+    ) -> Self {
+        let (volume, mount) = scratch_volume(name, mount_path, size, storage_class);
+        self.volume(volume, mount)
     }
 
     /// Add an environment variable to the container.
