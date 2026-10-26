@@ -1,0 +1,34 @@
+schema_version: "1.1"
+name: repair-pipeline
+description: Prompt injection - a CI log is formatted into the prompt of an agent step that has Bash.
+expected_outcome: blocker at repair_pipeline.rs:43-48, no other blocker or bug.
+tags: [review, prompt-injection, "phrasing:natural"]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 20
+  timeout_seconds: 600
+  allowed_tools: [Read, Glob, Grep, Skill, Agent]
+  prompt: |
+    Tu peux relire le handler `repair-pipeline` dans `src/repair_pipeline.rs` ? Juste le rapport, ne touche à rien.
+graders:
+  - name: dispatched
+    type: tool_used
+    tool: Agent
+    input_match: 'workflow-reviewer'
+  - name: located
+    type: regex
+    weight: 2
+    flags: i
+    pattern: '(?:repair_pipeline\.rs:|\b(?:lines?|lignes?|l\.|L)\s*)4[3-8]\b'
+  - name: severity
+    type: regex
+    target: trace
+    flags: i
+    pattern: '(?:\\n|\b)blocker[*_]*\s+\S*repair_pipeline\.rs:4[3-8]\b'
+  - name: no-false-alarm
+    type: regex
+    target: trace
+    flags: i
+    match: not_contains
+    pattern: '(?:\\n|\b)(?:blocker|bug)[*_]*\s+\S*\.rs:(?!4[3-8]\b)\d+'

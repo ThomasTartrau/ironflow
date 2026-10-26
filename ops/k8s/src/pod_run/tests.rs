@@ -1134,6 +1134,19 @@ async fn build_pod_applies_parsed_k8s_tolerations() {
 }
 
 #[tokio::test]
+async fn build_pod_keeps_toleration_seconds_of_k8s_toleration() {
+    // parse_list always leaves toleration_seconds unset, so set it by hand.
+    let mut parsed: K8sToleration = "gpu:NoExecute".parse().expect("valid toleration");
+    parsed.toleration_seconds = Some(300);
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .k8s_toleration(&parsed)
+        .build_pod();
+    let tolerations = pod.spec.unwrap().tolerations.unwrap();
+    assert_eq!(tolerations.len(), 1);
+    assert_eq!(tolerations[0].toleration_seconds, Some(300));
+}
+
+#[tokio::test]
 async fn build_pod_applies_single_k8s_toleration_after_raw_one() {
     let parsed: K8sToleration = "gpu:NoSchedule".parse().expect("valid toleration");
     let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")

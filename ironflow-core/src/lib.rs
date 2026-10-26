@@ -76,6 +76,7 @@ pub mod metric_names;
 pub mod operation;
 pub mod parallel;
 pub mod pricing;
+pub mod prompt;
 pub mod provider;
 pub mod providers;
 pub mod retry;
@@ -118,6 +119,7 @@ pub mod prelude {
     pub use crate::operations::shell::{Shell, ShellOutput};
     pub use crate::parallel::{try_join_all, try_join_all_limited};
     pub use crate::pricing::{CostBreakdown, ModelPricing, PricingSource, StaticPricing};
+    pub use crate::prompt::Prompt;
     pub use crate::provider::{AgentConfig, AgentProvider, DebugMessage, DebugToolCall, LogSink};
     pub use crate::providers::claude::ClaudeCodeProvider;
     pub use crate::providers::record_replay::RecordReplayProvider;

@@ -251,7 +251,7 @@ IRONFLOW_RECORD=1 cargo test -p workflows --test <handler>   # calls the provide
 cargo test -p workflows --test <handler>                     # replays, no tokens spent
 ```
 
-The hash covers the prompt, system prompt and output schema, so a prompt change means re-recording. Commit `tests/fixtures/`. A missing fixture falls back to the real provider with a warning, which is how a stale suite silently starts costing money: check the test output for `fixture not found`.
+The hash covers the prompt, system prompt and output schema, so a prompt change means re-recording. The nonce of a `Prompt` untrusted block is masked first: it changes on every run without changing the fixture, as long as it only appears in the block tags. Commit `tests/fixtures/`. A missing fixture falls back to the real provider with a warning, which is how a stale suite silently starts costing money: check the test output for `fixture not found`.
 
 ## 4. Verify
 

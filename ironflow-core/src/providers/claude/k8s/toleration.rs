@@ -212,13 +212,12 @@ impl K8sToleration {
     /// ```
     /// use ironflow_core::providers::claude::{K8sToleration, TolerationParseError};
     ///
-    /// # fn example() -> Result<(), TolerationParseError> {
+    /// # fn main() -> Result<(), TolerationParseError> {
     /// let list = K8sToleration::parse_list("dedicated=worker:NoSchedule,gpu:NoExecute")?;
     /// assert_eq!(list.len(), 2);
     /// assert!(K8sToleration::parse_list("  ")?.is_empty());
     /// # Ok(())
     /// # }
-    /// # example().unwrap();
     /// ```
     pub fn parse_list(s: &str) -> Result<Vec<Self>, TolerationParseError> {
         if s.trim().is_empty() {
@@ -242,15 +241,14 @@ impl FromStr for K8sToleration {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_core::providers::claude::{K8sToleration, TolerationOperator};
+    /// use ironflow_core::providers::claude::{K8sToleration, TolerationOperator, TolerationParseError};
     ///
-    /// # fn example() -> Result<(), TolerationParseError> {
+    /// # fn main() -> Result<(), TolerationParseError> {
     /// let t: K8sToleration = "dedicated=worker:NoSchedule".parse()?;
     /// assert_eq!(t.operator, TolerationOperator::Equal);
     /// assert_eq!(t.value.as_deref(), Some("worker"));
     /// # Ok(())
     /// # }
-    /// # example().unwrap();
     /// ```
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let entry = s.trim();
