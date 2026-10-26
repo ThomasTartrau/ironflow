@@ -148,6 +148,7 @@
 
 mod client;
 pub mod endpoints;
+mod error;
 mod masked;
 mod operation;
 mod paged_operation;
