@@ -3508,7 +3508,7 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
 name = "ironflow-api"
-version = "2.52.16"
+version = "2.52.17"
 dependencies = [
  "axum",
  "chrono",
@@ -3574,7 +3574,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-auth"
-version = "2.4.82"
+version = "2.4.83"
 dependencies = [
  "argon2 0.5.3",
  "axum",
@@ -3597,7 +3597,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-auth-proxy"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "axum",
  "ironflow-core",
@@ -3652,7 +3652,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-core"
-version = "4.18.1"
+version = "4.19.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3693,7 +3693,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-engine"
-version = "2.54.3"
+version = "2.55.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -3812,7 +3812,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-docker"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "async-trait",
  "bollard",
@@ -3869,7 +3869,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-helm"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "async-trait",
  "ironflow-core",
@@ -3880,7 +3880,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-k8s"
-version = "0.1.46"
+version = "0.1.47"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3926,7 +3926,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-postgres"
-version = "0.1.38"
+version = "0.1.39"
 dependencies = [
  "async-trait",
  "ironflow-core",
@@ -3938,7 +3938,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-s3"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -3953,7 +3953,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-slack"
-version = "0.1.38"
+version = "0.1.39"
 dependencies = [
  "async-trait",
  "ironflow-core",
@@ -4017,7 +4017,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-runtime"
-version = "2.4.111"
+version = "2.4.112"
 dependencies = [
  "async-nats",
  "axum",
@@ -4081,7 +4081,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-store"
-version = "2.47.9"
+version = "2.47.10"
 dependencies = [
  "aes-gcm 0.10.3",
  "async-trait",
@@ -4130,7 +4130,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-worker"
-version = "2.25.30"
+version = "2.25.31"
 dependencies = [
  "async-trait",
  "axum",
