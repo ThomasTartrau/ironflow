@@ -12,18 +12,20 @@ cargo add -p workflows ironflow-ops-gitlab
 
 ## Typed query (no tracking)
 
-When you only need the response and do not need step lifecycle tracking:
+When you only need to read a response and do not need step lifecycle tracking. A write
+sent this way is not masked (see "Secrets in the published text"): publish through
+`gitlab.op`.
 
 ```rust,no_run
-use gitlab::api::{projects::issues::CreateIssue, AsyncQuery};
+use gitlab::api::{projects::Project, AsyncQuery};
 use ironflow_ops_gitlab::GitLab;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
-struct Issue {
-    iid: u64,
+struct ProjectInfo {
+    id: u64,
     web_url: String,
 }
 
@@ -39,19 +41,17 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
         .await
         .map_err(EngineError::Operation)?;
 
-    let endpoint = CreateIssue::builder()
+    let endpoint = Project::builder()
         .project("my-group/my-project")
-        .title("Bug report")
-        .description("Steps to reproduce...")
         .build()
         .map_err(|e| EngineError::StepConfig(e.to_string()))?;
 
-    let issue: Issue = endpoint
+    let project: ProjectInfo = endpoint
         .query_async(gitlab.client())
         .await
         .map_err(|e| EngineError::StepConfig(e.to_string()))?;
 
-    println!("Created issue !{} at {}", issue.iid, issue.web_url);
+    println!("Project {} at {}", project.id, project.web_url);
     Ok(())
 }
 ```
@@ -106,6 +106,14 @@ async fn example(ctx: &mut WorkflowContext, failing_step: &str) -> Result<(), En
     Ok(())
 }
 ```
+
+## Secrets in the published text
+
+`gitlab.op(endpoint)` masks secrets in the request body: the client's token, the values
+added with `GitLab::with_secrets([..])`, and `sk-ant-` / `glpat-` tokens become
+`[REDACTED]`. A query sent through `gitlab.client()` is not masked: publish agent or command
+output through `gitlab.op`. `op.masks_secrets()` tells whether anything is masked. A request
+that writes a secret on purpose (a CI/CD variable) goes through `gitlab.op(endpoint).without_masking()`.
 
 ## Self-hosted instance
 

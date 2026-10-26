@@ -35,7 +35,8 @@ let client = GitlabBuilder::new("gitlab.example.com", "glpat-xxxx")
     .insecure()
     .build_async()
     .await?;
-let gitlab: GitLab = client.into();
+// The token of an AsyncGitlab cannot be read back: pass it to mask it.
+let gitlab = GitLab::from(client).with_secrets(["glpat-xxxx"]);
 ```
 
 ### Typed queries
@@ -77,6 +78,32 @@ let endpoint = CreateIssue::builder()
 // Tracked as a workflow step with kind "gitlab"
 let output = ctx.operation("create-issue", &gitlab.op(endpoint)).await?;
 ```
+
+### Secret masking
+
+`GitLab::op` masks secrets in the request body before sending it, so text written by an
+agent or a command never publishes a token in a note, an issue or a merge request. It masks
+the client's own token, the values added with `with_secrets`, and token-shaped strings
+(`sk-ant-...`, `glpat-...`), each replaced with `[REDACTED]`:
+
+```rust
+use tracing::warn;
+
+let gitlab = GitLab::from_context(&ctx).await?.with_secrets([worker_token]);
+
+let op = gitlab.op(endpoint);
+if op.masks_secrets() {
+    warn!("secret masked in the published issue");
+}
+ctx.operation("create-issue", &op).await?;
+```
+
+The step input records a masked request as `"secrets_masked": true`. Form, JSON and
+`text/*` bodies are masked, a repository file sent as a form field included; other bodies
+(a generic package, a project import) are sent as is. A request that writes a secret on
+purpose (a CI/CD variable, a webhook token) goes through `gitlab.op(endpoint).without_masking()`.
+A client built with `GitLab::from(AsyncGitlab)` does not know its token: add it with
+`with_secrets`. A query sent through `gitlab.client()` is not masked.
 
 ### Endpoints not in the `gitlab` crate
 
