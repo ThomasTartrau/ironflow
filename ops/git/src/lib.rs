@@ -57,7 +57,8 @@
 //!
 //! libgit2 can neither make a partial clone nor open one. The [`cli`] module
 //! runs the `git` binary (2.25 or later, on the `PATH`) for the clone, fetch,
-//! worktree add and push of such repositories. [`CliPush`](cli::CliPush)
+//! worktree add, push and conflicting merge of such repositories.
+//! [`CliPush`](cli::CliPush)
 //! checks every push URL of the remote against the expected URL before
 //! pushing, and refuses the push if one differs.
 //!
@@ -151,7 +152,7 @@
 //! | [`reset`] | Reset (soft, mixed, hard) |
 //! | [`graph`] | AheadBehind, DescendantOf, Describe |
 //! | [`object`] | BlobCreate, TreeLookup, FindObject |
-//! | [`cli`] | CliClone (partial, atomic publication), CliFetch, CliWorktreeAdd, CliPush (origin-checked; simple, force, force-with-lease) |
+//! | [`cli`] | CliClone (partial, atomic publication), CliFetch, CliWorktreeAdd, CliPush (origin-checked; simple, force, force-with-lease), CliMerge (conflicted files), CliConflictMarkers, CliAdd, CliMergeCommit, CliMergeAbort |
 
 pub mod blame;
 pub mod branch;

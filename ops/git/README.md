@@ -46,7 +46,7 @@ ctx.operation("commit-changes", &commit).await?;
 | `blame` | Blame |
 | `branch` | Create, delete, list, rename |
 | `checkout` | Checkout branch, file, commit |
-| `cli` | Clone (partial, atomic publication), fetch, worktree add, push to an expected URL (simple, force, force-with-lease), with the `git` binary |
+| `cli` | Clone (partial, atomic publication), fetch, worktree add, push to an expected URL (simple, force, force-with-lease), conclude a conflicting merge (merge, conflict markers, add, commit, abort), with the `git` binary |
 | `cherrypick` | Cherry-pick |
 | `commit` | Create, amend |
 | `config` | Get, set, list |
@@ -127,5 +127,35 @@ ctx.operation("push", &push).await?;
 
 - `CliClone` clones into a hidden sibling directory and renames it to the target once complete: a failed or cancelled clone leaves nothing at the target. The target must not exist, or be an empty directory, unless `reuse_existing` is set, which accepts an existing clone only if its origin and its bare, blobless and symlinks settings match the request.
 - `CliPush` compares every push URL of the remote (`git remote get-url --push --all`) with the expected URL, after normalization (scheme and host case, default port, trailing `/` and `.git`, credentials). If one of them differs, nothing is pushed. Modes: `Simple` (fast-forward only), `Force`, and `ForceWithLease { expected }`, where `expected` is the SHA the remote branch must still point to (`None`: the remote-tracking branch).
+
+A conflicting merge works on a partial clone too (the token only serves the lazy fetch of the missing blobs), and is concluded without editor, hook or signature:
+
+```rust,ignore
+use ironflow_ops_git::cli::{
+    CliAdd, CliConflictMarkers, CliConflictMarkersOutput, CliMerge, CliMergeAbort, CliMergeCommit,
+    CliMergeOutput,
+};
+
+let merge = CliMerge::new("/work/mr-42", "origin/main");
+let out = ctx.operation("merge", &merge).await?.json::<CliMergeOutput>()?;
+if out.has_conflicts {
+    // ... resolve `out.conflicted_files` in the work tree ...
+    let files = out.conflicted_files;
+    let markers = CliConflictMarkers::new("/work/mr-42", files.clone());
+    let left = ctx
+        .operation("markers", &markers)
+        .await?
+        .json::<CliConflictMarkersOutput>()?;
+    if left.files_with_markers.is_empty() {
+        ctx.operation("add", &CliAdd::new("/work/mr-42", files)).await?;
+        let commit = CliMergeCommit::new("/work/mr-42", "Bot", "bot@example.com");
+        ctx.operation("commit", &commit).await?;
+    } else {
+        ctx.operation("abort", &CliMergeAbort::new("/work/mr-42")).await?;
+    }
+}
+```
+
+- `CliMerge` runs `git merge --no-commit --no-ff`: a clean merge is staged and still needs `CliMergeCommit`; a failure without unmerged files (dirty tree, unknown revision) is an error, never a conflict. `CliMergeCommit` refuses while unmerged files remain, so stage the resolved files with `CliAdd` first. `CliConflictMarkers` only reads files; a lone `=======` is not a marker.
 - The token reaches git through the environment of the git process, read by an inline credential helper. It is never a command-line argument, never written to the clone configuration, and the credential helpers of the worker are disabled for the call so none of them stores it. Repository hooks do not run when a token is set, so a hook planted in the repository cannot read it. git never prompts, and a URL carrying credentials is refused.
 - Clone, fetch, worktree add and push on the same local repository run one at a time within a process (`FetchRemote` and `WorktreeAdd` included). Other processes are not covered.
