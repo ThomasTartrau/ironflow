@@ -266,6 +266,7 @@ async fn list_artifacts(Path(_id): Path<Uuid>) -> Json<Value> {
 
 /// Reserve a free loopback port: bind port 0, read it back, release it.
 #[cfg(feature = "prometheus")]
+#[allow(dead_code)]
 pub fn free_loopback_addr() -> SocketAddr {
     let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind a free port");
     listener.local_addr().expect("local addr")
