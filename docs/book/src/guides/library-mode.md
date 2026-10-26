@@ -227,7 +227,8 @@ assert_eq!(output.stdout(), "");
 
 `RecordReplayProvider` wraps any provider and stores its responses as JSON fixtures, keyed by
 a hash of the prompt, system prompt and schema. Tests then replay them without spending
-tokens.
+tokens. The random nonce of a `Prompt` untrusted block is masked before hashing, so it does
+not change the fixture.
 
 ```rust,no_run
 use ironflow_core::prelude::*;

@@ -177,7 +177,8 @@ assert_eq!(resumed.status(), RunStatus::Completed);
 
 `with_recorded_agent(dir)` replays fixtures written by `RecordReplayProvider`.
 The argument is the **directory**: each fixture is keyed by a hash of the
-`AgentConfig` and stored as `<hash>.json` inside it. A missing fixture fails the
+`AgentConfig` and stored as `<hash>.json` inside it (the random nonce of a `Prompt`
+untrusted block is masked first). A missing fixture fails the
 step instead of falling back to the real Claude CLI, so a stale suite never
 silently starts spending tokens.
 

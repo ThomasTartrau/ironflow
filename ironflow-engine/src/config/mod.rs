@@ -16,7 +16,10 @@ mod human_input;
 mod shell;
 mod workflow;
 
-pub use agent::{AgentStep, AgentStepConfig, DEFAULT_RESUME_PROMPT, Tool, ToolProfile};
+pub use agent::{
+    AgentStep, AgentStepConfig, DEFAULT_RESUME_PROMPT, DEFAULT_UNTRUSTED_INSTRUCTION, Prompt, Tool,
+    ToolProfile,
+};
 pub use approval::ApprovalConfig;
 pub use approvers::Approvers;
 pub use artifact::{ArtifactInput, ArtifactOutput, ArtifactRef};

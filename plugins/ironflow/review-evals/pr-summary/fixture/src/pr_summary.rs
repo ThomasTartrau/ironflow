@@ -1,5 +1,5 @@
 use ironflow_core::operations::agent::Model;
-use ironflow_engine::config::{AgentStepConfig, ShellConfig};
+use ironflow_engine::config::{AgentStepConfig, Prompt, ShellConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, input_schema_for};
 use schemars::JsonSchema;
@@ -41,16 +41,16 @@ impl WorkflowHandler for PrSummary {
                 )
                 .await?;
 
+            let prompt = Prompt::new()
+                .text("Summarise this merge request diff in three bullet points:")
+                .untrusted(diff.stdout());
             let summary = ctx
                 .agent(
                     "summarize",
-                    AgentStepConfig::new(&format!(
-                        "Summarise this merge request diff in three bullet points:\n\n{}",
-                        diff.stdout()
-                    ))
-                    .model(Model::HAIKU)
-                    .max_turns(1)
-                    .max_budget_usd(0.10),
+                    AgentStepConfig::new(&prompt.to_string())
+                        .model(Model::HAIKU)
+                        .max_turns(1)
+                        .max_budget_usd(0.10),
                 )
                 .await?;
 

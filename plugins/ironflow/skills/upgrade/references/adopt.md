@@ -24,6 +24,27 @@ step does both now (tested with Claude Code 2.1.296 and 2.1.304).
 
 Raise `max_turns` by one per round of tool calls. Section: Agent.
 
+## untrusted-prompt
+- kind: adopt
+- since: ironflow-core after 4.18.1, ironflow-engine after 2.54.3 (#226)
+
+Text the workflow did not write (an issue, a comment, a diff, a CI log) used to go into
+the prompt through `format!`, or behind a hand-made delimiter the text could close.
+`Prompt::untrusted` puts it in a block marked with a nonce drawn per prompt, neutralizes
+any `untrusted` tag inside it, and opens the prompt with an instruction to treat the
+block as data (`DEFAULT_UNTRUSTED_INSTRUCTION`, or `.instruction(..)`). The step name does
+not change; `RecordReplayProvider` masks the nonce, but a fixture recorded with the old
+prompt no longer matches: record it again.
+
+```diff
+- let config = AgentStepConfig::new(&format!("Propose labels for this issue:\n\n{}", issue.stdout()));
++ let prompt = Prompt::new().text("Propose labels for this issue:").untrusted(issue.stdout());
++ let config = AgentStepConfig::new(&prompt.to_string());
+```
+
+`Prompt` comes from `ironflow_engine::config` (or `ironflow_core::prompt` in library
+mode). Section: Agent.
+
 ## available-tools
 - kind: adopt
 - since: ironflow-core after 4.16.0 (#217)

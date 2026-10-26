@@ -105,6 +105,37 @@ capacity, the run sleeps until the next reset and the step runs again from the s
 `.max_capacity_wait(..)` (6 hours by default, `.fail_fast_on_capacity()` fails fast); see
 [When every account is limited](provider-accounts.md#when-every-account-is-limited).
 
+### Untrusted content in a prompt
+
+Text the workflow did not write (an issue, a review comment, a diff, a CI log, a webhook
+payload) can carry instructions aimed at the agent. Build the prompt with `Prompt`
+instead of `format!`:
+
+```rust,ignore
+use ironflow_engine::config::{AgentStepConfig, Prompt};
+
+let prompt = Prompt::new()
+    .text("Propose labels for this issue:")
+    .untrusted(&issue.body)
+    .text("Answer with the labels only.");
+let labels = ctx
+    .agent("propose-labels", AgentStepConfig::new(&prompt.to_string()))
+    .await?;
+```
+
+Each `untrusted(..)` part lands in a block whose tags carry a nonce drawn for the prompt,
+`<untrusted nonce="...">` ... `</untrusted nonce="...">`. Inside the content, every `<`
+followed by the tag name, in any ASCII case and after any run of whitespace and `/`, becomes
+`&lt;`, so a literal forged tag neither closes the block nor opens another one. Look-alikes
+the escaping does not catch (a full-width less-than sign, a zero-width character in the
+name) cannot carry the nonce, which the content's author never sees. When the prompt holds a block, it
+opens with `DEFAULT_UNTRUSTED_INSTRUCTION`, which tells the agent to treat the blocks as
+data; `.instruction(..)` replaces that text. `Prompt` lives in `ironflow_core::prompt` and
+works in library mode too (`Agent::new().prompt(&prompt.to_string())`).
+
+`RecordReplayProvider` masks the nonce when it names a fixture: the same prompt finds its
+fixture from one run to the next.
+
 ## Sub-workflow steps
 
 A child declares its input type with `TypedWorkflow` and the parent passes that
