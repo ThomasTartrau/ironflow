@@ -289,6 +289,15 @@ let run = PodRun::new(&kube, "check", &image, "cargo test")
     .label(LABEL_ROOT_RUN_ID, &ctx.root_run_id().to_string());
 ```
 
+A service pod started with `PodUp::new(run, lifetime)` returns once ready and
+keeps running; tag it with the labels above on its `PodRun`, and its
+`ironflow.io/expires-at` covers `lifetime`. Only a pod in the provider's
+namespace is released or reaped: elsewhere, put the run id in its name, or a
+new attempt of the run finds the old pod in the way. Once tagged, it is released
+when the run executes again, while its step is replayed with the IP of the
+deleted pod: keep the steps that use the service in the same execution, with
+no approval, signal or human input between them and the `PodUp`.
+
 Before creating a pod, the provider also deletes the pods and prompt
 ConfigMaps of a previous attempt of the same step of the same run. If they are
 still terminating, the step fails: two agents never run side by side. Two

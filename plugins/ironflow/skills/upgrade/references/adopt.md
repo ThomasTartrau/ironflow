@@ -419,3 +419,33 @@ by hand gains the two fields.
 + let timed_out = out.reason.as_deref() == Some("DeadlineExceeded");
 + let code = out.exit_code;
 ```
+
+## pod-up
+- kind: adopt
+- since: ironflow-ops-k8s after 0.1.45 (#227)
+- detect: `readiness_probe = Some\(Probe`
+
+A service pod that had to outlive its step (a headless browser, a database) used to be a
+hand-written `Operation`: build the manifest with `PodRun::build_pod`, set the
+`readinessProbe` on its container, create the pod, poll `status.conditions` for `Ready`
+and `podIP` until a deadline, then read the tail of its log. `PodUp` does it and keeps the
+pod under the ironflow cleanup: `lifetime` sets its `ironflow.io/expires-at`. A pod that
+ends or is not ready in time fails the step, with the reason and the last 40 lines of its
+log in the error, and is deleted: a workaround that returned `ready: false` and let the
+handler decide now gets an error to handle instead. As before, a new execution of the run
+releases the pod while the step replays its IP: no approval, signal or human input
+between the `PodUp` and the steps that use it.
+
+```diff
+- let mut pod = PodRun::new(&kube, name, image, &script).label(LABEL_RUN_ID, &run_id)
+-     .timeout(lifetime).active_deadline_seconds(lifetime + margin).build_pod();
+- pod.spec.as_mut().unwrap().containers[0].readiness_probe = Some(Probe { exec, ..Default::default() });
+- let out = ctx.operation("runtime-up", &RuntimeUp { pods, pod, ready_timeout }).await?.json::<RuntimeUpOutput>()?;
+- let ip = if out.ready { out.ip.unwrap() } else { return Err(..) };
++ let run = PodRun::new(&kube, name, image, &script).label(LABEL_RUN_ID, &run_id)
++     .active_deadline_seconds(lifetime + margin);
++ let up = PodUp::new(run, lifetime)
++     .readiness_probe(Probe { exec, ..Default::default() })
++     .ready_timeout(ready_timeout);
++ let ip = ctx.operation("runtime-up", &up).await?.json::<PodUpOutput>()?.ip;
+```

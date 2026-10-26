@@ -244,6 +244,17 @@ on the step, or `K8sEphemeralProvider::runtime_class("gvisor")` for every step o
 provider (the step value wins). `PodRun::runtime_class` does the same for a pod you build
 yourself. The cluster must define a matching `RuntimeClass`.
 
+A pod that must stay up for the next steps (a headless browser, a database) is a
+`PodUp::new(pod_run, lifetime)` from `ironflow-ops-k8s`, with an optional
+`.readiness_probe(probe)`: the step output reads as `.json::<PodUpOutput>()?` (`pod`,
+`namespace`, `ip`) once the pod is ready, and the step fails with the reason and the end of
+its log when the pod ends or is not ready within `.ready_timeout(d)`. `lifetime` sets its
+`ironflow.io/expires-at`; tag the `PodRun` with `LABEL_RUN_ID` so a retry deletes it (only
+in the Kubernetes provider's namespace: elsewhere, put the run id in the pod name). With
+the Kubernetes provider, any new execution of the run (resume after an approval, a signal,
+a human input) deletes it too while the step replays the old IP: no such gate between the
+`PodUp` and the steps that use it.
+
 With `K8sEphemeralProvider::auth_proxy`, a GitHub or GitLab token (any API secret) stays
 out of the pod too: declare it with `AgentConfig::proxied_secret(ProxiedSecret { name,
 env, value, injection, hosts })` on the step, or `K8sEphemeralProvider::proxied_secret`

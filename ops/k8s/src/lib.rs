@@ -83,4 +83,4 @@ pub use job_run::{JobRun, JobRunOutput};
 pub use k8s_openapi;
 pub use kube;
 pub use operation::KubeOp;
-pub use pod_run::{PodRun, PodRunOutput};
+pub use pod_run::{PodRun, PodRunOutput, PodUp, PodUpOutput};
