@@ -16,7 +16,7 @@ Communication is authenticated with a static `WORKER_TOKEN`.
 
 | Feature | Description |
 |---------|-------------|
-| `prometheus` | Expose worker execution metrics |
+| `prometheus` | Expose worker execution metrics; `WorkerBuilder::metrics_addr` serves them on `GET /metrics` |
 | `heartbeat` | Periodic heartbeat to the API server |
 
 ## Quick start

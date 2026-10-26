@@ -6,6 +6,10 @@
 //! The worker communicates with the API via `/api/v1/internal/*` routes,
 //! authenticated with a static `WORKER_TOKEN`.
 //!
+//! With the `prometheus` feature, `WorkerBuilder::metrics_addr` serves the worker
+//! metrics in the Prometheus text format on `GET /metrics`. The library does not
+//! read any environment variable: the address comes from the caller.
+//!
 //! # Quick start
 //!
 //! ```no_run

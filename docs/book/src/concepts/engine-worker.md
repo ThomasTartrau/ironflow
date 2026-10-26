@@ -86,6 +86,22 @@ HTTP 413 from the API reports the same error. Network errors and 5xx
 responses are retried after 1s, 2s and 4s (4 attempts); other 4xx responses
 fail at once.
 
+### Metrics
+
+With the `prometheus` feature, `metrics_addr` serves the worker metrics in the
+Prometheus text format on `GET /metrics`. `run` installs the process-global
+recorder and fails if one is already installed. Without it, nothing listens.
+
+```rust,ignore
+let worker = WorkerBuilder::new(&api_url, &worker_token)
+    .provider(Arc::new(ClaudeCodeProvider::new()))
+    .metrics_addr("0.0.0.0:9100".parse()?)
+    .build()?;
+```
+
+The library does not read an environment variable: the binary decides where the
+address comes from.
+
 ## Concurrency groups
 
 Worker `concurrency` caps one process. To cap the runs that share an external
