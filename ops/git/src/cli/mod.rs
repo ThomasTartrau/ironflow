@@ -13,6 +13,12 @@
 //! - [`CliWorktreeAdd`]: add a worktree on a new branch or detached.
 //! - [`CliPush`]: push a branch, only if every push URL of the remote is the
 //!   expected one, in simple, force or force-with-lease mode.
+//! - [`CliMerge`]: merge a revision without committing and list the
+//!   conflicted files.
+//! - [`CliConflictMarkers`]: find the files that still hold conflict markers.
+//! - [`CliAdd`]: stage the resolved files.
+//! - [`CliMergeCommit`]: conclude the merge with a commit by a given identity.
+//! - [`CliMergeAbort`]: undo the merge.
 //!
 //! # Requirements
 //!
@@ -38,10 +44,17 @@
 //!
 //! git never prompts: a rejected token fails the operation.
 //!
+//! [`CliMerge`] and [`CliMergeAbort`] use the token only for the lazy fetch of
+//! the blobs of a partial clone; a full clone never touches the network. No
+//! operation of the merge flow ever opens an editor, signs a commit, or runs
+//! a repository hook (`core.hooksPath=/dev/null`, `GIT_EDITOR=true`,
+//! `commit.gpgsign=false`).
+//!
 //! # Concurrency
 //!
-//! Clone, fetch, worktree add and push on the same local repository run one
-//! at a time within a process, as do [`FetchRemote`](crate::fetch::FetchRemote)
+//! Clone, fetch, worktree add, push and the merge operations ([`CliMerge`],
+//! [`CliAdd`], [`CliMergeCommit`], [`CliMergeAbort`]) on the same local
+//! repository run one at a time within a process, as do [`FetchRemote`](crate::fetch::FetchRemote)
 //! and [`WorktreeAdd`](crate::worktree::WorktreeAdd). Other processes are not
 //! covered.
 //!
@@ -66,14 +79,48 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! A conflicting merge, concluded or undone:
+//!
+//! ```no_run
+//! use ironflow_ops_git::cli::{
+//!     CliAdd, CliConflictMarkers, CliMerge, CliMergeAbort, CliMergeCommit,
+//! };
+//! use ironflow_core::operation::{OperationContext, NoopSecretResolver};
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), ironflow_core::error::OperationError> {
+//! # let ctx = OperationContext::new(Arc::new(NoopSecretResolver));
+//! let merge = CliMerge::new("/tmp/repo", "origin/main").run(&ctx).await?;
+//! if merge.has_conflicts {
+//!     // ... resolve `merge.conflicted_files` in the work tree ...
+//!     let files = merge.conflicted_files;
+//!     let left = CliConflictMarkers::new("/tmp/repo", files.clone()).run(&ctx).await?;
+//!     if left.files_with_markers.is_empty() {
+//!         CliAdd::new("/tmp/repo", files).run(&ctx).await?;
+//!         CliMergeCommit::new("/tmp/repo", "Bot", "bot@example.com")
+//!             .run(&ctx)
+//!             .await?;
+//!     } else {
+//!         CliMergeAbort::new("/tmp/repo").run(&ctx).await?;
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 pub mod clone;
 pub(crate) mod command;
 pub mod fetch;
+pub mod merge;
 pub mod push;
 pub mod worktree;
 
 pub use clone::{CliClone, CliCloneOutput};
 pub use fetch::CliFetch;
+pub use merge::{
+    CliAdd, CliAddOutput, CliConflictMarkers, CliConflictMarkersOutput, CliMerge, CliMergeAbort,
+    CliMergeAbortOutput, CliMergeCommit, CliMergeCommitOutput, CliMergeOutput,
+};
 pub use push::{CliPush, CliPushOutput, PushMode};
 pub use worktree::{CliWorktreeAdd, CliWorktreeAddOutput};
