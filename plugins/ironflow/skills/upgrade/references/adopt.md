@@ -526,3 +526,35 @@ and `PodRun::k8s_tolerations`.
 +     .scratch_volume("scratch", "/scratch", "10Gi", None)
 +     .k8s_tolerations(tolerations);
 ```
+
+## agent-role
+- kind: adopt
+- since: ironflow-engine after 2.55.1
+- detect: `fn [a-z_]+\([^)]*\) -> (AgentStepConfig|AgentConfig)`
+
+A function that returns an `AgentStepConfig` to share an agent between workflows does not
+lock anything: each caller can change the persona, the tools or the permission mode, and
+the output type is repeated at every call. An `impl AgentRole` defines the persona, tools,
+rights and output type once; the caller can only override the model, budget, turn limit,
+effort and per-call settings. Section: Agent.
+
+```diff
+- fn reviewer(diff: &str) -> AgentStepConfig {
+-     AgentStepConfig::new(&Prompt::new().text("Review this diff:").untrusted(diff).to_string())
+-         .append_system_prompt("You are a strict reviewer.")
+-         .allow_tool(Tool::Read)
+-         .output::<Review>()
+- }
+- let review = ctx.agent("review", reviewer(&diff)).await?;
++ struct Reviewer;
++ impl AgentRole for Reviewer {
++     type Input = String;
++     type Output = Review;
++     fn prompt(&self, input: String) -> String {
++         Prompt::new().text("Review this diff:").untrusted(&input).to_string()
++     }
++     fn append_system_prompt(&self) -> Option<&str> { Some("You are a strict reviewer.") }
++     fn tools(&self) -> Vec<Tool> { vec![Tool::Read] }
++ }
++ let review = ctx.agent("review", Reviewer.task(diff)).await?;
+```

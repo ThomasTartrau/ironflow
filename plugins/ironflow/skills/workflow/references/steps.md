@@ -388,6 +388,63 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 }
 ```
 
+### Reusable agent role
+
+An agent reused across workflows is an `impl AgentRole`, defined once. Only `prompt` is
+required. The persona, tools, `permission_mode`, MCP config and output type are locked at
+the call (a role with more rights is another role); the model, budget, `max_turns`, effort
+and per-call settings (`working_dir`, `allow_failure`, `retry_policy`, ..) can be
+overridden on the task. An override changes the step config, so it also changes the
+record/replay fixture hash.
+
+```rust,no_run
+use ironflow_engine::config::{AgentRole, Prompt, Tool};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+use schemars::JsonSchema;
+use serde::Deserialize;
+
+#[derive(Deserialize, JsonSchema)]
+struct Review {
+    score: u8,
+    summary: String,
+}
+
+struct Reviewer;
+
+impl AgentRole for Reviewer {
+    type Input = String;
+    type Output = Review;
+
+    fn prompt(&self, input: String) -> String {
+        Prompt::new()
+            .text("Review this diff:")
+            .untrusted(&input)
+            .to_string()
+    }
+
+    fn append_system_prompt(&self) -> Option<&str> {
+        Some("You are a senior Rust reviewer.")
+    }
+
+    fn tools(&self) -> Vec<Tool> {
+        vec![Tool::Read]
+    }
+
+    fn max_turns(&self) -> Option<u32> {
+        Some(6)
+    }
+}
+
+async fn example(ctx: &mut WorkflowContext, diff: &str) -> Result<(), EngineError> {
+    let review: Review = ctx
+        .agent("review", Reviewer.task(diff.to_string()).max_budget_usd(0.25))
+        .await?;
+    let _ = (review.score, review.summary);
+    Ok(())
+}
+```
+
 ## Approval
 
 ```rust,no_run

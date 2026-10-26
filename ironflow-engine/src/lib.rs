@@ -86,8 +86,9 @@ pub mod prelude {
     pub use crate::artifact::{ArtifactSink, ArtifactUpload, DirectArtifactSink};
     pub use crate::budget::BudgetConfig;
     pub use crate::config::{
-        AgentStepConfig, ApprovalConfig, Approvers, DelayConfig, EscalationPolicy, HttpConfig,
-        HumanInputConfig, NotificationTarget, Prompt, ShellConfig, StepConfig,
+        AgentRole, AgentStepConfig, AgentTask, ApprovalConfig, Approvers, DelayConfig,
+        EscalationPolicy, HttpConfig, HumanInputConfig, NotificationTarget, Prompt, ShellConfig,
+        StepConfig,
     };
     pub use crate::context::WorkflowContext;
     pub use crate::engine::{Engine, EnqueueOptions, ExecutionMode, WorkflowResult};
