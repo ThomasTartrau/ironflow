@@ -30,7 +30,7 @@ use ironflow_engine::engine::{Engine, EnqueueOptions};
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::testing::{MissingAgentProvider, TestEngine};
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::models::{RunStatus, StepStatus, StepUpdate, TriggerKind};
+use ironflow_store::models::{RunFilter, RunStatus, StepStatus, StepUpdate, TriggerKind};
 use ironflow_store::store::{RunStore, Store};
 
 /// Test timeout for bodies that touch the store.
@@ -457,13 +457,20 @@ async fn a_call_site_override_misses_the_fixture_recorded_for_the_role_default()
     .expect("test timed out");
 
     timeout(TEST_TIMEOUT, async {
-        let (engine, _store) = replay_engine(&dir, true);
-        let result = engine
+        let (engine, store) = replay_engine(&dir, true);
+        let outcome = engine
             .run_handler(WORKFLOW, TriggerKind::Api, json!({}))
+            .await;
+        assert!(
+            outcome.is_err(),
+            "the overridden config hashes to no fixture"
+        );
+        let runs = store
+            .list_runs(RunFilter::default(), 1, 10)
             .await
-            .expect("the engine finalizes the failed run");
+            .expect("list runs");
         assert_eq!(
-            result.run.status.state,
+            runs.items[0].status.state,
             RunStatus::Failed,
             "the overridden config hashes to no fixture"
         );
