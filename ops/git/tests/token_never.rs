@@ -4,20 +4,23 @@
 
 mod common;
 
+use std::fs::read_to_string;
 use std::time::Duration;
 
 use common::{
-    GitHttpServer, TOKEN, USERNAME, checkout_with_submodule, ctx_with_secret, ctx_with_token,
-    ctx_without_secret, local_with_origin,
+    GitHttpServer, TOKEN, USERNAME, checkout_with_submodule, create_feature, ctx_with_secret,
+    ctx_with_token, ctx_without_secret, local_with_origin,
 };
 use git2::Repository;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext};
+use ironflow_ops_git::cli::{CliClone, CliFetch, CliPush, CliWorktreeAdd, PushMode};
 use ironflow_ops_git::fetch::{FetchRemote, PushRemote, RemoteDefaultBranch, RemotePrune};
 use ironflow_ops_git::remote::{RemoteCreate, RemoteList, RemoteLookup, RemoteSetUrl};
 use ironflow_ops_git::repository::RepoClone;
 use ironflow_ops_git::submodule::{SubmoduleList, SubmoduleLookup, SubmoduleUpdate};
 use serde_json::Value;
+use tempfile::tempdir;
 use tokio::time::timeout;
 
 const LIMIT: Duration = Duration::from_secs(30);
@@ -331,4 +334,122 @@ async fn token_never_leaks_from_remote_lookup() {
     run_checked(&op, &ctx_without_secret(), TOKEN)
         .await
         .unwrap_err();
+}
+
+#[tokio::test]
+async fn token_never_leaks_from_cli_clone() {
+    timeout(LIMIT, async {
+        let server = GitHttpServer::start_default().await;
+        server.seed("repo.git");
+        let dirs = tempdir().unwrap();
+
+        let target = dirs.path().join("secret");
+        let op = CliClone::new(server.url("repo.git"), &target);
+        run_checked(&op, &ctx_with_token(), TOKEN).await.unwrap();
+        let config = read_to_string(target.join(".git").join("config")).unwrap();
+        assert!(!config.contains(TOKEN), "got: {config}");
+
+        let target = dirs.path().join("explicit");
+        let op = CliClone::new(server.url("repo.git"), &target).token(TOKEN);
+        run_checked(&op, &ctx_without_secret(), TOKEN)
+            .await
+            .unwrap();
+        let config = read_to_string(target.join(".git").join("config")).unwrap();
+        assert!(!config.contains(TOKEN), "got: {config}");
+
+        let wrong = "wrong-cli-clone-token";
+        let op = CliClone::new(server.url("repo.git"), dirs.path().join("wrong"));
+        run_checked(&op, &ctx_with_secret("git_token", wrong), wrong)
+            .await
+            .unwrap_err();
+
+        let embedded = server.url_with_userinfo("repo.git", USERNAME, TOKEN);
+        let op = CliClone::new(embedded, dirs.path().join("embedded"));
+        run_checked(&op, &ctx_without_secret(), TOKEN)
+            .await
+            .unwrap_err();
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn token_never_leaks_from_cli_fetch() {
+    timeout(LIMIT, async {
+        let server = GitHttpServer::start_default().await;
+        server.seed("repo.git");
+        let work = local_with_origin(&server.url("repo.git"));
+        let refspecs = vec!["refs/heads/main:refs/remotes/origin/main"];
+
+        let op = CliFetch::new(work.path(), "origin", refspecs.clone());
+        run_checked(&op, &ctx_with_token(), TOKEN).await.unwrap();
+
+        let op = CliFetch::new(work.path(), "origin", refspecs.clone()).token(TOKEN);
+        run_checked(&op, &ctx_without_secret(), TOKEN)
+            .await
+            .unwrap();
+
+        let wrong = "wrong-cli-fetch-token";
+        let op = CliFetch::new(work.path(), "origin", refspecs);
+        run_checked(&op, &ctx_with_secret("git_token", wrong), wrong)
+            .await
+            .unwrap_err();
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn token_never_leaks_from_cli_worktree_add() {
+    timeout(LIMIT, async {
+        let server = GitHttpServer::start_default().await;
+        server.seed("repo.git");
+        server.allow_filter("repo.git");
+        let dirs = tempdir().unwrap();
+        // A blobless clone: adding a worktree downloads the blobs, so it
+        // talks to the server.
+        let clone = dirs.path().join("clone");
+        let op = CliClone::new(server.url("repo.git"), &clone)
+            .blobless(true)
+            .checkout(false);
+        op.run(&ctx_with_token()).await.unwrap();
+
+        let wrong = "wrong-cli-worktree-token";
+        let op = CliWorktreeAdd::new(&clone, dirs.path().join("ko"), "main");
+        run_checked(&op, &ctx_with_secret("git_token", wrong), wrong)
+            .await
+            .unwrap_err();
+
+        let op = CliWorktreeAdd::new(&clone, dirs.path().join("ok"), "main");
+        run_checked(&op, &ctx_with_token(), TOKEN).await.unwrap();
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn token_never_leaks_from_cli_push() {
+    timeout(LIMIT, async {
+        let server = GitHttpServer::start_default().await;
+        server.seed("repo.git");
+        let url = server.url("repo.git");
+        let work = local_with_origin(&url);
+        create_feature(work.path());
+
+        let wrong = "wrong-cli-push-token";
+        let op = CliPush::new(work.path(), &url, "feature");
+        run_checked(&op, &ctx_with_secret("git_token", wrong), wrong)
+            .await
+            .unwrap_err();
+
+        let op = CliPush::new(work.path(), &url, "feature").token(TOKEN);
+        run_checked(&op, &ctx_without_secret(), TOKEN)
+            .await
+            .unwrap();
+
+        let op = CliPush::new(work.path(), &url, "feature").mode(PushMode::Force);
+        run_checked(&op, &ctx_with_token(), TOKEN).await.unwrap();
+    })
+    .await
+    .expect("test timed out");
 }

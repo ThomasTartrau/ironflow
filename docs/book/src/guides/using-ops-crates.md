@@ -38,7 +38,7 @@ The step is tracked in the database with its input, output, kind, and status, ju
 |-------|-------------|-------------|
 | [`ironflow-ops-common`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/common) | Shared HTTP client and helpers for ops crates (not used directly in workflows) | `cargo add ironflow-ops-common` |
 | [`ironflow-ops-docker`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/docker) | Docker containers, images, networks, volumes via bollard | `cargo add ironflow-ops-docker` |
-| [`ironflow-ops-git`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/git) | Git operations (commit, branch, merge, diff, ...) via git2 | `cargo add ironflow-ops-git` |
+| [`ironflow-ops-git`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/git) | Git operations (commit, branch, merge, diff, ...) via git2, plus git CLI ops for partial clone and origin-checked push | `cargo add ironflow-ops-git` |
 | [`ironflow-ops-gitlab`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/gitlab) | GitLab API v4 (issues, MRs, pipelines, ...) via the gitlab crate | `cargo add ironflow-ops-gitlab` |
 | [`ironflow-ops-grafana`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/grafana) | Grafana API (dashboards, alerting, data sources, ...) | `cargo add ironflow-ops-grafana` |
 | [`ironflow-ops-helm`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/helm) | Helm CLI wrapper (install, upgrade, rollback, charts, repos) | `cargo add ironflow-ops-helm` |

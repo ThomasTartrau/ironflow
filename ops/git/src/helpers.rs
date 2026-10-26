@@ -1,7 +1,7 @@
 //! Internal helpers for `spawn_blocking`, error mapping, authentication,
 //! URL redaction and serialization.
 
-use std::fmt;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 use git2::{Commit, Config, Cred, CredentialType, Error, RemoteCallbacks, Repository, Tree};
 use ironflow_core::error::OperationError;
@@ -24,6 +24,14 @@ where
         .map_err(git_error)
 }
 
+/// Build an [`OperationError::External`] error with the `git` origin.
+pub(crate) fn external_error(message: impl Into<String>) -> OperationError {
+    OperationError::External {
+        origin: "git".to_string(),
+        message: message.into(),
+    }
+}
+
 pub(crate) fn git_error(e: Error) -> OperationError {
     OperationError::External {
         origin: "git".to_string(),
@@ -39,10 +47,23 @@ pub(crate) const DEFAULT_TOKEN_SECRET: &str = "git_token";
 pub(crate) const DEFAULT_USERNAME: &str = "oauth2";
 
 /// Which secret, and which username, authenticate a network operation.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct GitAuth {
     pub(crate) token_secret: String,
     pub(crate) username: String,
+    /// Token passed to the operation itself; takes precedence over the
+    /// secret store.
+    pub(crate) token: Option<String>,
+}
+
+impl Debug for GitAuth {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_struct("GitAuth")
+            .field("token_secret", &self.token_secret)
+            .field("username", &self.username)
+            .field("token", &self.token.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
 }
 
 impl Default for GitAuth {
@@ -50,18 +71,31 @@ impl Default for GitAuth {
         Self {
             token_secret: DEFAULT_TOKEN_SECRET.to_string(),
             username: DEFAULT_USERNAME.to_string(),
+            token: None,
         }
     }
 }
 
 impl GitAuth {
-    /// Read the token from the secret store. `None` when the secret is
-    /// absent or empty, so the operation falls back to the ambient
-    /// credentials (SSH agent, credential helper).
-    async fn resolve(
+    /// Resolve the token: the one passed to the operation if any, else the
+    /// one read from the secret store. `None` when the secret is absent or
+    /// empty, so the operation falls back to the ambient credentials (SSH
+    /// agent, credential helper). An empty token passed to the operation is
+    /// an error, since it can only be a mistake.
+    pub(crate) async fn resolve(
         &self,
         ctx: &OperationContext,
     ) -> Result<Option<GitCredentials>, OperationError> {
+        if let Some(token) = &self.token {
+            if token.is_empty() {
+                return Err(external_error("the token passed to the operation is empty"));
+            }
+            return Ok(Some(GitCredentials {
+                secret_key: "(token passed to the operation)".to_string(),
+                username: self.username.clone(),
+                token: token.clone(),
+            }));
+        }
         let secret = ctx.secrets().get(&self.token_secret).await?;
         Ok(secret
             .filter(|s| !s.value.is_empty())
@@ -109,7 +143,36 @@ macro_rules! auth_builders {
 
 pub(crate) use auth_builders;
 
-/// A token resolved from the secret store, ready for the blocking thread.
+/// Implement `token` on a network operation that holds an `auth: GitAuth`
+/// field. `$module` and `$args` feed the doc example.
+macro_rules! token_builder {
+    ($op:ident, $module:literal, $args:literal) => {
+        impl $op {
+            /// Authenticate with `token` itself instead of reading it from the
+            /// secret store. It takes precedence over
+            #[doc = concat!("[`", stringify!($op), "::token_secret`].")]
+            ///
+            /// The token is never shown in `input()`, in the output or in an
+            /// error message. An empty token makes the operation fail.
+            ///
+            /// # Examples
+            ///
+            #[doc = concat!(
+                "```no_run\nuse ironflow_ops_git::", $module, "::", stringify!($op), ";\n\n",
+                "# let token = String::from(\"glpat-...\");\n",
+                "let op = ", stringify!($op), "::new(", $args, ").token(token);\n```"
+            )]
+            pub fn token(mut self, token: impl Into<String>) -> Self {
+                self.auth.token = Some(token.into());
+                self
+            }
+        }
+    };
+}
+
+pub(crate) use token_builder;
+
+/// A resolved token, ready for the blocking thread or a git subprocess.
 #[derive(Clone)]
 pub(crate) struct GitCredentials {
     secret_key: String,
@@ -117,8 +180,8 @@ pub(crate) struct GitCredentials {
     token: String,
 }
 
-impl fmt::Debug for GitCredentials {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Debug for GitCredentials {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("GitCredentials")
             .field("secret_key", &self.secret_key)
             .field("username", &self.username)
@@ -128,8 +191,18 @@ impl fmt::Debug for GitCredentials {
 }
 
 impl GitCredentials {
+    /// Username sent with the token.
+    pub(crate) fn username(&self) -> &str {
+        &self.username
+    }
+
+    /// The token itself. Only ever handed to git through the environment.
+    pub(crate) fn token(&self) -> &str {
+        &self.token
+    }
+
     /// Replace every literal occurrence of the token in an error message.
-    fn scrub(&self, err: OperationError) -> OperationError {
+    pub(crate) fn scrub(&self, err: OperationError) -> OperationError {
         match err {
             OperationError::External { origin, message } => OperationError::External {
                 origin,
@@ -221,7 +294,18 @@ pub(crate) fn credentials_callbacks<'a>(creds: Option<&GitCredentials>) -> Remot
 /// message. A username alone is masked too, since `https://TOKEN@host` is a
 /// common way to pass a token. The scp-like SSH syntax (`git@host:path`) has
 /// no scheme and cannot carry a password, so it is left untouched.
-pub(crate) fn redact_url(text: &str) -> String {
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_ops_git::redact_url;
+///
+/// assert_eq!(
+///     redact_url("https://oauth2:t@gitlab.com/g/r.git"),
+///     "https://***@gitlab.com/g/r.git"
+/// );
+/// ```
+pub fn redact_url(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(idx) = rest.find("://") {

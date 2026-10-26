@@ -110,6 +110,19 @@ impl GitHttpServer {
         repo.branch(branch, &commit, false).unwrap();
     }
 
+    /// Let clients make a partial clone of the served repository `name`.
+    ///
+    /// The server speaks protocol v0, where the lazy fetch of a missing blob
+    /// asks for an object no ref points to: that needs `allowanysha1inwant`.
+    pub fn allow_filter(&self, name: &str) {
+        let repo = Repository::open_bare(self.root().join(name)).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_bool("uploadpack.allowfilter", true).unwrap();
+        config
+            .set_bool("uploadpack.allowanysha1inwant", true)
+            .unwrap();
+    }
+
     /// Delete the branch `branch` on the served repository `name`.
     pub fn delete_branch(&self, name: &str, branch: &str) {
         let repo = Repository::open_bare(self.root().join(name)).unwrap();
@@ -254,6 +267,14 @@ pub fn local_with_origin(url: &str) -> TempDir {
         .remote("origin", url)
         .unwrap();
     work
+}
+
+/// Create the local branch `feature` at `HEAD` of the repository at `work`.
+pub fn create_feature(work: &Path) -> Oid {
+    let repo = Repository::open(work).unwrap();
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    repo.branch("feature", &head, false).unwrap();
+    head.id()
 }
 
 /// A clone of a parent repository whose `vendor/sub` submodule is declared
