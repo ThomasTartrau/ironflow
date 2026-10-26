@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.2.5](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-git-v0.2.4...ironflow-ops-git-v0.2.5) - 2026-10-26
+
+### Added
+
+- #219 add git CLI ops for partial clone and origin-checked push
+
 ## [0.2.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-git-v0.1.37...ironflow-ops-git-v0.2.0) - 2026-10-19
 
 ### Fixed

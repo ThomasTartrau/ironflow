@@ -3798,7 +3798,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-common"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "async-trait",
  "ironflow-core",
@@ -3825,7 +3825,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-git"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -3841,7 +3841,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-gitlab"
-version = "0.1.41"
+version = "0.1.42"
 dependencies = [
  "async-trait",
  "form_urlencoded",
@@ -3855,7 +3855,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-grafana"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "async-trait",
  "ironflow-core",
@@ -3898,7 +3898,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-loki"
-version = "0.1.41"
+version = "0.1.42"
 dependencies = [
  "async-trait",
  "ironflow-core",
@@ -3912,7 +3912,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-mimir"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "async-trait",
  "ironflow-core",
@@ -3966,7 +3966,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-tempo"
-version = "0.1.41"
+version = "0.1.42"
 dependencies = [
  "async-trait",
  "ironflow-core",
