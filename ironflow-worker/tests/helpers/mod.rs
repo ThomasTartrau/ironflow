@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
+#[cfg(feature = "prometheus")]
+use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -102,6 +104,7 @@ impl TestApiState {
 }
 
 /// Build a run JSON payload suitable for the stub API.
+#[allow(dead_code)]
 pub fn make_run_json(run_id: Uuid, workflow_name: &str, max_retries: u32) -> Value {
     json!({
         "id": run_id,
@@ -260,6 +263,14 @@ async fn create_step_deps(Json(_body): Json<Value>) -> Json<Value> {
 
 async fn list_artifacts(Path(_id): Path<Uuid>) -> Json<Value> {
     Json(json!({ "data": [] }))
+}
+
+/// Reserve a free loopback port: bind port 0, read it back, release it.
+#[cfg(feature = "prometheus")]
+#[allow(dead_code)]
+pub fn free_loopback_addr() -> SocketAddr {
+    let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind a free port");
+    listener.local_addr().expect("local addr")
 }
 
 /// Spawn a test API on a random loopback port and return its URL.

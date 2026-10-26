@@ -28,10 +28,11 @@ chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 metrics = { version = "0.24", optional = true }
+metrics-exporter-prometheus = { version = "0.18", optional = true, default-features = false, features = ["http-listener"] }
 
 [features]
 default = []
-prometheus = ["metrics", "ironflow-engine/prometheus"]
+prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-engine/prometheus"]
 opentelemetry = ["ironflow-engine/opentelemetry"]
 heartbeat = []
 
@@ -44,3 +45,4 @@ ironflow-api = { version = "2.52.18", path = "../ironflow-api", features = ["pro
 ironflow-auth = { version = "2.4.84", path = "../ironflow-auth" }
 ironflow-store = { version = "2.47.11", path = "../ironflow-store", features = ["store-memory"] }
 schemars = "1"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }

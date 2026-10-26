@@ -1,6 +1,8 @@
 //! Worker -- polls the API for pending runs and executes them.
 
 use std::collections::HashMap;
+#[cfg(feature = "prometheus")]
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -27,7 +29,9 @@ use ironflow_store::entities::{
 use ironflow_store::error::StoreError;
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
-use metrics::{counter, gauge};
+use metrics::{counter, gauge, set_global_recorder};
+#[cfg(feature = "prometheus")]
+use metrics_exporter_prometheus::PrometheusBuilder;
 #[cfg(feature = "heartbeat")]
 use reqwest::Client;
 
@@ -95,6 +99,8 @@ pub struct WorkerBuilder {
     heartbeat_url: Option<String>,
     #[cfg(feature = "heartbeat")]
     heartbeat_interval: Duration,
+    #[cfg(feature = "prometheus")]
+    metrics_addr: Option<SocketAddr>,
 }
 
 impl WorkerBuilder {
@@ -121,6 +127,8 @@ impl WorkerBuilder {
             heartbeat_url: None,
             #[cfg(feature = "heartbeat")]
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
+            #[cfg(feature = "prometheus")]
+            metrics_addr: None,
         }
     }
 
@@ -393,6 +401,33 @@ impl WorkerBuilder {
         self
     }
 
+    /// Serve the worker metrics on `addr` in the Prometheus text format.
+    ///
+    /// When [`Worker::run`] starts, it installs the process-global metrics
+    /// recorder and serves the metrics on `GET /metrics` from a background
+    /// task. [`Worker::run`] fails if a recorder is already installed in the
+    /// process. Without this option nothing listens and the global recorder
+    /// is left untouched. The library does not read any environment variable:
+    /// the address is the caller's to provide.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::net::{AddrParseError, SocketAddr};
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() -> Result<(), AddrParseError> {
+    /// let addr: SocketAddr = "0.0.0.0:9100".parse()?;
+    /// let builder = WorkerBuilder::new("http://localhost:3000", "token").metrics_addr(addr);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "prometheus")]
+    pub fn metrics_addr(mut self, addr: SocketAddr) -> Self {
+        self.metrics_addr = Some(addr);
+        self
+    }
+
     /// Set the heartbeat URL (dead man's switch).
     ///
     /// The worker pings this URL at every heartbeat interval with an HTTP
@@ -514,6 +549,8 @@ impl WorkerBuilder {
             heartbeat_interval: self.heartbeat_interval,
             #[cfg(feature = "heartbeat")]
             heartbeat_client,
+            #[cfg(feature = "prometheus")]
+            metrics_addr: self.metrics_addr,
         })
     }
 }
@@ -539,6 +576,8 @@ pub struct Worker {
     heartbeat_interval: Duration,
     #[cfg(feature = "heartbeat")]
     heartbeat_client: Client,
+    #[cfg(feature = "prometheus")]
+    metrics_addr: Option<SocketAddr>,
 }
 
 /// Tracks consecutive failures per workflow for poison pill detection.
@@ -615,6 +654,11 @@ impl Worker {
     /// # Errors
     ///
     /// Returns [`WorkerError`] if the polling loop encounters an unrecoverable error.
+    /// With the `prometheus` feature and a
+    /// [`metrics_addr`](WorkerBuilder::metrics_addr), returns
+    /// [`WorkerError::Internal`] before polling if the exporter cannot be built
+    /// (including when the address cannot be bound, for instance because it is
+    /// already in use) or a metrics recorder is already installed in the process.
     pub async fn run(&self) -> Result<(), WorkerError> {
         let semaphore = Arc::new(Semaphore::new(self.concurrency));
         let shutdown = CancellationToken::new();
@@ -631,6 +675,27 @@ impl Worker {
             run_timeout_secs = self.run_timeout.as_secs(),
             "worker started"
         );
+
+        #[cfg(feature = "prometheus")]
+        if let Some(addr) = self.metrics_addr {
+            let (recorder, exporter) = PrometheusBuilder::new()
+                .with_http_listener(addr)
+                .build()
+                .map_err(|e| {
+                    WorkerError::Internal(format!(
+                        "cannot build the Prometheus exporter on {addr}: {e}"
+                    ))
+                })?;
+            set_global_recorder(recorder).map_err(|e| {
+                WorkerError::Internal(format!("a metrics recorder is already installed: {e}"))
+            })?;
+            spawn(async move {
+                if let Err(e) = exporter.await {
+                    error!(error = ?e, "prometheus exporter stopped");
+                }
+            });
+            info!(%addr, "prometheus metrics endpoint listening");
+        }
 
         if let Some(receiver) = self.log_receiver.lock().expect("log_receiver lock").take() {
             let pusher = LogPusher::new(&self.api_url, &self.worker_token);
@@ -1472,6 +1537,17 @@ mod tests {
         let builder = WorkerBuilder::new("http://localhost:3000", "").provider(provider);
         let result = builder.build();
         assert!(result.is_ok());
+    }
+
+    #[cfg(feature = "prometheus")]
+    #[test]
+    fn builder_metrics_addr_is_stored_and_build_succeeds() {
+        let addr: SocketAddr = "127.0.0.1:9100".parse().unwrap();
+        let builder = WorkerBuilder::new("http://localhost:3000", "token")
+            .provider(Arc::new(ClaudeCodeProvider::new()))
+            .metrics_addr(addr);
+        assert_eq!(builder.metrics_addr, Some(addr));
+        assert!(builder.build().is_ok());
     }
 
     #[cfg(feature = "heartbeat")]

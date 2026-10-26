@@ -37,7 +37,7 @@ Optional parts of Ironflow are behind Cargo features, so a binary only compiles 
 | | `openapi` | utoipa schemas for engine types |
 | | `opentelemetry` | Export traces over OTLP |
 | | `secret-store` | Resolve encrypted secrets in steps |
-| `ironflow-worker` | `prometheus` | Worker metrics |
+| `ironflow-worker` | `prometheus` | Worker metrics, served by `metrics_addr` |
 | | `opentelemetry` | Export traces over OTLP |
 | | `heartbeat` | Periodic liveness reporting to the API |
 | `ironflow-runtime` | `prometheus` | Webhook metrics |
