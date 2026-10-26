@@ -1,4 +1,4 @@
-use ironflow_engine::config::{AgentStepConfig, HumanInputConfig, ShellConfig, Tool};
+use ironflow_engine::config::{AgentStepConfig, HumanInputConfig, Prompt, ShellConfig, Tool};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, input_schema_for};
 use schemars::JsonSchema;
@@ -56,18 +56,20 @@ impl WorkflowHandler for TriageIssue {
                 )
                 .await?;
 
+            let prompt = Prompt::new()
+                .text(
+                    "Read CONTRIBUTING.md for the label scheme, then propose labels \
+                     for this issue:",
+                )
+                .untrusted(issue.stdout());
             let triage = ctx
                 .agent(
                     "propose-labels",
-                    AgentStepConfig::new(&format!(
-                        "Read CONTRIBUTING.md for the label scheme, then propose labels \
-                         for this issue:\n\n{}",
-                        issue.stdout()
-                    ))
-                    .allow_tool(Tool::Read)
-                    .max_turns(6)
-                    .max_budget_usd(0.50)
-                    .output::<Triage>(),
+                    AgentStepConfig::new(&prompt.to_string())
+                        .allow_tool(Tool::Read)
+                        .max_turns(6)
+                        .max_budget_usd(0.50)
+                        .output::<Triage>(),
                 )
                 .await?;
 

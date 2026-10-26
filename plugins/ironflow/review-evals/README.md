@@ -16,6 +16,7 @@ the defect, and the fixtures carry no comment pointing at it.
 | `side-effect` | notify-deploy, nightly-report | network call or file write outside a step before `ctx.approval` |
 | `step-name` | build-matrix, ping-hosts | step name from `Utc::now()`, literal name inside a loop |
 | `injection` | checkout-branch, pr-summary | run input or agent output formatted into `ShellConfig::new` |
+| `prompt-injection` | repair-pipeline | CI log formatted into the prompt of an agent step with `Bash` |
 | `secret` | publish-crate, sync-mirror | token in a command line, token in `info!` |
 | `registration` | cleanup-branches, rotate-logs | handler missing from `handlers()`, duplicate `name()` |
 | `stringly` | release-gate, version-check | step output read by key |
@@ -33,7 +34,7 @@ All graders are regex or `tool_used`: free and deterministic, no judge.
 - `located` (weight 2): the user-facing answer cites the planted line (`file.rs:N`, `line N`,
   `l. N`), within the statement's line range.
 - `severity`: the trace holds `<severity> <path>:<line>` on the planted line, `blocker` for
-  injection and secrets, `blocker` or `bug` elsewhere. It reads the agent's own report,
+  injection (shell or prompt) and secrets, `blocker` or `bug` elsewhere. It reads the agent's own report,
   because the session rephrases it into headings.
 - `no-false-alarm`: no `blocker` or `bug` on any other line. Nits are allowed.
 - `concluded` (clean cases): a conclusion line exists, so an empty answer cannot pass as a
@@ -55,5 +56,5 @@ claude plugin eval . --eval-dir review-evals --scaffold --ablation none --case h
 
 `--scaffold` is required: without it the workspace is empty and every case fails.
 `--ablation none` because the agent does not exist without the plugin, so a no-plugin arm
-measures nothing. A full pass is 18 cases x 3 runs, about $3.40 and 3 minutes on
+measures nothing. A full pass is 19 cases x 3 runs, about $3.60 and 3 minutes on
 `claude-sonnet-5-5`. Results land in `review-evals/results/` (ignored by git).

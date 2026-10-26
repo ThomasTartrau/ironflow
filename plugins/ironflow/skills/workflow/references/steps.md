@@ -149,7 +149,7 @@ limits.
 
 ```rust,no_run
 use ironflow_core::operations::agent::Model;
-use ironflow_engine::config::{AgentStepConfig, Tool};
+use ironflow_engine::config::{AgentStepConfig, Prompt, Tool};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 use schemars::JsonSchema;
@@ -163,11 +163,13 @@ struct Review {
 
 async fn example(ctx: &mut WorkflowContext, diff: &str) -> Result<(), EngineError> {
     // Structured output: the provider is constrained to the schema of `Review`,
-    // and the step returns the `Review` itself.
+    // and the step returns the `Review` itself. The diff comes from a contributor:
+    // it goes in an untrusted block, never straight into the prompt.
+    let prompt = Prompt::new().text("Review this diff:").untrusted(diff);
     let review = ctx
         .agent(
             "review",
-            AgentStepConfig::new(&format!("Review this diff:\n{diff}"))
+            AgentStepConfig::new(&prompt.to_string())
                 .system_prompt("You are a senior Rust reviewer.")
                 .model(Model::SONNET)
                 .max_turns(3)
@@ -211,6 +213,14 @@ async fn example(ctx: &mut WorkflowContext, diff: &str) -> Result<(), EngineErro
 
 A structured answer that does not match its type fails the step with
 `EngineError::Serialization`.
+
+Text the workflow did not write (an issue, a comment, a diff, a CI log, a webhook
+payload) goes through `Prompt::untrusted(..)`, never `format!` into the prompt: it can
+carry instructions aimed at the agent. `Prompt` puts it in an `<untrusted nonce="...">`
+block with a nonce drawn per prompt, neutralizes any `untrusted` tag inside it, and opens
+the prompt with `DEFAULT_UNTRUSTED_INSTRUCTION`, or the text given to `.instruction(..)`.
+`.text(..)` adds the workflow's own text. `RecordReplayProvider` masks the nonce when it
+names a fixture, so the step still replays.
 
 `.effort(Effort::High)` sets the reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`).
 Claude CLI providers receive `--effort`, the Anthropic API provider `output_config.effort`;
@@ -304,7 +314,7 @@ same ids.
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use ironflow_engine::config::{AgentStepConfig, Tool};
+use ironflow_engine::config::{AgentStepConfig, Prompt, Tool};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 
@@ -323,10 +333,13 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
         )
         .await?;
     if let Some(environment) = reply.environment_id.as_deref() {
-        let prompt = format!("Fix the test {} in /workspace.", reply.answer.test);
+        // The test name comes from an agent that read a CI log: untrusted.
+        let prompt = Prompt::new()
+            .text("Fix this test in /workspace:")
+            .untrusted(&reply.answer.test);
         ctx.agent(
             "fix",
-            AgentStepConfig::new(&prompt)
+            AgentStepConfig::new(&prompt.to_string())
                 .allow_tool(Tool::Bash)
                 .max_budget_usd(0.50)
                 .resume_environment(environment),

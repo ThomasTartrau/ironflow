@@ -7,6 +7,7 @@
 
 use serde::de::DeserializeOwned;
 
+pub use ironflow_core::prompt::{DEFAULT_UNTRUSTED_INSTRUCTION, Prompt};
 pub use ironflow_core::provider::{AgentConfig, Tool, ToolProfile};
 use ironflow_core::provider::{NoSchema, NoTools, RawSchema, WithSchema, WithTools};
 
