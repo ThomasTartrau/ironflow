@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::helpers::{blocking, to_value};
+use crate::repo_lock::lock_repo;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeAddOutput {
@@ -105,6 +106,7 @@ impl WorktreeAdd {
     /// Returns [`OperationError::External`] if the repository cannot be
     /// opened, the commit does not resolve, or the worktree cannot be added.
     pub async fn run(&self, _ctx: &OperationContext) -> Result<WorktreeAddOutput, OperationError> {
+        let _guard = lock_repo(&self.repo_path).await;
         let repo_path = self.repo_path.clone();
         let name = self.name.clone();
         let path = self.path.clone();

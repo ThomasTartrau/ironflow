@@ -1,4 +1,5 @@
-//! Git operations for Ironflow workflows, powered by [`git2`].
+//! Git operations for Ironflow workflows, powered by [`git2`] (libgit2), plus a
+//! [`cli`] family backed by the `git` binary.
 //!
 //! This crate provides a comprehensive set of Git operations as Ironflow
 //! [`Operation`](ironflow_core::operation::Operation) implementations. Each
@@ -28,6 +29,9 @@
 //! `.username(name)`. Without that secret, they fall back to the SSH agent,
 //! the git credential helper, then libgit2's default credential.
 //!
+//! The [`cli`] operations authenticate the same way, and also take the token
+//! itself with `.token(token)`, which takes precedence over the secret store.
+//!
 //! The token never reaches a step record: credentials embedded in a URL are
 //! masked as `***` in every `input()`, output and error message, and a token
 //! resolved from the secret store is scrubbed from error messages.
@@ -48,6 +52,41 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Git CLI operations
+//!
+//! libgit2 can neither make a partial clone nor open one. The [`cli`] module
+//! runs the `git` binary (2.25 or later, on the `PATH`) for the clone, fetch,
+//! worktree add and push of such repositories. [`CliPush`](cli::CliPush)
+//! checks every push URL of the remote against the expected URL before
+//! pushing, and refuses the push if one differs.
+//!
+//! ```no_run
+//! use ironflow_ops_git::cli::{CliClone, CliPush, PushMode};
+//! use ironflow_core::operation::{OperationContext, NoopSecretResolver};
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), ironflow_core::error::OperationError> {
+//! # let ctx = OperationContext::new(Arc::new(NoopSecretResolver));
+//! let url = "https://gitlab.com/group/repo.git";
+//! CliClone::new(url, "/tmp/repo")
+//!     .blobless(true)
+//!     .checkout(false)
+//!     .symlinks(false)
+//!     .run(&ctx)
+//!     .await?;
+//! CliPush::new("/tmp/repo", url, "feature")
+//!     .mode(PushMode::ForceWithLease { expected: None })
+//!     .run(&ctx)
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Clone, fetch, worktree add and push on the same local repository run one
+//! at a time within a process ([`FetchRemote`](fetch::FetchRemote) and
+//! [`WorktreeAdd`](worktree::WorktreeAdd) included); other processes are not
+//! covered.
 //!
 //! # Quick start
 //!
@@ -112,11 +151,13 @@
 //! | [`reset`] | Reset (soft, mixed, hard) |
 //! | [`graph`] | AheadBehind, DescendantOf, Describe |
 //! | [`object`] | BlobCreate, TreeLookup, FindObject |
+//! | [`cli`] | CliClone (partial, atomic publication), CliFetch, CliWorktreeAdd, CliPush (origin-checked; simple, force, force-with-lease) |
 
 pub mod blame;
 pub mod branch;
 pub mod checkout;
 pub mod cherrypick;
+pub mod cli;
 pub mod commit;
 pub mod config;
 pub mod diff;
@@ -132,15 +173,18 @@ pub mod reflog;
 pub mod refs;
 pub mod remote;
 mod repo;
+mod repo_lock;
 pub mod repository;
 pub mod reset;
 pub mod stash;
 pub mod status;
 pub mod submodule;
 pub mod tag;
+mod url;
 pub mod worktree;
 
 pub use git2;
+pub use helpers::redact_url;
 pub use repo::GitRepo;
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ use serde_json::Value;
 use crate::helpers::{
     GitAuth, auth_builders, blocking_authenticated, credentials_callbacks, to_value,
 };
+use crate::repo_lock::lock_repo;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchPushOutput {
@@ -77,6 +78,7 @@ impl FetchRemote {
     /// [`OperationError::External`] if the fetch fails. The token never
     /// appears in the message.
     pub async fn run(&self, ctx: &OperationContext) -> Result<FetchPushOutput, OperationError> {
+        let _guard = lock_repo(&self.repo_path).await;
         let repo_path = self.repo_path.clone();
         let remote_name = self.remote_name.clone();
         let refspecs = self.refspecs.clone();
