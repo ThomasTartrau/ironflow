@@ -105,6 +105,54 @@ capacity, the run sleeps until the next reset and the step runs again from the s
 `.max_capacity_wait(..)` (6 hours by default, `.fail_fast_on_capacity()` fails fast); see
 [When every account is limited](provider-accounts.md#when-every-account-is-limited).
 
+### Reusable agent roles
+
+An agent used by several workflows (a reviewer, a triager) is defined once with
+`impl AgentRole`, then called with a task:
+
+```rust,ignore
+struct Reviewer;
+
+impl AgentRole for Reviewer {
+    type Input = String;
+    type Output = Verdict;
+
+    fn prompt(&self, diff: String) -> String {
+        Prompt::new().text("Review this diff:").untrusted(&diff).to_string()
+    }
+
+    fn append_system_prompt(&self) -> Option<&str> {
+        Some("You are a strict reviewer.")
+    }
+
+    fn tools(&self) -> Vec<Tool> {
+        vec![Tool::Read]
+    }
+
+    fn max_turns(&self) -> Option<u32> {
+        Some(4)
+    }
+}
+
+let verdict: Verdict = ctx
+    .agent("review", Reviewer.task(diff).max_budget_usd(0.25))
+    .await?;
+```
+
+Only `prompt` is required. The persona, tools, permission mode, MCP config and output type
+are locked by the role: the task has no setter for them, so a call that widens the rights
+does not compile (a role with more rights is another role). The model, budget, `max_turns`,
+effort and per-call settings (`working_dir`, `allow_failure`, `retry_policy`, pod labels,
+resume settings) are defaults the caller may override.
+
+The step is stored and replayed like any `AgentStepConfig` step. An override changes the
+step config, so it changes the hash of a `RecordReplayProvider` fixture: a fixture recorded
+for the role defaults does not match an overridden task.
+
+For a role with tools, put the persona in `append_system_prompt`: `system_prompt` replaces
+the Claude Code prompt, which carries the tool and skill instructions. A structured output
+needs at least 2 turns.
+
 ### Untrusted content in a prompt
 
 Text the workflow did not write (an issue, a review comment, a diff, a CI log, a webhook

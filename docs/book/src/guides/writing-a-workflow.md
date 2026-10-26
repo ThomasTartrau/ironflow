@@ -76,6 +76,10 @@ so it shows up in the [execution plan](execution-plan.md); use `ctx.when_dynamic
 the branch depends on a previous step's output. Run `ironflow-cli run plan <name>
 --input '{}'` to see the steps your handler would create before triggering it.
 
+An agent reused across workflows is a role rather than a config built in each handler:
+`impl AgentRole for Reviewer`, then `ctx.agent("review", Reviewer.task(input))`. See
+[Reusable agent roles](../concepts/steps.md#reusable-agent-roles).
+
 ## 3. Register in your handlers list
 
 ```rust,ignore
