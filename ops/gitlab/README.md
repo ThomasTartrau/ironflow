@@ -91,6 +91,13 @@ under `endpoints`, wired the same way as any other endpoint:
 | `merge_requests::MergeRequestVersion` | `GET /projects/:id/merge_requests/:iid/versions/:version_id` |
 | `merge_requests::DeleteMergeRequestNote` | `DELETE /projects/:id/merge_requests/:iid/notes/:note_id` |
 | `repository::MergeBase` | `GET /projects/:id/repository/merge_base` |
+| `discussions::Discussions` | `GET /projects/:id/issues/:iid/discussions`, `GET /projects/:id/repository/commits/:sha/discussions` |
+| `discussions::Discussion` | `GET .../discussions/:discussion_id` (issue or commit) |
+| `discussions::CreateDiscussion` | `POST .../discussions` (issue or commit) |
+| `discussions::ReplyToDiscussion` | `POST .../discussions/:discussion_id/notes` (issue or commit) |
+| `notes::Note` | `GET /projects/:id/issues/:iid/notes/:note_id`, `GET /projects/:id/merge_requests/:iid/notes/:note_id` |
+| `releases::Releases` | `GET /projects/:id/releases` (one page of `per_page` items) |
+| `uploads::UploadFile` | `POST /projects/:id/uploads` (multipart) |
 
 A `204 No Content` answer (a deletion) comes back from `GitLab::op` as `Value::Null`.
 
@@ -118,6 +125,28 @@ let resolve = ResolveMergeRequestDiscussion {
     resolved: true,
 };
 let output = ctx.operation("resolve-discussion", &gitlab.op(resolve)).await?;
+```
+
+An upload answers with GitLab's JSON (`alt`, `url`, `full_path`, `markdown`). The file name is
+sanitized, and `UploadFile::new` refuses a content that contains the multipart boundary marker:
+
+```rust
+use ironflow_ops_gitlab::GitLab;
+use ironflow_ops_gitlab::endpoints::uploads::UploadFile;
+use gitlab::api::common::NameOrId;
+use serde::Deserialize;
+
+let gitlab = GitLab::from_context(&ctx).await?;
+
+let upload = UploadFile::new(NameOrId::from(42), "screenshot.png", png_bytes)?;
+let output = ctx.operation("upload-screenshot", &gitlab.op(upload)).await?;
+
+#[derive(Deserialize)]
+struct Uploaded {
+    markdown: String,
+}
+let uploaded: Uploaded = output.json()?;
+// uploaded.markdown goes in the body of a note
 ```
 
 ### Paginated operations
