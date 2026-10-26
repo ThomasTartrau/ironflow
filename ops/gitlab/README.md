@@ -195,6 +195,27 @@ let output = ctx
     .await?;
 ```
 
+### Job traces
+
+A job trace is plain text, so `GitLab::op` cannot read it. `GitLab::trace_op` returns it as a
+tracked step that yields a string: raw by default, `.decoded()` to remove ANSI sequences, runner
+timestamps and section markers, or `.condensed(budget, marker)` to also drop progress noise and
+keep the failure blocks, the end of the log and the lines before the first failure under
+`budget` chars. Every skipped part is replaced by one line holding `marker`:
+
+```rust
+use ironflow_ops_gitlab::GitLab;
+use ironflow_ops_gitlab::endpoints::jobs::JobTrace;
+use gitlab::api::common::NameOrId;
+
+let gitlab = GitLab::from_context(&ctx).await?;
+
+let endpoint = JobTrace { project: NameOrId::from(42), job: 7 };
+let op = gitlab.trace_op(endpoint).condensed(8000, "[... trace truncated ...]");
+let output = ctx.operation("read-trace", &op).await?;
+let trace = output.text()?;
+```
+
 ## Authentication
 
 Register `gitlab_token` in your workflow's secret store:

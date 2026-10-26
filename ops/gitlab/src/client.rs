@@ -8,6 +8,7 @@ use ironflow_ops_common::redact::Redactor;
 
 use crate::operation::GitLabOp;
 use crate::paged_operation::GitLabPagedOp;
+use crate::trace_operation::GitLabTraceOp;
 
 /// A GitLab client that resolves credentials from the workflow's secret store.
 ///
@@ -196,6 +197,37 @@ impl GitLab {
         E: Pageable + Endpoint + Send + Sync,
     {
         GitLabPagedOp::new(self.inner.clone(), endpoint, pagination)
+    }
+
+    /// Wrap a job trace endpoint as a tracked [`Operation`](ironflow_core::operation::Operation)
+    /// that returns the trace as text.
+    ///
+    /// The trace is plain text, not JSON, so [`GitLab::op`] cannot read it. The
+    /// returned [`GitLabTraceOp`] yields a JSON string (read it with
+    /// `StepOutput::text()`), raw by default, or decoded / condensed with
+    /// [`GitLabTraceOp::decoded`] and [`GitLabTraceOp::condensed`]. No secret
+    /// is masked: a GET has no body, and GitLab already masks CI variables in
+    /// traces.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_gitlab::GitLab;
+    /// use ironflow_ops_gitlab::endpoints::jobs::JobTrace;
+    /// use gitlab::api::common::NameOrId;
+    ///
+    /// # async fn example() -> Result<(), ironflow_core::error::OperationError> {
+    /// let gitlab = GitLab::new("glpat-xxxx", "gitlab.com").await?;
+    /// let endpoint = JobTrace { project: NameOrId::from(42), job: 7 };
+    /// let op = gitlab.trace_op(endpoint).condensed(8000, "[... trace truncated ...]");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn trace_op<E>(&self, endpoint: E) -> GitLabTraceOp<E>
+    where
+        E: Endpoint + Send + Sync,
+    {
+        GitLabTraceOp::new(self.inner.clone(), endpoint)
     }
 }
 
