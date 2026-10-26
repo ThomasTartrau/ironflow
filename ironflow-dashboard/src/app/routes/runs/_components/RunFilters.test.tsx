@@ -32,10 +32,15 @@ describe("RunFilters priority", () => {
 		await user.click(screen.getByRole("button", { name: /Filters/ }));
 		await user.type(screen.getByLabelText("Priority"), "-15");
 
-		await waitFor(() => {
-			expect(lastSearchParams(onUrlUpdate)?.get("priority")).toBe("-15");
-			expect(lastSearchParams(onUrlUpdate)?.get("page")).toBe("1");
-		});
+		// The URL update is debounced by 300ms after typing, which on a loaded CI
+		// runner can outlast the default 1000ms waitFor timeout.
+		await waitFor(
+			() => {
+				expect(lastSearchParams(onUrlUpdate)?.get("priority")).toBe("-15");
+				expect(lastSearchParams(onUrlUpdate)?.get("page")).toBe("1");
+			},
+			{ timeout: 5000 },
+		);
 	});
 
 	it("keeps an out of range priority out of the URL", async () => {

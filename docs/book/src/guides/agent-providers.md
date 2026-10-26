@@ -21,6 +21,13 @@ are behind a [feature flag](../reference/feature-flags.md).
 The SSH, Docker and Kubernetes providers run Claude Code somewhere else; they are described
 in [Transports](transports.md).
 
+With a tool profile (or `with_tools`) and `.output::<T>()`, the model can call registry tools
+before returning the structured answer. `GeminiProvider`, and `AnthropicApiProvider` on models
+without native JSON output, send the registry tools together with a `structured_output` tool
+and require the model to call a tool every turn. On Anthropic models with native JSON output
+(Sonnet 5.5, Opus 5.5, Fable 5.1, Mythos 5.1), only the registry tools are sent: the schema
+stays in `output_config.format` and the final text turn is the answer.
+
 ## Reasoning effort
 
 `AgentConfig::effort(Effort::High)` (also available on `AgentStepConfig`) takes `low`,
