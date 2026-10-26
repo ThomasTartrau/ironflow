@@ -14,6 +14,7 @@ pub(crate) fn http_error(err: ApiError<RestError>) -> OperationError {
     let status = match &err {
         ApiError::GitlabService { status, .. }
         | ApiError::GitlabWithStatus { status, .. }
+        | ApiError::GitlabObjectWithStatus { status, .. }
         | ApiError::GitlabUnrecognizedWithStatus { status, .. } => Some(status.as_u16()),
         // No HTTP answer was received, or its status was not kept.
         _ => None,

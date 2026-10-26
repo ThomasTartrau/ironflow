@@ -130,6 +130,35 @@ async fn bad_gateway_with_plain_text_body_carries_status_502() {
 }
 
 #[tokio::test]
+async fn unrecognized_json_error_body_carries_status_422() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v4/projects/42"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(json!({"foo": 1})))
+            .mount(&server)
+            .await;
+
+        let gitlab = GitLab::from(insecure_client(&server).await);
+        let endpoint = Project::builder().project(42).build().unwrap();
+
+        let err = gitlab.op(endpoint).execute(&context()).await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                OperationError::Http {
+                    status: Some(422),
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
 async fn paged_op_error_carries_status_403() {
     tokio::time::timeout(Duration::from_secs(10), async {
         let server = MockServer::start().await;
