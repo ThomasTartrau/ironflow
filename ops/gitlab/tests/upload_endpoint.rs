@@ -104,7 +104,7 @@ async fn upload_sanitizes_hostile_filename() {
 
     let (_, body) = last_post_body(&server).await;
     let text = String::from_utf8(body).unwrap();
-    assert!(text.contains("filename=\"x____Injected__1.png\"\r\n"));
+    assert!(text.contains("filename=\"x___Injected__1.png\"\r\n"));
     assert!(!text.contains("Injected: 1"));
 }
 

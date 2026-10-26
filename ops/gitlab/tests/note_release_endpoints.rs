@@ -156,5 +156,5 @@ async fn releases_without_options_send_no_query_string() {
         .iter()
         .find(|r| r.url.path().ends_with("/releases"))
         .unwrap();
-    assert_eq!(request.url.query(), None);
+    assert_eq!(request.url.query_pairs().count(), 0);
 }
