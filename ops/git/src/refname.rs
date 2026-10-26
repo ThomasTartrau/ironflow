@@ -177,7 +177,6 @@ mod tests {
             "a/.hidden",
             "x.lock",
             "foo@{1}",
-            "@",
             "a^b",
             "a?b",
             "a*b",
@@ -185,6 +184,9 @@ mod tests {
             "a\\b",
             "end.",
         ] {
+            // "@" is left out on purpose: `--branch` expands it to the current
+            // branch before checking, so git accepts it, yet it cannot name a
+            // branch. It is covered by `rejects_dangerous_ref_names`.
             let status = Command::new("git")
                 .args(["check-ref-format", "--branch", name])
                 .output()
