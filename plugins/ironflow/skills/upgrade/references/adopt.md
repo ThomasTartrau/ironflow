@@ -419,3 +419,33 @@ by hand gains the two fields.
 + let timed_out = out.reason.as_deref() == Some("DeadlineExceeded");
 + let code = out.exit_code;
 ```
+
+## gitlab-secret-masking
+- kind: adopt
+- since: ironflow-ops-gitlab after 0.1.40 (#225)
+
+A handler that published agent or command output to GitLab used to mask secrets itself
+before every write (note, issue, merge request), and a new write site that forgot it
+published the secret. `gitlab.op(endpoint)` now masks the request body: the client's own
+token, the values added with `GitLab::with_secrets`, and `sk-ant-` / `glpat-` tokens.
+`op.masks_secrets()` tells whether anything is masked, for a warning log.
+
+The project's own masking function (`mask` below) and its calls can go; keep the list of
+secret values it read, and pass it to `with_secrets`.
+
+```diff
+- let gitlab = GitLab::new(&token, host).await?;
+- let body = mask(&body, &secret_values);
++ let gitlab = GitLab::new(&token, host).await?.with_secrets(&secret_values);
+  let endpoint = CreateMergeRequestNote::builder()
+      .project(project_id)
+      .merge_request(mr_iid)
+      .body(body)
+      .build()?;
+- ctx.operation("notify-mr", &gitlab.op(endpoint)).await?;
++ let op = gitlab.op(endpoint);
++ if op.masks_secrets() {
++     warn!(step = "notify-mr", "secret masked in text published to GitLab");
++ }
++ ctx.operation("notify-mr", &op).await?;
+```

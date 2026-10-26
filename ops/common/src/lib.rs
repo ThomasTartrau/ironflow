@@ -12,6 +12,7 @@
 //!   `from_context` and re-exports the request-building methods.
 //! - [`helpers`] provides response checking, path validation, request sending,
 //!   and JSON (de)serialization helpers.
+//! - [`redact`] masks secrets in text sent to a third party.
 //! - The `test-utils` feature exposes `MapSecretResolver` so downstream
 //!   crates can test `from_context` with fake secrets.
 //!
@@ -42,6 +43,7 @@
 
 mod client;
 pub mod helpers;
+pub mod redact;
 
 pub use client::Auth;
 pub use client::HttpApiClient;

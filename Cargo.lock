@@ -3844,8 +3844,10 @@ name = "ironflow-ops-gitlab"
 version = "0.1.40"
 dependencies = [
  "async-trait",
+ "form_urlencoded",
  "gitlab",
  "ironflow-core",
+ "ironflow-ops-common",
  "serde_json",
  "tokio",
  "wiremock",

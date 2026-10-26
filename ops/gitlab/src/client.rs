@@ -4,6 +4,7 @@ use gitlab::api::{Endpoint, Pageable, Pagination};
 use gitlab::{AsyncGitlab, GitlabBuilder};
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::OperationContext;
+use ironflow_ops_common::redact::Redactor;
 
 use crate::operation::GitLabOp;
 use crate::paged_operation::GitLabPagedOp;
@@ -12,6 +13,11 @@ use crate::paged_operation::GitLabPagedOp;
 ///
 /// Wraps [`AsyncGitlab`] and provides a convenience [`op`](GitLab::op) method
 /// to turn any endpoint into a tracked [`Operation`](ironflow_core::operation::Operation).
+///
+/// Every operation it creates masks secrets in the request body before
+/// sending it: the token the client was built with, the values added with
+/// [`with_secrets`](GitLab::with_secrets), and token-shaped strings
+/// (`sk-ant-...`, `glpat-...`). See [`GitLabOp`].
 ///
 /// # Examples
 ///
@@ -33,6 +39,7 @@ use crate::paged_operation::GitLabPagedOp;
 /// ```
 pub struct GitLab {
     inner: AsyncGitlab,
+    redactor: Redactor,
 }
 
 impl GitLab {
@@ -70,6 +77,8 @@ impl GitLab {
 
     /// Build a client with an explicit token and host.
     ///
+    /// The operations it creates mask `token` in their request body.
+    ///
     /// # Errors
     ///
     /// Returns [`OperationError::Http`] if the client cannot be built.
@@ -92,13 +101,46 @@ impl GitLab {
                 status: None,
                 message: e.to_string(),
             })?;
-        Ok(Self { inner })
+        Ok(Self::with_token(inner, token))
+    }
+
+    /// A client whose operations mask `token`, the one `inner` was built with.
+    fn with_token(inner: AsyncGitlab, token: &str) -> Self {
+        Self::from(inner).with_secrets([token])
+    }
+
+    /// Add secret values to mask in the body of every operation this client
+    /// creates from now on.
+    ///
+    /// Values shorter than 8 characters are ignored. The token passed to
+    /// [`GitLab::new`] or read by [`GitLab::from_context`] is already masked.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_gitlab::GitLab;
+    ///
+    /// # async fn example(worker_token: String) -> Result<(), ironflow_core::error::OperationError> {
+    /// let gitlab = GitLab::new("glpat-xxxx", "gitlab.com")
+    ///     .await?
+    ///     .with_secrets([worker_token]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_secrets<I, S>(mut self, secrets: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.redactor = self.redactor.with_secrets(secrets);
+        self
     }
 
     /// The underlying [`AsyncGitlab`] client.
     ///
     /// Use this with [`AsyncQuery::query_async`](gitlab::api::AsyncQuery::query_async)
-    /// for typed endpoint calls.
+    /// for typed endpoint calls. A query sent this way bypasses the secret
+    /// masking of [`GitLab::op`]: publish text through `op` instead.
     pub fn client(&self) -> &AsyncGitlab {
         &self.inner
     }
@@ -106,7 +148,8 @@ impl GitLab {
     /// Wrap an endpoint as a tracked [`Operation`](ironflow_core::operation::Operation).
     ///
     /// The returned [`GitLabOp`] implements `Operation` so it can be passed
-    /// to `WorkflowContext::operation()` for step lifecycle tracking.
+    /// to `WorkflowContext::operation()` for step lifecycle tracking. It masks
+    /// the client's known secrets in the request body.
     ///
     /// # Examples
     ///
@@ -122,7 +165,7 @@ impl GitLab {
     /// # }
     /// ```
     pub fn op<E>(&self, endpoint: E) -> GitLabOp<E> {
-        GitLabOp::new(self.inner.clone(), endpoint)
+        GitLabOp::new(self.inner.clone(), endpoint, self.redactor.clone())
     }
 
     /// Wrap a pageable endpoint as a tracked [`Operation`](ironflow_core::operation::Operation)
@@ -163,6 +206,10 @@ impl GitLab {
 /// instance with custom TLS settings, by building the client directly via
 /// [`GitlabBuilder`] and converting the result.
 ///
+/// The token of an [`AsyncGitlab`] cannot be read back: add it with
+/// [`GitLab::with_secrets`] to mask it. Token-shaped strings are masked
+/// either way.
+///
 /// # Examples
 ///
 /// ```no_run
@@ -175,13 +222,16 @@ impl GitLab {
 ///     .insecure()
 ///     .build_async()
 ///     .await?;
-/// let gitlab: GitLab = client.into();
+/// let gitlab = GitLab::from(client).with_secrets(["glpat-xxxx"]);
 /// # Ok(())
 /// # }
 /// ```
 impl From<AsyncGitlab> for GitLab {
     fn from(inner: AsyncGitlab) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            redactor: Redactor::default(),
+        }
     }
 }
 
@@ -202,10 +252,11 @@ mod tests {
     use gitlab::api::projects::merge_requests::MergeRequests;
     use ironflow_core::operation::{NoopSecretResolver, Operation, OperationContext};
     use serde_json::{Value, json};
-    use wiremock::matchers::{method, path, query_param};
+    use wiremock::matchers::{body_string, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+    use crate::endpoints::merge_requests::CreateMergeRequestDiscussionNote;
 
     fn ctx() -> OperationContext {
         OperationContext::new(Arc::new(NoopSecretResolver))
@@ -230,6 +281,34 @@ mod tests {
     async fn new_builds_with_valid_host() {
         let gitlab = GitLab::new("glpat-xxxx", "gitlab.com").await;
         assert!(gitlab.is_ok());
+    }
+
+    #[tokio::test]
+    async fn client_token_reaches_gitlab_masked() {
+        let server = MockServer::start().await;
+        // Not token-shaped: only the client's own token list can mask it.
+        let token = "plain-client-token-1234";
+        Mock::given(method("POST"))
+            .and(path(
+                "/api/v4/projects/42/merge_requests/7/discussions/abcd1234/notes",
+            ))
+            .and(body_string("body=leaked+%5BREDACTED%5D"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id": 1})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let gitlab = GitLab::with_token(insecure_client(&server).await, token);
+        let op = gitlab.op(CreateMergeRequestDiscussionNote {
+            project: 42.into(),
+            merge_request: 7,
+            discussion_id: "abcd1234".to_string(),
+            body: format!("leaked {token}"),
+        });
+
+        assert!(op.masks_secrets());
+        let result = op.execute(&ctx()).await.unwrap();
+        assert_eq!(result["id"], 1);
     }
 
     #[tokio::test]
@@ -311,7 +390,7 @@ mod tests {
             .await;
 
         let client = insecure_client(&server).await;
-        let gitlab = GitLab { inner: client };
+        let gitlab = GitLab::from(client);
         let endpoint = MergeRequests::builder().project(42).build().unwrap();
         let op = gitlab.paged_op(endpoint, Pagination::All);
 
@@ -337,7 +416,7 @@ mod tests {
             .await;
 
         let client = insecure_client(&server).await;
-        let gitlab = GitLab { inner: client };
+        let gitlab = GitLab::from(client);
         let endpoint = MergeRequests::builder().project(42).build().unwrap();
         let op = gitlab.paged_op(endpoint, Pagination::Limit(1));
 
@@ -350,7 +429,7 @@ mod tests {
     async fn paged_op_kind_and_input() {
         let server = MockServer::start().await;
         let client = insecure_client(&server).await;
-        let gitlab = GitLab { inner: client };
+        let gitlab = GitLab::from(client);
         let endpoint = MergeRequests::builder().project(42).build().unwrap();
         let op = gitlab.paged_op(endpoint, Pagination::Limit(5));
 

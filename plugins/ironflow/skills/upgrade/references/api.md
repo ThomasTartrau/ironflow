@@ -451,3 +451,24 @@ then, the gate stays admin-only, even once an account is created under that name
   let run = start_run_with_gate_assigned_to(Assignee::user("alice")).await?;
 - create_user(NewUser { username: "alice".into(), .. }).await?;
 ```
+
+## gitlab-op-masks-secrets
+- kind: behavior
+- since: ironflow-ops-gitlab after 0.1.40 (#225)
+
+`gitlab.op(endpoint)` replaces the client's token, the values added with
+`GitLab::with_secrets` and every `sk-ant-` / `glpat-` token in a form, JSON or `text/*`
+request body with `[REDACTED]`, and records `"secrets_masked": true` in the step input.
+A request that writes a secret on purpose (a CI/CD variable, a webhook or runner token, a
+repository file holding a token-shaped fixture) would store `[REDACTED]`: send it with
+`.without_masking()`. Generic package uploads and project imports are sent as is.
+
+```diff
+  let endpoint = CreateProjectVariable::builder()
+      .project(42)
+      .key("DEPLOY_TOKEN")
+      .value(deploy_token)
+      .build()?;
+- ctx.operation("set-deploy-token", &gitlab.op(endpoint)).await?;
++ ctx.operation("set-deploy-token", &gitlab.op(endpoint).without_masking()).await?;
+```

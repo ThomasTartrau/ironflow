@@ -38,6 +38,12 @@ scripts/check-plugin-template.sh            # Scaffold and build the plugin's pr
 scripts/test-postgres.sh                    # PostgreSQL suites (DATABASE_URL, or a throwaway container)
 ```
 
+`ironflow-api` embeds `ironflow-dashboard/dist` at compile time: in a fresh checkout or
+worktree, `cargo clippy --workspace` fails with "#[derive(RustEmbed)] folder ... does not
+exist" until the dashboard is built (`pnpm build` in `ironflow-dashboard`), or
+`IRONFLOW_DASHBOARD_DIR` points at an existing `dist` (hit on #225). That is an
+environment failure, not a broken diff.
+
 CI runs `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` and
 `cargo test --workspace` with `--exclude ironflow-example-server` and the feature set listed
 in `.claude/rules/openapi-snapshots.md`, plus `scripts/test-postgres.sh` against a postgres

@@ -72,6 +72,13 @@ let endpoint = CreateIssue::builder()
 let output = ctx.operation("create-issue", &gitlab.op(endpoint)).await?;
 ```
 
+`gitlab.op` masks secrets in the request body before sending it: the client's own token,
+the values added with `GitLab::with_secrets`, and token-shaped strings (`sk-ant-...`,
+`glpat-...`). `op.masks_secrets()` tells whether anything is masked, and the step input
+records it as `"secrets_masked": true`. A request that writes a secret on purpose (a CI/CD
+variable, a webhook token) goes through `gitlab.op(endpoint).without_masking()`, or GitLab
+stores `[REDACTED]` as its value.
+
 ## Example: Kubernetes + Helm
 
 ```rust,ignore

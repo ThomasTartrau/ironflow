@@ -63,6 +63,37 @@
 //! # }
 //! ```
 //!
+//! # Secret masking
+//!
+//! A tracked operation masks secrets in its request body before sending it,
+//! so text produced by an agent or a command never publishes a token in a
+//! note, an issue or a merge request. The client's own token is masked, plus
+//! the values added with [`GitLab::with_secrets`] and token-shaped strings
+//! (`sk-ant-...`, `glpat-...`). [`GitLabOp::masks_secrets`] tells whether
+//! anything is masked. A query sent through [`GitLab::client`] is not masked.
+//!
+//! ```no_run
+//! use ironflow_ops_gitlab::GitLab;
+//! use gitlab::api::projects::issues::CreateIssue;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let worker_token = String::new();
+//! # let agent_summary = String::new();
+//! let gitlab = GitLab::new("glpat-xxxx", "gitlab.com")
+//!     .await?
+//!     .with_secrets([worker_token]);
+//!
+//! let endpoint = CreateIssue::builder()
+//!     .project(42)
+//!     .title("Follow-up")
+//!     .description(agent_summary)
+//!     .build()?;
+//! let op = gitlab.op(endpoint);
+//! // ctx.operation("create-issue", &op) publishes the masked description
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Missing endpoints
 //!
 //! Some GitLab REST routes are not implemented by the `gitlab` crate. This crate fills
@@ -115,6 +146,7 @@
 
 mod client;
 pub mod endpoints;
+mod masked;
 mod operation;
 mod paged_operation;
 
