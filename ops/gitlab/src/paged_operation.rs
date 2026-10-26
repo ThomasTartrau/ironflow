@@ -8,6 +8,8 @@ use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext};
 use serde_json::Value;
 
+use crate::error::http_error;
+
 /// A paginated GitLab endpoint wrapped as an Ironflow [`Operation`].
 ///
 /// Created via [`GitLab::paged_op`](crate::GitLab::paged_op). Unlike [`GitLabOp`](crate::GitLabOp),
@@ -32,6 +34,8 @@ use serde_json::Value;
 /// # Errors
 ///
 /// [`Operation::execute`] returns [`OperationError::Http`] if any page request fails.
+/// `status` is the HTTP status of the failing page when GitLab answered, and
+/// `None` for transport errors.
 pub struct GitLabPagedOp<E> {
     client: AsyncGitlab,
     paged: Paged<E>,
@@ -65,14 +69,11 @@ where
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        let results: Vec<Value> =
-            self.paged
-                .query_async(&self.client)
-                .await
-                .map_err(|e| OperationError::Http {
-                    status: None,
-                    message: e.to_string(),
-                })?;
+        let results: Vec<Value> = self
+            .paged
+            .query_async(&self.client)
+            .await
+            .map_err(http_error)?;
         Ok(Value::Array(results))
     }
 

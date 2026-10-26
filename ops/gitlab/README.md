@@ -217,3 +217,7 @@ This crate re-exports the full [`gitlab`](https://docs.rs/gitlab) API. All endpo
 - CI/CD variables, runners, registry
 - Labels, milestones, wikis, snippets, packages
 - And more -- see the [gitlab crate docs](https://docs.rs/gitlab)
+
+## Errors
+
+A failed operation returns `OperationError::Http`. When GitLab answered with an error, `status` carries the HTTP code, so a conflict is detected with `OperationError::Http { status: Some(409), .. }` (for example a merge request that already exists) instead of parsing the message. `status` is `None` for transport and local errors.

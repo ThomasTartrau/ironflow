@@ -8,6 +8,7 @@ use ironflow_core::operation::{Operation, OperationContext};
 use ironflow_ops_common::redact::Redactor;
 use serde_json::{Map, Value};
 
+use crate::error::http_error;
 use crate::masked::{Masked, mask_body};
 
 /// A GitLab endpoint wrapped as an Ironflow [`Operation`].
@@ -48,6 +49,38 @@ use crate::masked::{Masked, mask_body};
 /// let op = gitlab.op(endpoint);
 ///
 /// assert_eq!(op.kind(), "gitlab");
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// [`Operation::execute`] returns [`OperationError::Http`]. An error answered by
+/// GitLab carries `status: Some(code)`, e.g. `Some(409)` when the resource
+/// already exists. `status` is `None` for transport and local errors (including
+/// a successful answer that is not JSON).
+///
+/// ```no_run
+/// use ironflow_ops_gitlab::GitLab;
+/// use ironflow_core::error::OperationError;
+/// use ironflow_core::operation::{Operation, OperationContext, NoopSecretResolver};
+/// use gitlab::api::projects::merge_requests::CreateMergeRequest;
+/// use std::sync::Arc;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let ctx = OperationContext::new(Arc::new(NoopSecretResolver));
+/// let gitlab = GitLab::from_context(&ctx).await?;
+/// let endpoint = CreateMergeRequest::builder()
+///     .project(42)
+///     .source_branch("feat")
+///     .target_branch("main")
+///     .title("My change")
+///     .build()?;
+/// if let Err(err) = gitlab.op(endpoint).execute(&ctx).await {
+///     if matches!(err, OperationError::Http { status: Some(409), .. }) {
+///         eprintln!("a merge request already exists");
+///     }
+/// }
 /// # Ok(())
 /// # }
 /// ```
@@ -153,14 +186,10 @@ where
             inner: &self.endpoint,
             redactor: self.redactor.as_ref(),
         };
-        let body: Vec<u8> =
-            raw(&masked)
-                .query_async(&self.client)
-                .await
-                .map_err(|e| OperationError::Http {
-                    status: None,
-                    message: e.to_string(),
-                })?;
+        let body: Vec<u8> = raw(&masked)
+            .query_async(&self.client)
+            .await
+            .map_err(http_error)?;
         if body.iter().all(u8::is_ascii_whitespace) {
             return Ok(Value::Null);
         }
