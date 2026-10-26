@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.42](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-gitlab-v0.1.41...ironflow-ops-gitlab-v0.1.42) - 2026-10-26
+
+### Added
+
+- #225 masquer les secrets dans le texte publié sur GitLab
+
 ## [0.1.41](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-gitlab-v0.1.40...ironflow-ops-gitlab-v0.1.41) - 2026-10-26
 
 ### Added
