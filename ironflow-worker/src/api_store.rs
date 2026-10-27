@@ -10,6 +10,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{Client, Error as HttpError, StatusCode};
+use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::{Value, from_str, json, to_vec};
 use tokio::time::sleep;
@@ -18,10 +19,14 @@ use uuid::Uuid;
 
 use ironflow_engine::error::CONCURRENCY_CONFLICT_CODE;
 use ironflow_store::MAX_API_BODY_BYTES;
+use ironflow_store::agent_role_store::AgentRoleStore;
 use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::approval_delegation_store::ApprovalDelegationStore;
 use ironflow_store::artifact_store::ArtifactStore;
 use ironflow_store::audit_log_store::AuditLogStore;
+use ironflow_store::entities::{
+    AgentRoleRecord, RoleCostAdmission, RoleCostReservationRequest, RoleCostSettlement,
+};
 use ironflow_store::entities::{
     ApiKey, ApiKeyUpdate, ApprovalDelegation, Artifact, ArtifactLookup, AuditLogEntry,
     AuditLogFilter, ConcurrencyGroupBacklog, DelegationFilter, KeyVersionStatus, LeaseRequest,
@@ -1326,6 +1331,72 @@ impl SignalStore for ApiRunStore {
     }
 }
 
+fn agent_role_method_unavailable(method: &str) -> StoreError {
+    StoreError::Database(format!("AgentRoleStore::{method} not available in worker"))
+}
+
+impl AgentRoleStore for ApiRunStore {
+    fn reserve_agent_role_cost(
+        &self,
+        request: RoleCostReservationRequest,
+    ) -> StoreFuture<'_, RoleCostAdmission> {
+        // Sent once, never retried: the engine refuses the step on any error
+        // (fail-closed), and a retry would hold the step longer for nothing.
+        Box::pin(async move {
+            let resp = self
+                .client
+                .post(self.internal("/agent-roles/reservations"))
+                .bearer_auth(&self.token)
+                .json(&request)
+                .send()
+                .await
+                .map_err(Self::err)?;
+
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Self::status_err(&body));
+            }
+
+            let api_resp: ApiResponse<RoleCostAdmission> = resp.json().await.map_err(Self::err)?;
+            Ok(api_resp.data)
+        })
+    }
+
+    fn renew_agent_role_reservation(&self, id: Uuid, ttl_secs: u32) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            self.put_json(
+                &format!("/agent-roles/reservations/{id}/lease"),
+                &json!({ "ttl_secs": ttl_secs }),
+            )
+            .await
+        })
+    }
+
+    fn settle_agent_role_cost(&self, settlement: RoleCostSettlement) -> StoreFuture<'_, ()> {
+        Box::pin(async move { self.put_json("/agent-roles/settlements", &settlement).await })
+    }
+
+    fn get_agent_role(&self, _name: &str) -> StoreFuture<'_, Option<AgentRoleRecord>> {
+        Box::pin(async { Err(agent_role_method_unavailable("get_agent_role")) })
+    }
+
+    fn list_agent_roles(
+        &self,
+        _page: u32,
+        _per_page: u32,
+    ) -> StoreFuture<'_, Page<AgentRoleRecord>> {
+        Box::pin(async { Err(agent_role_method_unavailable("list_agent_roles")) })
+    }
+
+    fn set_agent_role_operator_cap(
+        &self,
+        _name: &str,
+        _cap_usd: Option<Decimal>,
+    ) -> StoreFuture<'_, AgentRoleRecord> {
+        Box::pin(async { Err(agent_role_method_unavailable("set_agent_role_operator_cap")) })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1340,9 +1411,14 @@ mod tests {
     use ironflow_api::routes::{RouterConfig, create_router};
     use ironflow_api::state::AppState;
     use ironflow_auth::jwt::JwtConfig;
+    use ironflow_core::agent_role::{AgentRoleBinding, CostPeriod, RoleCostCap};
+    use ironflow_core::error::AgentError;
+    use ironflow_core::provider::{AgentConfig, AgentOutput, AgentProvider};
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
+    use ironflow_engine::role_cost::RoleCostProvider;
+    use ironflow_engine::testing::MockAgentProvider;
     use ironflow_store::entities::{PARENT_RUN_ID_LABEL, StepStatus, TriggerKind};
     use ironflow_store::memory::InMemoryStore;
     use tokio::io::AsyncReadExt;
@@ -1923,6 +1999,86 @@ mod tests {
 
         assert!(msg.contains("after 4 attempts"), "got: {msg}");
         assert!(msg.contains("error sending request"), "got: {msg}");
+    }
+
+    fn role_reservation(id: Uuid, budget: Decimal) -> RoleCostReservationRequest {
+        RoleCostReservationRequest {
+            reservation_id: id,
+            role: "reviewer".to_string(),
+            code_cap_usd: Some(Decimal::ONE),
+            period: "month".to_string(),
+            period_start: CostPeriod::Month.start(Utc::now()),
+            budget_usd: Some(budget),
+            ttl_secs: 600,
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_role_reserve_renew_and_settle_go_through_the_internal_routes() {
+        let store = ApiRunStore::new(&spawn_api().await, "test-worker-token");
+        let id = Uuid::now_v7();
+        let admission = store
+            .reserve_agent_role_cost(role_reservation(id, Decimal::new(6, 1)))
+            .await
+            .unwrap();
+        assert!(matches!(admission, RoleCostAdmission::Admitted { .. }));
+        store.renew_agent_role_reservation(id, 600).await.unwrap();
+        store
+            .settle_agent_role_cost(RoleCostSettlement {
+                reservation_id: id,
+                period: "month".to_string(),
+                period_start: CostPeriod::Month.start(Utc::now()),
+                cost_usd: Decimal::new(6, 1),
+            })
+            .await
+            .unwrap();
+
+        // The next reservation sees the settled cost.
+        let next = store
+            .reserve_agent_role_cost(role_reservation(Uuid::now_v7(), Decimal::new(1, 1)))
+            .await
+            .unwrap();
+        assert!(matches!(
+            next,
+            RoleCostAdmission::Admitted { spent_usd, .. } if spent_usd == Decimal::new(6, 1)
+        ));
+    }
+
+    #[tokio::test]
+    async fn agent_role_reads_are_not_available_in_worker() {
+        let store = ApiRunStore::new("http://localhost:3000", "token");
+        match store.get_agent_role("reviewer").await {
+            Err(StoreError::Database(msg)) => assert!(msg.contains("not available in worker")),
+            other => panic!("expected an unavailable-method error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_api_refuses_a_role_step_before_the_model() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let model: Arc<dyn AgentProvider> = Arc::new(MockAgentProvider::new(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Ok(AgentOutput::new(json!("done")))
+        }));
+        let provider = RoleCostProvider::new(
+            model,
+            Arc::new(ApiRunStore::new(&format!("http://{addr}"), "token")),
+        );
+        let config = AgentConfig::new("review").agent_role(AgentRoleBinding::new(
+            "reviewer",
+            Some(RoleCostCap::per_month(Decimal::ONE)),
+        ));
+
+        let err = provider.invoke(&config).await.expect_err("fail-closed");
+        assert!(
+            matches!(err, AgentError::RoleCostUnavailable { ref role, .. } if role == "reviewer"),
+            "got: {err}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

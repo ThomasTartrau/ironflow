@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::account::{AccountSession, RateLimitRecorder};
+use crate::agent_role::AgentRoleBinding;
 use crate::auth_proxy::ProxiedSecret;
 use crate::error::AgentError;
 use crate::operations::agent::{Effort, Model, PermissionMode};
@@ -422,6 +423,14 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(skip)]
     pub capacity_wait_since: Option<DateTime<Utc>>,
 
+    /// Agent role the invocation is charged to, set by `AgentTask`.
+    ///
+    /// Read by the engine's role cost cap; providers ignore it. Never
+    /// serialized: a config read back from JSON must not carry a binding it
+    /// was not built with. Set it with [`AgentConfig::agent_role`].
+    #[serde(skip)]
+    pub agent_role: Option<AgentRoleBinding>,
+
     /// Zero-sized typestate marker (not serialized).
     #[serde(skip)]
     pub(crate) _marker: PhantomData<(Tools, Schema)>,
@@ -479,6 +488,7 @@ impl AgentConfig {
             role: None,
             rate_limits: None,
             capacity_wait_since: None,
+            agent_role: None,
             _marker: PhantomData,
         }
     }
@@ -1187,6 +1197,28 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Charge the invocation to an agent role.
+    ///
+    /// The engine checks the cost cap of the role before calling the provider
+    /// and adds the cost of the call to the role's counter. Workflow authors
+    /// do not call it: `AgentTask` sets it from the `AgentRole`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::agent_role::{AgentRoleBinding, RoleCostCap};
+    /// use ironflow_core::provider::AgentConfig;
+    /// use rust_decimal::Decimal;
+    ///
+    /// let binding = AgentRoleBinding::new("reviewer", Some(RoleCostCap::per_day(Decimal::ONE)));
+    /// let config = AgentConfig::new("review").agent_role(binding.clone());
+    /// assert_eq!(config.agent_role, Some(binding));
+    /// ```
+    pub fn agent_role(mut self, binding: AgentRoleBinding) -> Self {
+        self.agent_role = Some(binding);
+        self
+    }
+
     /// Set how long the run may sleep waiting for provider capacity.
     ///
     /// When every targeted account is rate limited, the run sleeps until the
@@ -1372,6 +1404,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             role: self.role,
             rate_limits: self.rate_limits,
             capacity_wait_since: self.capacity_wait_since,
+            agent_role: self.agent_role,
             _marker: PhantomData,
         }
     }
@@ -2017,6 +2050,7 @@ mod tests {
             role: None,
             rate_limits: None,
             capacity_wait_since: None,
+            agent_role: None,
             _marker: PhantomData,
         }
     }
@@ -2079,6 +2113,7 @@ mod tests {
             role: None,
             rate_limits: None,
             capacity_wait_since: None,
+            agent_role: None,
             _marker: PhantomData,
         };
         let json = serde_json::to_string(&config).unwrap();

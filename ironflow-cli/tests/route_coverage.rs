@@ -280,6 +280,22 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         "/api/v1/audit-logs",
         Coverage::Command(&["audit-log", "list"]),
     ),
+    // ── Agent roles ──
+    (
+        "GET",
+        "/api/v1/agent-roles",
+        Coverage::Command(&["agent-role", "list"]),
+    ),
+    (
+        "GET",
+        "/api/v1/agent-roles/{name}",
+        Coverage::Command(&["agent-role", "show", "reviewer"]),
+    ),
+    (
+        "PUT",
+        "/api/v1/agent-roles/{name}/cost-cap",
+        Coverage::Command(&["agent-role", "set-cap", "reviewer", "--usd", "10"]),
+    ),
     // ── Schedules ──
     (
         "GET",

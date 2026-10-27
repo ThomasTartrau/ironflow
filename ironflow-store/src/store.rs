@@ -11,6 +11,7 @@ use std::pin::Pin;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+use crate::agent_role_store::AgentRoleStore;
 use crate::api_key_store::ApiKeyStore;
 use crate::approval_delegation_store::ApprovalDelegationStore;
 use crate::artifact_store::ArtifactStore;
@@ -690,6 +691,7 @@ pub trait Store:
     + ApprovalDelegationStore
     + ProviderAccountStore
     + SignalStore
+    + AgentRoleStore
 {
 }
 
@@ -704,7 +706,8 @@ impl<
         + ScheduleStore
         + ApprovalDelegationStore
         + ProviderAccountStore
-        + SignalStore,
+        + SignalStore
+        + AgentRoleStore,
 > Store for T
 {
 }

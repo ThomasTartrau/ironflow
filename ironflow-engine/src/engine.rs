@@ -55,6 +55,7 @@ use crate::plan::{
     ExecutionPlan, PlanOptions, PlanRecorder, SharedPlanRecorder, estimate_durations, lock_plan,
 };
 use crate::retry_policy::{backoff_for_retry, is_run_retryable};
+use crate::role_cost::RoleCostProvider;
 use crate::schedule::CronSchedule;
 use crate::signal::{
     Signal, SignalDelivery, SignalRejected, SignalResumed, received_output, validate_step_payload,
@@ -369,6 +370,9 @@ pub(crate) fn chain_parent(run: &Run) -> Option<Uuid> {
 impl Engine {
     /// Create a new engine with the given store and agent provider.
     ///
+    /// The provider is wrapped in a [`RoleCostProvider`]: every agent step of a
+    /// named `AgentRole` is checked against the cost cap of its role.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -384,8 +388,9 @@ impl Engine {
     /// ```
     pub fn new(store: Arc<dyn Store>, provider: Arc<dyn AgentProvider>) -> Self {
         Self {
+            // Every engine enforces agent role cost caps: no wiring can forget it.
+            provider: Arc::new(RoleCostProvider::new(provider, store.clone())),
             store,
-            provider,
             handlers: HashMap::new(),
             event_publisher: EventPublisher::new(),
             log_sender: None,

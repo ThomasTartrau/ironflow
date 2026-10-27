@@ -17,6 +17,7 @@
 //! # }
 //! ```
 
+mod agent_role_store;
 mod api_key_store;
 mod approval_delegation_store;
 mod artifact_store;

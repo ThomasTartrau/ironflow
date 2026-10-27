@@ -168,6 +168,51 @@ For a role with tools, put the persona in `append_system_prompt`: `system_prompt
 the Claude Code prompt, which carries the tool and skill instructions. A structured output
 needs at least 2 turns.
 
+#### Cost cap of a role
+
+A role can declare a cost cap over a calendar period, counted under its `name()`:
+
+```rust,ignore
+use ironflow_engine::config::RoleCostCap;
+use rust_decimal::Decimal;
+
+impl AgentRole for Reviewer {
+    // ...
+    fn name(&self) -> &str {
+        "reviewer"
+    }
+
+    fn cost_cap(&self) -> Option<RoleCostCap> {
+        Some(RoleCostCap::per_month(Decimal::new(50, 0)))
+    }
+}
+```
+
+- The counter is shared by every run of every workflow that calls the role: steps of
+  roles with the same name share one counter. Renaming a role, or its type when it keeps
+  the default name, starts a new counter. A role without `cost_cap` is still counted over a
+  month, so an operator can cap it later.
+- The period is calendar and UTC: `RoleCostCap::per_day` resets at midnight UTC,
+  `RoleCostCap::per_month` on the 1st at 00:00 UTC (the window of
+  `IRONFLOW_MONTHLY_COST_LIMIT_USD`). A cap of 0 disables the role.
+- Before each agent step of the role, the engine reserves room under the cap. Once the cost
+  spent plus the room held by running steps reaches the cap, the step fails with
+  `AgentError::RoleCostCapReached` (role, cap, spent, reserved and when the counter
+  resets) before the provider is called. That error is never retried.
+- A running step holds its `max_budget_usd`; it may overshoot the cap by what it spends
+  above it. A step without `max_budget_usd` holds all the room left while it runs, so a
+  second step of the role is refused until it ends: declare a budget on capped roles.
+- A step that fails without reporting what it spent (a timeout, a crashed process) or is
+  cancelled is charged the room it held, since the provider may have spent it. A failure
+  raised before the model ran (capacity wait, rate limit, unknown account) costs nothing.
+- The cap fails closed: when the counter cannot be read (store or API unreachable), the
+  step fails with `AgentError::RoleCostUnavailable` without calling the provider.
+- A worker that crashes mid-step frees the room it held after at most 10 minutes.
+- An operator reads the counters with `GET /api/v1/agent-roles` (or
+  `ironflow agent-role list`) and can set or lower a cap with
+  `PUT /api/v1/agent-roles/{name}/cost-cap` (or `ironflow agent-role set-cap reviewer --usd 20`).
+  The cap enforced is the lower of the two: an operator cap never raises the code cap.
+
 ### Untrusted content in a prompt
 
 Text the workflow did not write (an issue, a review comment, a diff, a CI log, a webhook

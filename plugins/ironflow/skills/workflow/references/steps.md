@@ -400,13 +400,23 @@ record/replay fixture hash.
 `name()` is recorded on every step of the role as `agent_role`, to list its steps
 (`GET /api/v1/steps?agent_role=`, `ironflow-cli run steps --role`) and its cost
 (`GET /api/v1/stats/agent-roles`, `ironflow-cli stats roles`) across workflows. It defaults
-to the type name (`Reviewer`); override it so a type rename does not split the statistics.
-The caller of `task` cannot change it.
+to the type name (`Reviewer`); override it so a type rename does not split the statistics
+and the cost counter. The caller of `task` cannot change it.
+
+A role may declare a `cost_cap` over a calendar UTC period (`per_day`, `per_month`), shared
+by every run of every workflow calling a role of that `name`. Once the cost spent plus the
+room held by running steps reaches the cap, the step fails with
+`AgentError::RoleCostCapReached` before the provider is called, and is not retried. Give
+capped steps a `max_budget_usd`: a running step holds its budget, and one without a budget
+holds all the room left. A role without `cost_cap` is still counted over a month. An
+operator can cap any role (`ironflow agent-role set-cap`), and only lower a code cap, never
+raise it.
 
 ```rust,no_run
-use ironflow_engine::config::{AgentRole, Prompt, Tool};
+use ironflow_engine::config::{AgentRole, Prompt, RoleCostCap, Tool};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
+use rust_decimal::Decimal;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -443,6 +453,10 @@ impl AgentRole for Reviewer {
 
     fn max_turns(&self) -> Option<u32> {
         Some(6)
+    }
+
+    fn cost_cap(&self) -> Option<RoleCostCap> {
+        Some(RoleCostCap::per_month(Decimal::new(50, 0)))
     }
 }
 

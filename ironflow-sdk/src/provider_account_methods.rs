@@ -10,7 +10,7 @@ use crate::error::Error;
 use crate::types;
 
 /// Percent-encode one path segment (an account UUID or name).
-fn segment(raw: &str) -> String {
+pub(crate) fn segment(raw: &str) -> String {
     raw.bytes()
         .map(|b| {
             if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {

@@ -14,6 +14,7 @@ use ironflow_sdk::IronflowClient;
 
 use crate::commands;
 use crate::commands::account::AccountArgs;
+use crate::commands::agent_role::AgentRoleArgs;
 use crate::commands::api_key::ApiKeyArgs;
 use crate::commands::audit_log::AuditLogArgs;
 use crate::commands::dashboard::DashboardArgs;
@@ -99,6 +100,9 @@ pub enum Commands {
     Delegation(DelegationArgs),
     /// Send and list signals that resume waiting runs.
     Signal(SignalArgs),
+    /// Inspect the cost of agent roles and set their operator cap.
+    #[command(name = "agent-role")]
+    AgentRole(AgentRoleArgs),
     /// Manage workflow templates (add, list, info, create).
     Template(TemplateArgs),
     /// Scaffold a new Ironflow project.
@@ -179,6 +183,7 @@ pub async fn dispatch(client: &IronflowClient, cli: &Cli) -> Result<()> {
         Commands::Schedule(args) => commands::schedule::execute(client, args, cli.json).await,
         Commands::Delegation(args) => commands::delegation::execute(client, args, cli.json).await,
         Commands::Signal(args) => commands::signal::execute(client, args, cli.json).await,
+        Commands::AgentRole(args) => commands::agent_role::execute(client, args, cli.json).await,
         Commands::Template(args) => commands::template::execute(args),
         Commands::Init(args) => commands::init::execute(args),
         Commands::Dashboard(args) => commands::dashboard::execute(client, args),
@@ -192,6 +197,7 @@ mod tests {
     use clap::Parser;
 
     use crate::commands::account::AccountCommands;
+    use crate::commands::agent_role::AgentRoleCommands;
     use crate::commands::api_key::ApiKeyCommands;
     use crate::commands::audit_log::AuditLogCommands;
     use crate::commands::delegation::DelegationCommands;
@@ -1452,6 +1458,63 @@ mod tests {
         assert_eq!(key.as_deref(), Some("k1"));
         assert_eq!(*page, Some(2));
         assert_eq!(*per_page, Some(10));
+    }
+
+    // ── Agent roles ────────────────────────────────────────────────
+
+    fn agent_role_command(args: &[&str]) -> AgentRoleCommands {
+        let mut full = vec!["ironflow-cli", "agent-role"];
+        full.extend_from_slice(args);
+        let cli = parse(&full);
+        let Commands::AgentRole(args) = cli.command else {
+            panic!("expected AgentRole command");
+        };
+        args.command
+    }
+
+    #[test]
+    fn parse_agent_role_list_with_pagination() {
+        let AgentRoleCommands::List { page, per_page } =
+            agent_role_command(&["list", "--page", "2", "--per-page", "10"])
+        else {
+            panic!("expected List subcommand");
+        };
+        assert_eq!(page, Some(2));
+        assert_eq!(per_page, Some(10));
+    }
+
+    #[test]
+    fn parse_agent_role_show() {
+        let AgentRoleCommands::Show { name } = agent_role_command(&["show", "reviewer"]) else {
+            panic!("expected Show subcommand");
+        };
+        assert_eq!(name, "reviewer");
+    }
+
+    #[test]
+    fn parse_agent_role_set_cap() {
+        let AgentRoleCommands::SetCap { name, usd } =
+            agent_role_command(&["set-cap", "reviewer", "--usd", "12.5"])
+        else {
+            panic!("expected SetCap subcommand");
+        };
+        assert_eq!(name, "reviewer");
+        assert!((usd - 12.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_agent_role_set_cap_requires_usd() {
+        let result = Cli::try_parse_from(["ironflow-cli", "agent-role", "set-cap", "reviewer"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_agent_role_clear_cap() {
+        let AgentRoleCommands::ClearCap { name } = agent_role_command(&["clear-cap", "reviewer"])
+        else {
+            panic!("expected ClearCap subcommand");
+        };
+        assert_eq!(name, "reviewer");
     }
 
     #[test]

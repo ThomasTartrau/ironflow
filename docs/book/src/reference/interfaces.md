@@ -50,6 +50,16 @@ $ ironflow-cli stats roles --period 30d
 $ ironflow-cli run steps --role reviewer
 ```
 
+Agent roles with a name report the cost they consumed over their period
+(see [Cost cap of a role](../concepts/steps.md#cost-cap-of-a-role)):
+
+```console
+$ ironflow-cli agent-role list
+$ ironflow-cli agent-role show reviewer
+$ ironflow-cli agent-role set-cap reviewer --usd 20    # admin only, can only lower the code cap
+$ ironflow-cli agent-role clear-cap reviewer
+```
+
 Configuration is resolved in this order: command-line flags (`--url`, `--api-key`), then the
 `IRONFLOW_URL` and `IRONFLOW_API_KEY` environment variables, then `~/.ironflow.toml`:
 
@@ -161,3 +171,11 @@ built against each release. Details in the
 
 Everything above goes through the REST API under `/api/v1`. With the `openapi` feature, the
 server publishes its specification at `/api/v1/openapi.json`.
+
+Agent role cost:
+
+| Route | Access | Purpose |
+|-------|--------|---------|
+| `GET /api/v1/agent-roles` | `stats_read` | Roles by name, with `spent_usd`, `reserved_usd`, `cap_usd`, `remaining_usd`, `resets_at` |
+| `GET /api/v1/agent-roles/{name}` | `stats_read` | One role |
+| `PUT /api/v1/agent-roles/{name}/cost-cap` | admin | Set (`{"operator_cap_usd": 20}`) or clear (`{"operator_cap_usd": null}`) the operator cap; the field is required and unknown fields are refused (422); audited as `agent_role.cost_cap_updated` |

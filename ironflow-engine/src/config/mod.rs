@@ -21,7 +21,7 @@ pub use agent::{
     AgentStep, AgentStepConfig, DEFAULT_RESUME_PROMPT, DEFAULT_UNTRUSTED_INSTRUCTION, Prompt, Tool,
     ToolProfile,
 };
-pub use agent_role::{AgentRole, AgentTask, MAX_ROLE_NAME_LEN};
+pub use agent_role::{AgentRole, AgentTask};
 pub use approval::ApprovalConfig;
 pub use approvers::Approvers;
 pub use artifact::{ArtifactInput, ArtifactOutput, ArtifactRef};
@@ -30,6 +30,9 @@ pub use delay::DelayConfig;
 pub use escalation::{EscalationPolicy, NotificationTarget};
 pub use http::HttpConfig;
 pub use human_input::{HUMAN_INPUT_SCHEMA_KEY, HumanInputConfig};
+// Re-exported so workflow authors can declare the cost cap of a role, and the
+// API can bound a role name, without depending on `ironflow-core` directly.
+pub use ironflow_core::agent_role::{CostPeriod, MAX_ROLE_NAME_LEN, RoleCostCap};
 // Re-exported so workflow authors can name approval assignees and read approval
 // requirements without depending on `ironflow-store` directly.
 pub use ironflow_store::entities::{ApprovalRequirement, Assignee};

@@ -244,6 +244,8 @@ impl RetryPolicy {
 /// - [`OperationError::Agent`] wrapping [`AgentError::ProcessFailed`] or [`AgentError::Timeout`]
 /// - [`OperationError::Agent`] wrapping [`AgentError::Api`] with no status, 429
 ///   or 5xx (529 overloaded included)
+/// - [`OperationError::Agent`] wrapping [`AgentError::RoleCostUnavailable`] (a
+///   transient store failure; the next try still fails closed)
 /// - [`OperationError::Timeout`] (operation-level timeout)
 ///
 /// # Non-retryable errors
@@ -260,6 +262,8 @@ impl RetryPolicy {
 /// - [`OperationError::Agent`] wrapping [`AgentError::NoCapacity`],
 ///   [`AgentError::CapacityWait`] or [`AgentError::AccountNotFound`] (account
 ///   selection already decided: replaying at once hits the same limits)
+/// - [`OperationError::Agent`] wrapping [`AgentError::RoleCostCapReached`] (the
+///   counter of the role only goes down when its period ends)
 /// - [`OperationError::Shell`]
 /// - [`OperationError::Deserialize`]
 /// - [`OperationError::External`]
@@ -273,7 +277,8 @@ pub fn is_retryable(error: &OperationError) -> bool {
             AgentError::ProcessFailed { .. }
             | AgentError::Timeout { .. }
             | AgentError::SchemaValidation { .. }
-            | AgentError::RateLimited { .. } => true,
+            | AgentError::RateLimited { .. }
+            | AgentError::RoleCostUnavailable { .. } => true,
             AgentError::HttpProvider { status_code, .. } => {
                 *status_code == 0 || *status_code >= 500
             }
@@ -284,7 +289,8 @@ pub fn is_retryable(error: &OperationError) -> bool {
             | AgentError::ToolProfileUnsupported { .. }
             | AgentError::NoCapacity { .. }
             | AgentError::CapacityWait { .. }
-            | AgentError::AccountNotFound { .. } => false,
+            | AgentError::AccountNotFound { .. }
+            | AgentError::RoleCostCapReached { .. } => false,
         },
         OperationError::Timeout { .. } => true,
         OperationError::Shell { .. }
@@ -306,6 +312,9 @@ mod tests {
     use std::time::Duration;
 
     use chrono::Utc;
+    use rust_decimal::Decimal;
+
+    use crate::agent_role::CostPeriod;
 
     // --- RetryPolicy builder ---
 
@@ -549,6 +558,28 @@ mod tests {
             name: "team-a".to_string(),
         });
         assert!(!is_retryable(&err));
+    }
+
+    #[test]
+    fn agent_role_cost_cap_reached_is_not_retryable() {
+        let err = OperationError::Agent(AgentError::RoleCostCapReached {
+            role: "reviewer".to_string(),
+            cap_usd: Decimal::ONE,
+            spent_usd: Decimal::ONE,
+            reserved_usd: Decimal::ZERO,
+            period: CostPeriod::Month,
+            resets_at: Utc::now(),
+        });
+        assert!(!is_retryable(&err));
+    }
+
+    #[test]
+    fn agent_role_cost_unavailable_is_retryable() {
+        let err = OperationError::Agent(AgentError::RoleCostUnavailable {
+            role: "reviewer".to_string(),
+            message: "connection refused".to_string(),
+        });
+        assert!(is_retryable(&err));
     }
 
     #[test]

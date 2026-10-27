@@ -13,8 +13,10 @@ use std::fmt;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use thiserror::Error;
 
+use crate::agent_role::CostPeriod;
 use crate::provider::DebugMessage;
 
 /// Top-level error for any workflow operation (shell or agent).
@@ -383,6 +385,73 @@ pub enum AgentError {
     AccountNotFound {
         /// The account name the step asked for.
         name: String,
+    },
+
+    /// The agent role of the step reached its cost cap for the current
+    /// period: the step is refused before the provider is called.
+    ///
+    /// Never retried: the counter only goes down when the period ends.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use ironflow_core::agent_role::CostPeriod;
+    /// use ironflow_core::error::AgentError;
+    /// use rust_decimal::Decimal;
+    ///
+    /// let err = AgentError::RoleCostCapReached {
+    ///     role: "reviewer".to_string(),
+    ///     cap_usd: Decimal::ONE,
+    ///     spent_usd: Decimal::ONE,
+    ///     reserved_usd: Decimal::ZERO,
+    ///     period: CostPeriod::Month,
+    ///     resets_at: Utc::now(),
+    /// };
+    /// assert!(err.to_string().contains("agent role 'reviewer' reached its cost cap of $1 per month"));
+    /// ```
+    #[error(
+        "agent role '{role}' reached its cost cap of ${cap_usd} per {period}: spent ${spent_usd}, reserved ${reserved_usd}; the counter resets at {}",
+        resets_at.to_rfc3339()
+    )]
+    RoleCostCapReached {
+        /// Name of the role.
+        role: String,
+        /// Effective cap of the role (the lower of the code and operator caps).
+        cap_usd: Decimal,
+        /// Cost already settled in the current period.
+        spent_usd: Decimal,
+        /// Cost held by the steps of the role running now.
+        reserved_usd: Decimal,
+        /// Period of the cap.
+        period: CostPeriod,
+        /// When the next period starts and the counter resets.
+        resets_at: DateTime<Utc>,
+    },
+
+    /// The cost of the agent role could not be read: the step is refused
+    /// (fail-closed) before the provider is called.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::error::AgentError;
+    ///
+    /// let err = AgentError::RoleCostUnavailable {
+    ///     role: "reviewer".to_string(),
+    ///     message: "connection refused".to_string(),
+    /// };
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     "cost of agent role 'reviewer' could not be read, step refused: connection refused"
+    /// );
+    /// ```
+    #[error("cost of agent role '{role}' could not be read, step refused: {message}")]
+    RoleCostUnavailable {
+        /// Name of the role.
+        role: String,
+        /// Why the cost could not be read.
+        message: String,
     },
 }
 

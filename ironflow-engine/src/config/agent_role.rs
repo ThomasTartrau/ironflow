@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 
+use ironflow_core::agent_role::{AgentRoleBinding, MAX_ROLE_NAME_LEN, RoleCostCap};
 use ironflow_core::operations::agent::{Effort, PermissionMode};
 use ironflow_core::retry::RetryPolicy;
 use schemars::JsonSchema;
@@ -19,20 +20,6 @@ use serde::de::DeserializeOwned;
 use super::agent::{AgentStep, AgentStepConfig, Tool};
 use crate::error::EngineError;
 use crate::executor::StepOutput;
-
-/// Longest [`AgentRole::name`] accepted, in bytes.
-///
-/// [`AgentRole::task`] panics on a longer name, and the API rejects a longer
-/// `agent_role` filter.
-///
-/// # Examples
-///
-/// ```
-/// use ironflow_engine::config::MAX_ROLE_NAME_LEN;
-///
-/// assert_eq!(MAX_ROLE_NAME_LEN, 128);
-/// ```
-pub const MAX_ROLE_NAME_LEN: usize = 128;
 
 /// A reusable agent with a fixed role: persona, tools, rights and output type.
 ///
@@ -116,9 +103,12 @@ pub trait AgentRole {
     /// CLI and dashboard. Defaults to the type name without its module path
     /// (`Reviewer`). Override it to keep the name stable across a type rename.
     ///
-    /// Renaming the type changes the default name: the steps and costs of the
-    /// role are then split between the old and the new name. The caller of
-    /// [`task`](Self::task) cannot override it.
+    /// The name also keys the cost counter of the role, shared by every step
+    /// of every role with this name and capped by
+    /// [`cost_cap`](Self::cost_cap). Renaming the type changes the default
+    /// name: the steps, costs and counter of the role are then split between
+    /// the old and the new name. The caller of [`task`](Self::task) cannot
+    /// override it.
     ///
     /// # Examples
     ///
@@ -225,6 +215,21 @@ pub trait AgentRole {
         None
     }
 
+    /// Cost cap of the role over a calendar period (UTC), across every run of
+    /// every workflow, counted under its [`name`](Self::name). `None` by
+    /// default: the cost is counted over a month, uncapped until an operator
+    /// sets a cap.
+    ///
+    /// Checked by the engine before each agent step of the role: once the cap
+    /// is reached, the step fails with `AgentError::RoleCostCapReached`
+    /// without calling the provider. A step already running may overshoot it
+    /// by at most its own `max_budget_usd`; a step without one holds all the
+    /// remaining room while it runs. An operator may lower the cap from the
+    /// API, never raise it.
+    fn cost_cap(&self) -> Option<RoleCostCap> {
+        None
+    }
+
     /// Build one task of this role.
     ///
     /// # Panics
@@ -270,6 +275,9 @@ fn short_type_name(full: &'static str) -> &'static str {
 /// The role locks its persona, tools, permission mode, MCP config and output
 /// type: none of them has a setter here, and each of these calls does not
 /// compile.
+///
+/// The name and cost cap of the role are locked too: no setter of the task
+/// changes or removes them, so every task of the role is charged to its counter.
 ///
 /// The system prompt is locked:
 ///
@@ -497,6 +505,7 @@ impl<T: JsonSchema> AgentTask<T> {
         for tool in role.tools() {
             config = config.allow_tool(tool).into();
         }
+        config = config.agent_role(AgentRoleBinding::new(name, role.cost_cap()));
         config = config.output::<T>().into();
         config.role = Some(name.to_string());
         Self {
@@ -864,6 +873,7 @@ impl<T: DeserializeOwned> AgentStep for AgentTask<T> {
 mod tests {
     use super::*;
     use crate::executor::StepArtifacts;
+    use ironflow_core::agent_role::CostPeriod;
     use rust_decimal::Decimal;
     use serde::Deserialize;
     use serde_json::{Value, json, to_value};
@@ -931,6 +941,76 @@ mod tests {
         fn effort(&self) -> Option<Effort> {
             Some(Effort::Low)
         }
+    }
+
+    /// Named and capped at 2 USD a day.
+    struct Capped;
+
+    impl AgentRole for Capped {
+        type Input = String;
+        type Output = Verdict;
+
+        fn prompt(&self, input: String) -> String {
+            input
+        }
+
+        fn name(&self) -> &str {
+            "reviewer"
+        }
+
+        fn cost_cap(&self) -> Option<RoleCostCap> {
+            Some(RoleCostCap::per_day(Decimal::TWO))
+        }
+    }
+
+    #[test]
+    fn a_capped_role_binds_its_tasks_with_its_cap_and_period() {
+        let config = Capped.task("p".to_string()).into_config();
+        assert_eq!(
+            config.agent_role,
+            Some(AgentRoleBinding {
+                name: "reviewer".to_string(),
+                cost_cap_usd: Some(Decimal::TWO),
+                period: CostPeriod::Day,
+            })
+        );
+    }
+
+    #[test]
+    fn a_role_without_cap_counts_under_its_default_name_over_a_month() {
+        let binding = Bare
+            .task("p".to_string())
+            .into_config()
+            .agent_role
+            .expect("every role is bound");
+        assert_eq!(binding.name, "Bare");
+        assert_eq!(binding.cost_cap_usd, None);
+        assert_eq!(binding.period, CostPeriod::Month);
+    }
+
+    #[test]
+    fn the_binding_and_the_recorded_role_share_the_name() {
+        let config = Capped.task("p".to_string()).into_config();
+        assert_eq!(config.role.as_deref(), Some("reviewer"));
+        assert_eq!(
+            config.agent_role.map(|b| b.name).as_deref(),
+            Some("reviewer")
+        );
+    }
+
+    #[test]
+    fn call_site_overrides_keep_the_binding() {
+        let config = Capped
+            .task("p".to_string())
+            .max_budget_usd(5.0)
+            .model("haiku")
+            .allow_failure()
+            .into_config();
+        assert_eq!(config.max_budget_usd, Some(5.0));
+        assert_eq!(
+            config.agent_role.map(|b| b.name),
+            Some("reviewer".to_string())
+        );
     }
 
     fn step_output(output: Value) -> StepOutput {
