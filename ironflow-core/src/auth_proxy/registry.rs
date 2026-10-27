@@ -71,8 +71,13 @@ impl IssuedToken {
     ///
     /// See [`IssuedToken`].
     pub fn short_id(&self) -> &str {
-        self.id.get(..SHORT_ID_LEN).unwrap_or(&self.id)
+        short_token_id(&self.id)
     }
+}
+
+/// First characters of a token id, for logs.
+pub(crate) fn short_token_id(id: &str) -> &str {
+    id.get(..SHORT_ID_LEN).unwrap_or(id)
 }
 
 impl fmt::Debug for IssuedToken {

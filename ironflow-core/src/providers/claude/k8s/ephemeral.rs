@@ -75,9 +75,11 @@ use super::reaper::{ReapReport, reap_orphans};
 use super::toleration::K8sToleration;
 
 mod owner;
+mod step_tokens;
 
 use owner::OwnerPod;
 pub(super) use owner::has_owner;
+use step_tokens::StepTokens;
 
 /// Environment variable carrying the OAuth credentials JSON read from a Secret.
 const CREDENTIALS_ENV_VAR: &str = "IRONFLOW_CLAUDE_CREDENTIALS";
@@ -829,7 +831,8 @@ impl K8sEphemeralProvider {
     /// the pod receives `ANTHROPIC_BASE_URL=<url>`, `ANTHROPIC_AUTH_TOKEN=<opaque
     /// token>` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. The proxy swaps
     /// the opaque token for the real credential. The token is revoked at the
-    /// end of the step, and every token of a run when the run is released.
+    /// end of the step, also when the step is dropped (run cancelled, lease
+    /// lost, run timed out), and every token of a run when the run is released.
     ///
     /// The credential is the step's Provider Account, else the worker
     /// environment (`CLAUDE_CODE_OAUTH_TOKEN`, then `ANTHROPIC_API_KEY`). The
@@ -1278,9 +1281,9 @@ struct CreatedPod {
     start: Instant,
     prompt_configmap: Option<String>,
     configmaps: Option<Api<ConfigMap>>,
-    /// Ids of the auth proxy tokens issued for the pod (Claude and proxied
-    /// secrets), revoked at the end of the step.
-    proxy_token_ids: Vec<String>,
+    /// Auth proxy tokens issued for the pod (Claude and proxied secrets),
+    /// revoked at the end of the step, or when the step is dropped.
+    tokens: StepTokens,
     /// Name of the environment claim mounted in the pod, handed out as
     /// [`AgentOutput::environment_id`].
     environment_id: Option<String>,
@@ -1615,26 +1618,6 @@ impl K8sEphemeralProvider {
         Ok(Some(AuthProxyClient::new(url, &key)))
     }
 
-    /// Revoke the opaque tokens of a step, best effort: their expiry is the backstop.
-    async fn revoke_proxy_tokens(&self, ids: &[String]) {
-        for id in ids {
-            let short = id.get(..12).unwrap_or(id);
-            let result = match self.auth_proxy_client() {
-                Ok(Some(client)) => client.revoke(id).await.map_err(|e| e.to_string()),
-                Ok(None) => Ok(()),
-                Err(e) => Err(e.to_string()),
-            };
-            match result {
-                Ok(()) => debug!(token = %short, "auth proxy token revoked"),
-                Err(e) => warn!(
-                    token = %short,
-                    error = %e,
-                    "auth proxy token revocation failed; it expires at expires-at"
-                ),
-            }
-        }
-    }
-
     /// Shell prefix filling `~/.claude`: the profiles, then the credentials,
     /// so that a profile cannot overwrite them.
     pub(super) fn home_setup_prefix(&self) -> String {
@@ -1889,8 +1872,15 @@ impl K8sEphemeralProvider {
             "creating ephemeral K8s pod"
         );
 
+        let mut tokens = match self.auth_proxy_client() {
+            Ok(client) => StepTokens::new(client),
+            Err(e) => {
+                abort_launch_configmap(&configmaps, prompt_configmap_name.as_deref()).await;
+                return Err(e);
+            }
+        };
         let issued = match self
-            .issue_proxy_token(config, run_id, step, &pod_name, expires_at)
+            .issue_proxy_token(&mut tokens, config, run_id, step, &pod_name, expires_at)
             .await
         {
             Ok(issued) => issued,
@@ -1899,22 +1889,19 @@ impl K8sEphemeralProvider {
                 return Err(e);
             }
         };
-        let claude_ids: Vec<String> = issued.iter().map(|t| t.id.clone()).collect();
         let proxied = &merged.proxied_secrets;
         let secrets = match self
-            .issue_secret_tokens(proxied, run_id, step, &pod_name, expires_at)
+            .issue_secret_tokens(&mut tokens, proxied, run_id, step, &pod_name, expires_at)
             .await
         {
             Ok(secrets) => secrets,
             Err(e) => {
-                self.revoke_proxy_tokens(&claude_ids).await;
+                tokens.revoke().await;
                 abort_launch_configmap(&configmaps, prompt_configmap_name.as_deref()).await;
                 return Err(e);
             }
         };
         let env_vars = self.pod_env_vars(issued.as_ref().map(|t| t.token.as_str()), &secrets);
-        let secret_ids = secrets.iter().map(|(_, t)| t.id.clone());
-        let proxy_token_ids: Vec<String> = claude_ids.into_iter().chain(secret_ids).collect();
 
         let claims: Api<PersistentVolumeClaim> = Api::namespaced(client.clone(), &self.namespace);
         let environment = match self
@@ -1923,7 +1910,7 @@ impl K8sEphemeralProvider {
         {
             Ok(environment) => environment,
             Err(e) => {
-                self.revoke_proxy_tokens(&proxy_token_ids).await;
+                tokens.revoke().await;
                 abort_launch_configmap(&configmaps, prompt_configmap_name.as_deref()).await;
                 return Err(e);
             }
@@ -1984,7 +1971,7 @@ impl K8sEphemeralProvider {
         };
         if let Err(e) = created {
             // No pod runs with the token: drop it now rather than at expiry.
-            self.revoke_proxy_tokens(&proxy_token_ids).await;
+            tokens.revoke().await;
             abort_launch_configmap(&configmaps, prompt_configmap_name.as_deref()).await;
             if let Some(claim) = &environment {
                 abort_environment_claim(&claims, claim).await;
@@ -1998,29 +1985,31 @@ impl K8sEphemeralProvider {
             start,
             prompt_configmap: prompt_configmap_name,
             configmaps: Some(configmaps),
-            proxy_token_ids,
+            tokens,
             environment_id: environment.map(|claim| claim.name),
         })
     }
 
-    /// Issue the auth proxy token of a pod, `None` when no proxy is set.
+    /// Issue the auth proxy token of a pod through the client of `tokens`,
+    /// which tracks it, `None` when no proxy is set.
     ///
     /// The token is bound to the run and step labels (the pod name and
     /// `agent` for an invocation outside a run) and expires with the pod.
     ///
     /// # Errors
     ///
-    /// Returns [`AgentError::ProcessFailed`] when no admin key or credential
-    /// is available, or when the proxy refuses or cannot be reached.
+    /// Returns [`AgentError::ProcessFailed`] when no credential is available,
+    /// or when the proxy refuses or cannot be reached.
     async fn issue_proxy_token(
         &self,
+        tokens: &mut StepTokens,
         config: &AgentConfig,
         run_id: Option<&String>,
         step: Option<&String>,
         pod_name: &str,
         expires_at: u64,
     ) -> Result<Option<IssuedToken>, AgentError> {
-        let Some(client) = self.auth_proxy_client()? else {
+        let Some(client) = tokens.client() else {
             return Ok(None);
         };
         let credential = resolve_credential(config.account.as_ref(), |k| var(k).ok());
@@ -2033,6 +2022,7 @@ impl K8sEphemeralProvider {
             credential: credential.into(),
         };
         let issued = client.issue(&request).await.map_err(auth_proxy_error)?;
+        tokens.push(issued.id.clone());
         info!(
             token = %issued.short_id(),
             pod = %pod_name,
@@ -2043,20 +2033,20 @@ impl K8sEphemeralProvider {
         Ok(Some(issued))
     }
 
-    /// Issue one auth proxy token per proxied secret of a pod, none when no
-    /// proxy is set.
+    /// Issue one auth proxy token per proxied secret of a pod through the
+    /// client of `tokens`, which tracks each one, none when no proxy is set.
     ///
     /// Each token is bound to the same run and step labels as the Claude
     /// token and expires with the pod. When one issuance fails, the tokens
-    /// already issued are revoked before the error is returned.
+    /// already issued stay in `tokens` for the caller to revoke.
     ///
     /// # Errors
     ///
-    /// Returns [`AgentError::ProcessFailed`] when no admin key is available,
-    /// when a secret is invalid, or when the proxy refuses or cannot be
-    /// reached.
+    /// Returns [`AgentError::ProcessFailed`] when a secret is invalid, or
+    /// when the proxy refuses or cannot be reached.
     async fn issue_secret_tokens(
         &self,
+        tokens: &mut StepTokens,
         secrets: &[ProxiedSecret],
         run_id: Option<&String>,
         step: Option<&String>,
@@ -2066,42 +2056,29 @@ impl K8sEphemeralProvider {
         if secrets.is_empty() {
             return Ok(Vec::new());
         }
-        let Some(client) = self.auth_proxy_client()? else {
+        let Some(client) = tokens.client().cloned() else {
             return Ok(Vec::new());
         };
         let (run_id, step) = grant_scope(run_id, step, pod_name);
         let mut issued: Vec<(ProxiedSecret, IssuedToken)> = Vec::with_capacity(secrets.len());
         for secret in secrets {
-            let result = match secret.to_credential() {
-                Ok(credential) => {
-                    let request = TokenRequest {
-                        run_id: run_id.clone(),
-                        step: step.clone(),
-                        expires_at,
-                        credential: credential.into(),
-                    };
-                    client.issue(&request).await
-                }
-                Err(e) => Err(e),
+            let request = TokenRequest {
+                run_id: run_id.clone(),
+                step: step.clone(),
+                expires_at,
+                credential: secret.to_credential().map_err(auth_proxy_error)?.into(),
             };
-            match result {
-                Ok(token) => {
-                    info!(
-                        token = %token.short_id(),
-                        secret = %secret.name,
-                        pod = %pod_name,
-                        run_id = %run_id,
-                        step = %step,
-                        "auth proxy secret token issued"
-                    );
-                    issued.push((secret.clone(), token));
-                }
-                Err(e) => {
-                    let ids: Vec<String> = issued.into_iter().map(|(_, t)| t.id).collect();
-                    self.revoke_proxy_tokens(&ids).await;
-                    return Err(auth_proxy_error(e));
-                }
-            }
+            let token = client.issue(&request).await.map_err(auth_proxy_error)?;
+            tokens.push(token.id.clone());
+            info!(
+                token = %token.short_id(),
+                secret = %secret.name,
+                pod = %pod_name,
+                run_id = %run_id,
+                step = %step,
+                "auth proxy secret token issued"
+            );
+            issued.push((secret.clone(), token));
         }
         Ok(issued)
     }
@@ -2500,7 +2477,7 @@ impl AgentProvider for K8sEphemeralProvider {
         Box::pin(async move {
             let created = self.create_pod(config).await?;
             let result = self.run_created(config, &created).await;
-            self.revoke_proxy_tokens(&created.proxy_token_ids).await;
+            created.tokens.revoke().await;
             result
         })
     }
@@ -2522,7 +2499,7 @@ impl AgentProvider for K8sEphemeralProvider {
 
             let created = self.create_pod(config).await?;
             let result = self.run_created_with_logs(config, &created, log_sink).await;
-            self.revoke_proxy_tokens(&created.proxy_token_ids).await;
+            created.tokens.revoke().await;
             result
         })
     }

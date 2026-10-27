@@ -83,10 +83,14 @@ tag. There is no `latest` tag: pin the version.
   expiry (`ironflow.io/expires-at`). The pod receives `ANTHROPIC_BASE_URL` (the
   proxy URL), `ANTHROPIC_AUTH_TOKEN` (the opaque token) and
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. The worker revokes the token
-  when the step ends, whatever the outcome, and every token of a run when the
-  run is released; the expiry is the backstop. An unknown, revoked or expired
-  token gets a 401. If the proxy cannot issue a token, the step fails before
-  any pod is created.
+  when the step ends, whatever the outcome, including a step dropped before
+  it ends (run cancelled, lease lost, run or workflow timed out, parallel
+  branch aborted), and every token of a run when the run is released; the
+  expiry is the backstop, after a worker crash or shutdown. A step that ends
+  waits at most 5 seconds for the revocation, which goes on in the background
+  past it. A cancelled run is dropped at the next lease renewal (every 30 s
+  by default). An unknown, revoked or expired token gets a 401. If the proxy
+  cannot issue a token, the step fails before any pod is created.
 - **Restrictions.** The proxy only relays GET and POST requests under `/v1/`
   to `api.anthropic.com`. A path outside `/v1/` (including `/admin`, which needs
   the admin key) or a request for another host (absolute-form URI, `CONNECT`) gets
