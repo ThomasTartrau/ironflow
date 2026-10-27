@@ -2258,7 +2258,7 @@ mod tests {
         table.set_width(1000);
         let output = table.to_string();
         let split = |line: &str| -> Vec<String> {
-            line.split('│')
+            line.split(['│', '┆'])
                 .map(|cell| cell.trim().to_string())
                 .collect()
         };

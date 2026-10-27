@@ -55,7 +55,6 @@ pub async fn get_agent_role_stats(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use axum::Router;
@@ -63,66 +62,28 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
     use http_body_util::BodyExt;
-    use ironflow_auth::jwt::JwtConfig;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
-    use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{
-        NewRun, NewStep, StepKind, StepStatus, StepUpdate, TriggerKind, step_trace_id,
-    };
+    use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_trace_id};
     use ironflow_store::store::RunStore;
     use rust_decimal::Decimal;
     use serde_json::{Value as JsonValue, from_slice, json};
-    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
     use super::*;
-    use crate::routes::test_helpers::create_user_auth_header;
+    use crate::routes::test_helpers::{
+        create_named_run, create_user_auth_header, state_with_engine,
+    };
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
-        let provider = Arc::new(ClaudeCodeProvider::new());
-        let engine = Arc::new(Engine::new(store.clone(), provider));
-        let jwt_config = Arc::new(JwtConfig {
-            secret: "test-secret".to_string(),
-            access_token_ttl_secs: 900,
-            refresh_token_ttl_secs: 604800,
-            cookie_domain: None,
-            cookie_secure: false,
-        });
-        let (event_sender, _) = broadcast::channel::<Event>(1);
-        AppState::new(
-            store,
-            engine,
-            jwt_config,
-            "test-worker-token".to_string(),
-            event_sender,
-        )
+        let engine = Engine::new(store.clone(), Arc::new(ClaudeCodeProvider::new()));
+        state_with_engine(store, engine, false)
     }
 
     async fn create_run(store: &InMemoryStore, workflow: &str) -> Uuid {
-        store
-            .create_run(NewRun {
-                created_by: None,
-                workflow_name: workflow.to_string(),
-                trigger: TriggerKind::Manual,
-                payload: json!({}),
-                max_retries: 0,
-                handler_version: None,
-                labels: HashMap::new(),
-                scheduled_at: None,
-                idempotency_key: None,
-                concurrency_key: None,
-                priority: 0,
-                concurrency_limits: Vec::new(),
-                max_cost_usd: None,
-                worker_tags: Vec::new(),
-            })
-            .await
-            .expect("create run")
-            .into_run()
-            .id
+        create_named_run(store, workflow).await.id
     }
 
     /// Create an agent step of `role` and run it to `status`.

@@ -295,7 +295,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, NewStep, StepUpdate, TriggerKind, step_trace_id};
     use ironflow_store::store::RunStore;
-    use serde_json::json;
+    use serde_json::{json, to_value};
 
     use super::*;
 
@@ -366,7 +366,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_is_null_by_default() {
-        let body = serde_json::to_value(StepResponse::from(step().await)).expect("serialize");
+        let body = to_value(StepResponse::from(step().await)).expect("serialize");
         assert!(body["account"].is_null());
     }
 
@@ -378,7 +378,7 @@ mod tests {
             name: "perso".to_string(),
             display_name: "Compte perso".to_string(),
         });
-        let body = serde_json::to_value(response).expect("serialize");
+        let body = to_value(response).expect("serialize");
         assert_eq!(body["account"]["id"], id.to_string());
         assert_eq!(body["account"]["name"], "perso");
         assert_eq!(body["account"]["display_name"], "Compte perso");
@@ -386,7 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn environment_id_is_null_by_default() {
-        let body = serde_json::to_value(StepResponse::from(step().await)).expect("serialize");
+        let body = to_value(StepResponse::from(step().await)).expect("serialize");
         assert!(body["environment_id"].is_null());
     }
 
@@ -395,14 +395,14 @@ mod tests {
         let mut step = step().await;
         step.environment_id = Some("ironflow-env-0192f0c1".to_string());
 
-        let body = serde_json::to_value(StepResponse::from(step)).expect("serialize");
+        let body = to_value(StepResponse::from(step)).expect("serialize");
 
         assert_eq!(body["environment_id"], "ironflow-env-0192f0c1");
     }
 
     #[tokio::test]
     async fn session_id_is_null_by_default() {
-        let body = serde_json::to_value(StepResponse::from(step().await)).expect("serialize");
+        let body = to_value(StepResponse::from(step().await)).expect("serialize");
         assert!(body["session_id"].is_null());
     }
 
@@ -411,14 +411,14 @@ mod tests {
         let mut step = step().await;
         step.session_id = Some("0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d".to_string());
 
-        let body = serde_json::to_value(StepResponse::from(step)).expect("serialize");
+        let body = to_value(StepResponse::from(step)).expect("serialize");
 
         assert_eq!(body["session_id"], "0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d");
     }
 
     #[tokio::test]
     async fn agent_role_is_null_by_default() {
-        let body = serde_json::to_value(StepResponse::from(step().await)).expect("serialize");
+        let body = to_value(StepResponse::from(step().await)).expect("serialize");
         assert!(body["agent_role"].is_null());
     }
 
@@ -427,14 +427,14 @@ mod tests {
         let mut step = step().await;
         step.agent_role = Some("Reviewer".to_string());
 
-        let body = serde_json::to_value(StepResponse::from(step)).expect("serialize");
+        let body = to_value(StepResponse::from(step)).expect("serialize");
 
         assert_eq!(body["agent_role"], "Reviewer");
     }
 
     #[tokio::test]
     async fn artifacts_serialize_as_a_json_array() {
-        let body = serde_json::to_value(StepResponse::from(step().await)).expect("serialize");
+        let body = to_value(StepResponse::from(step().await)).expect("serialize");
         assert!(body["artifacts"].is_array());
     }
 
@@ -592,7 +592,7 @@ mod tests {
 
         assert_eq!(response.trace_id, expected_trace_id);
 
-        let body = serde_json::to_value(&response).expect("serialize");
+        let body = to_value(&response).expect("serialize");
         assert!(body["trace_id"].is_string());
     }
 }
