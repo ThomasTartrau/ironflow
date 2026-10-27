@@ -242,3 +242,29 @@ async fn list_reports_a_seen_role() {
     assert!(page.total >= 1);
     assert!(page.items.len() <= 100);
 }
+
+#[tokio::test]
+#[ignore]
+async fn caps_and_budgets_above_a_million_are_stored() {
+    let store = get_store().await;
+    let role = unique_role("large");
+    let cap = Decimal::from(5_000_000);
+    let budget = Decimal::from(2_000_000);
+    let req = request(&role, Some(cap), Some(budget));
+    let admission = store.reserve_agent_role_cost(req.clone()).await.unwrap();
+    assert!(matches!(
+        admission,
+        RoleCostAdmission::Admitted { amount_usd, .. } if amount_usd == budget
+    ));
+    store
+        .settle_agent_role_cost(settlement(req.reservation_id, budget, month(10)))
+        .await
+        .unwrap();
+    let record = store
+        .set_agent_role_operator_cap(&role, Some(Decimal::from(3_000_000)))
+        .await
+        .unwrap();
+    assert_eq!(record.spent_usd, budget);
+    assert_eq!(record.code_cap_usd, Some(cap));
+    assert_eq!(record.operator_cap_usd, Some(Decimal::from(3_000_000)));
+}

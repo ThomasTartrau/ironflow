@@ -187,6 +187,9 @@ impl AgentRole for Reviewer {
 - A running step holds its `max_budget_usd`; it may overshoot the cap by what it spends
   above it. A step without `max_budget_usd` holds all the room left while it runs, so a
   second step of the role is refused until it ends: declare a budget on capped roles.
+- A step that fails without reporting what it spent (a timeout, a crashed process) or is
+  cancelled is charged the room it held, since the provider may have spent it. A failure
+  raised before the model ran (capacity wait, rate limit, unknown account) costs nothing.
 - The cap fails closed: when the counter cannot be read (store or API unreachable), the
   step fails with `AgentError::RoleCostUnavailable` without calling the provider.
 - A worker that crashes mid-step frees the room it held after at most 10 minutes.

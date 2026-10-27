@@ -15,7 +15,10 @@
 //!    renewed while the provider call runs. A crashed worker frees the room
 //!    when the lease expires.
 //! 3. **Settlement**: the cost the provider reported is added to the counter
-//!    of the current period and the reservation is released.
+//!    of the current period and the reservation is released. A failure raised
+//!    before the model ran (capacity wait, rate limit, unknown account) costs
+//!    nothing; any other failure that reports no usage, or a dropped
+//!    invocation, is charged the room it held.
 //!
 //! Admission sees every running step's reservation, so the workers together
 //! overshoot the cap by at most one step's actual cost above its budget.
@@ -77,7 +80,7 @@ impl fmt::Debug for RoleCostProvider {
     }
 }
 
-/// Releases the reservation of an invocation dropped before it settled (a
+/// Settles the reservation of an invocation dropped before it settled (a
 /// guard timeout, a cancellation), so its room is freed at once instead of
 /// at lease expiry.
 struct ReservationGuard {
@@ -85,6 +88,10 @@ struct ReservationGuard {
     reservation_id: Uuid,
     role: String,
     period: CostPeriod,
+    /// Room the reservation holds, charged when the step's real cost is
+    /// unknown: the provider may have spent it, and charging zero would let
+    /// a role whose steps keep failing spend without limit.
+    reserved_usd: Decimal,
     settled: bool,
 }
 
@@ -125,7 +132,7 @@ impl Drop for ReservationGuard {
             reservation_id: self.reservation_id,
             period: self.period.as_str().to_string(),
             period_start: self.period.start(Utc::now()),
-            cost_usd: Decimal::ZERO,
+            cost_usd: self.reserved_usd,
         };
         handle.spawn(async move {
             let reservation_id = settlement.reservation_id;
@@ -142,15 +149,35 @@ impl Drop for ReservationGuard {
 }
 
 /// Cost an invocation reported, including the partial cost of a failure:
-/// the same accounting as the run cost.
-fn reported_cost(result: &Result<AgentOutput, AgentError>) -> Decimal {
+/// the same accounting as the run cost. `None` when a failure carries no
+/// usage: the provider may have spent money it did not report.
+fn reported_cost(result: &Result<AgentOutput, AgentError>) -> Option<Decimal> {
     let cost = match result {
-        Ok(output) => output.cost_usd,
+        // A success without a cost comes from a provider that reports none.
+        Ok(output) => return Some(to_decimal(output.cost_usd)),
         Err(AgentError::SchemaValidation { partial_usage, .. }) => partial_usage.cost_usd,
         Err(AgentError::BudgetExceeded { spent_usd, .. }) => Some(*spent_usd),
+        // Raised before the model ran (capacity wait, unknown account, 429,
+        // pre-flight checks): nothing was spent, so nothing is charged.
+        Err(
+            AgentError::CapacityWait { .. }
+            | AgentError::NoCapacity { .. }
+            | AgentError::AccountNotFound { .. }
+            | AgentError::RateLimited { .. }
+            | AgentError::PromptTooLarge { .. }
+            | AgentError::UnknownToolProfile { .. }
+            | AgentError::ToolProfileUnsupported { .. }
+            | AgentError::RoleCostCapReached { .. }
+            | AgentError::RoleCostUnavailable { .. },
+        ) => return Some(Decimal::ZERO),
         Err(_) => None,
     };
-    cost.and_then(|c| Decimal::try_from(c).ok())
+    cost.map(|c| to_decimal(Some(c)))
+}
+
+fn to_decimal(cost_usd: Option<f64>) -> Decimal {
+    cost_usd
+        .and_then(|c| Decimal::try_from(c).ok())
         .unwrap_or(Decimal::ZERO)
 }
 
@@ -208,7 +235,8 @@ impl RoleCostProvider {
             }
         };
 
-        guard.settle(reported_cost(&result)).await;
+        let cost_usd = reported_cost(&result).unwrap_or(guard.reserved_usd);
+        guard.settle(cost_usd).await;
         result
     }
 
@@ -231,6 +259,7 @@ impl RoleCostProvider {
             reservation_id,
             role: binding.name.clone(),
             period: binding.period,
+            reserved_usd: budget_usd.unwrap_or(Decimal::ZERO),
             settled: false,
         };
         let request = RoleCostReservationRequest {
@@ -279,7 +308,10 @@ impl RoleCostProvider {
                     resets_at: binding.period.next_start(now),
                 })
             }
-            Ok(RoleCostAdmission::Admitted { .. }) => Ok(guard),
+            Ok(RoleCostAdmission::Admitted { amount_usd, .. }) => {
+                guard.reserved_usd = amount_usd;
+                Ok(guard)
+            }
         }
     }
 }
@@ -426,7 +458,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_dropped_invocation_frees_its_reservation() {
+    async fn a_dropped_invocation_is_charged_its_reservation() {
         let store = Arc::new(InMemoryStore::new());
         let provider = RoleCostProvider::new(Arc::new(Hanging), store.clone());
         let config = bound(Some(Decimal::ONE), None);
@@ -449,7 +481,54 @@ mod tests {
             sleep(Duration::from_millis(10)).await;
         }
         assert_eq!(reserved, Decimal::ZERO);
+        // The provider may have spent the room it held: the cap stays closed.
+        let record = store.get_agent_role("reviewer").await.unwrap().unwrap();
+        assert_eq!(record.spent_usd, Decimal::ONE);
+    }
+
+    #[tokio::test]
+    async fn a_failure_without_usage_is_charged_its_reservation() {
+        let store = Arc::new(InMemoryStore::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let inner: Arc<dyn AgentProvider> = Arc::new(MockAgentProvider::new(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Err(AgentError::Timeout {
+                limit: Duration::from_secs(1),
+            })
+        }));
+        let provider = RoleCostProvider::new(inner, store.clone());
+        let config = bound(Some(Decimal::ONE), Some(0.6));
+        provider.invoke(&config).await.expect_err("timed out");
+        let record = store.get_agent_role("reviewer").await.unwrap().unwrap();
+        assert_eq!(record.spent_usd, Decimal::new(6, 1));
+        assert_eq!(record.reserved_usd, Decimal::ZERO);
+
+        provider.invoke(&config).await.expect_err("timed out again");
+        let err = provider.invoke(&config).await.expect_err("cap reached");
+        assert!(matches!(err, AgentError::RoleCostCapReached { .. }));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_failure_raised_before_the_model_ran_is_charged_nothing() {
+        let store = Arc::new(InMemoryStore::new());
+        let inner: Arc<dyn AgentProvider> = Arc::new(MockAgentProvider::new(|_| {
+            Err(AgentError::CapacityWait {
+                kind: "claude".to_string(),
+                wake_at: Utc::now(),
+            })
+        }));
+        let provider = RoleCostProvider::new(inner, store.clone());
+        // Without a budget the step holds all the room: charging it would
+        // lock the role until the period ends.
+        let config = bound(Some(Decimal::ONE), None);
+        for _ in 0..3 {
+            let err = provider.invoke(&config).await.expect_err("capacity wait");
+            assert!(matches!(err, AgentError::CapacityWait { .. }));
+        }
         let record = store.get_agent_role("reviewer").await.unwrap().unwrap();
         assert_eq!(record.spent_usd, Decimal::ZERO);
+        assert_eq!(record.reserved_usd, Decimal::ZERO);
     }
 }
