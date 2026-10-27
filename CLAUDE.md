@@ -101,6 +101,7 @@ Every public item MUST have rustdoc documentation. No exceptions.
 - To read the nonce of a rendered `Prompt` in a test, take it from the last closing tag
   (`rsplit("</untrusted nonce=\"")`): `DEFAULT_UNTRUSTED_INSTRUCTION` quotes
   `<untrusted nonce="...">`, so the first opening tag yields `...` (hit on #233).
+- The worker always installs a log sender, so agent steps run through `AgentProvider::invoke_with_logs`, not `invoke`: a provider test on `invoke` alone misses the production path (caught in review of #238).
 - Shell tests spawn real processes.
 - HTTP tests use real axum routers via `into_router()` + `tower::ServiceExt::oneshot`, or real TCP with `TcpListener::bind("127.0.0.1:0")`.
 

@@ -74,6 +74,8 @@ pub use policy::{
     downstream_headers, error_body, extract_opaque_token, is_allowed_method, is_allowed_path,
     is_relay_method, is_relay_path, secret_upstream_headers, upstream_headers,
 };
+#[cfg(feature = "transport-k8s")]
+pub(crate) use registry::short_token_id;
 pub use registry::{
     AuthProxyRegistry, Grant, IssuedToken, TokenRejection, TokenRequest, admin_key_matches,
     token_id,
