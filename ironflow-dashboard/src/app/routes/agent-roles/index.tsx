@@ -119,7 +119,7 @@ export function Component() {
 				{role && (
 					<div className="space-y-4">
 						<h2 className="text-sm font-medium">{`Steps of role ${role}`}</h2>
-						<AgentRoleStepsTable role={role} steps={steps} />
+						<AgentRoleStepsTable agentRole={role} steps={steps} />
 						{meta && (
 							<Pagination
 								currentPage={query.page}

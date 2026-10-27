@@ -34,7 +34,7 @@ describe("AgentRoleStepsTable", () => {
 	it("renders one row per step", () => {
 		renderWithRouter(
 			<AgentRoleStepsTable
-				role="Reviewer"
+				agentRole="Reviewer"
 				steps={[
 					stepFixture(),
 					stepFixture({
@@ -56,7 +56,7 @@ describe("AgentRoleStepsTable", () => {
 
 	it("links each step to its run", () => {
 		renderWithRouter(
-			<AgentRoleStepsTable role="Reviewer" steps={[stepFixture()]} />,
+			<AgentRoleStepsTable agentRole="Reviewer" steps={[stepFixture()]} />,
 		);
 
 		const link = screen.getByRole("link", { name: RUN_ID.slice(0, 8) });
@@ -64,7 +64,7 @@ describe("AgentRoleStepsTable", () => {
 	});
 
 	it("shows an empty state without steps", () => {
-		renderWithRouter(<AgentRoleStepsTable role="Reviewer" steps={[]} />);
+		renderWithRouter(<AgentRoleStepsTable agentRole="Reviewer" steps={[]} />);
 
 		expect(
 			screen.getByText("No step recorded for role Reviewer"),

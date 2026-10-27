@@ -1973,7 +1973,7 @@ pub use crate::decision::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{from_str, json, to_string};
+    use serde_json::{from_str, json, to_string, to_value};
 
     use crate::auth_proxy::SecretInjection;
 
@@ -2740,7 +2740,7 @@ mod tests {
 
     #[test]
     fn role_is_skipped_when_none() {
-        let json = serde_json::to_value(AgentConfig::new("p")).unwrap();
+        let json = to_value(AgentConfig::new("p")).unwrap();
         assert!(json.get("role").is_none());
     }
 
@@ -2748,7 +2748,7 @@ mod tests {
     fn role_roundtrips() {
         let config: AgentConfig = from_str(r#"{"prompt":"p","role":"Reviewer"}"#).unwrap();
         assert_eq!(config.role.as_deref(), Some("Reviewer"));
-        let json = serde_json::to_value(&config).unwrap();
+        let json = to_value(&config).unwrap();
         assert_eq!(json["role"], json!("Reviewer"));
     }
 

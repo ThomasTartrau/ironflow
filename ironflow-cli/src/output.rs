@@ -2253,13 +2253,28 @@ mod tests {
 
     #[test]
     fn steps_table_shows_a_dash_without_role() {
-        let output = steps_table(&[agent_step(None)]).to_string();
+        let mut table = steps_table(&[agent_step(None)]);
+        // Wide enough that no cell wraps, so the row stays on a single line.
+        table.set_width(1000);
+        let output = table.to_string();
+        let split = |line: &str| -> Vec<String> {
+            line.split('│')
+                .map(|cell| cell.trim().to_string())
+                .collect()
+        };
+        let header = output
+            .lines()
+            .find(|line| line.contains("Role"))
+            .expect("header row");
+        let role_index = split(header)
+            .iter()
+            .position(|cell| cell == "Role")
+            .expect("Role column");
         let row = output
             .lines()
             .find(|line| line.contains("review"))
             .expect("step row");
-        let cells: Vec<&str> = row.split('│').map(str::trim).collect();
-        assert_eq!(cells[3], "-", "{row}");
+        assert_eq!(split(row)[role_index], "-", "{row}");
     }
 
     #[test]

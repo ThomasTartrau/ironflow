@@ -14,13 +14,13 @@ import {
 } from "@/components/ui/table";
 
 interface AgentRoleStepsTableProps {
-	role: string;
+	agentRole: string;
 	steps: StepResponse[];
 }
 
 /** Agent steps of one role across every run and workflow, newest first. */
 export function AgentRoleStepsTable({
-	role,
+	agentRole,
 	steps,
 }: AgentRoleStepsTableProps) {
 	if (steps.length === 0) {
@@ -28,7 +28,7 @@ export function AgentRoleStepsTable({
 			<div className="flex flex-col items-center gap-3 py-12 border border-dashed rounded-[var(--radius-xl)] bg-muted/20 text-center">
 				<ListChecks className="size-8 text-muted-foreground/40" />
 				<p className="text-sm font-medium text-foreground">
-					{`No step recorded for role ${role}`}
+					{`No step recorded for role ${agentRole}`}
 				</p>
 			</div>
 		);
@@ -36,7 +36,7 @@ export function AgentRoleStepsTable({
 
 	return (
 		<div className="rounded-[var(--radius-xl)] border overflow-x-auto">
-			<Table aria-label={`Steps of role ${role}`}>
+			<Table aria-label={`Steps of role ${agentRole}`}>
 				<TableHeader>
 					<TableRow>
 						<TableHead>Step</TableHead>
