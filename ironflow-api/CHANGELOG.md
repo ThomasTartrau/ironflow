@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.53.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.52.19...ironflow-api-v2.53.0) - 2026-10-27
+
+### Added
+
+- #231 track agent steps and costs per agent role
+
+
+### Fixed
+
+- #231 CI (attempt 2)
+
 ## [2.52.9](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.52.8...ironflow-api-v2.52.9) - 2026-10-16
 ## [2.52.7](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.52.6...ironflow-api-v2.52.7) - 2026-10-15
 ## [2.52.6](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.52.5...ironflow-api-v2.52.6) - 2026-10-15

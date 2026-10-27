@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.39](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-mcp-v0.1.38...ironflow-mcp-v0.1.39) - 2026-10-27
+
+### Added
+
+- #231 track agent steps and costs per agent role
+
 ## [0.1.37](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-mcp-v0.1.36...ironflow-mcp-v0.1.37) - 2026-10-15
 ## [0.1.35](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-mcp-v0.1.34...ironflow-mcp-v0.1.35) - 2026-10-12
 
