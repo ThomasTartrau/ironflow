@@ -78,7 +78,6 @@ const JITTER_RATIO: f64 = 0.2;
 /// | [`EngineError::HumanInputRejected`] | a human decision, replaying cannot change it |
 /// | [`EngineError::ReplayDivergence`] | replaying reproduces the same position divergence |
 /// | [`EngineError::HandlerVersionMismatch`] | replaying reproduces the same incompatible version |
-/// | [`EngineError::SupervisionFailed`] | like a malformed typed answer; a retry pays for every round again |
 ///
 /// [`EngineError::Operation`] delegates to
 /// [`ironflow_core::retry::is_retryable`], so a 5xx or an agent timeout is
@@ -138,10 +137,7 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         // Deterministic: replaying reproduces the same position divergence or
         // the same incompatible handler version.
         | EngineError::ReplayDivergence { .. }
-        | EngineError::HandlerVersionMismatch { .. }
-        // Like a typed answer that does not match its type (Serialization):
-        // the supervisor misbehaved, retrying pays for every round again.
-        | EngineError::SupervisionFailed { .. } => false,
+        | EngineError::HandlerVersionMismatch { .. } => false,
     }
 }
 
@@ -380,15 +376,6 @@ mod tests {
             workflow_name: "deploy".to_string(),
             run_version: "1.0.0".to_string(),
             current_version: "2.0.0".to_string(),
-        };
-        assert!(!is_run_retryable(&err));
-    }
-
-    #[test]
-    fn supervision_failed_is_not_retryable() {
-        let err = EngineError::SupervisionFailed {
-            supervisor: "lead".to_string(),
-            reason: "still delegating after 5 rounds".to_string(),
         };
         assert!(!is_run_retryable(&err));
     }

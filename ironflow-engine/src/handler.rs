@@ -60,10 +60,8 @@ use crate::guard::WorkflowGuardConfig;
 use crate::run_creator::{CreateRunOpts, RunCreator, RunCreatorFuture};
 use crate::schedule::CronSchedule;
 
-mod team;
 mod typed;
 
-pub use team::TeamWorkflow;
 pub use typed::{TypedWorkflow, sub_workflow_names};
 
 /// Generate a JSON Schema [`Value`] from a type that derives [`JsonSchema`].
