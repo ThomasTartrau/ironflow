@@ -16,10 +16,10 @@ use crate::approval_delegation_store::ApprovalDelegationStore;
 use crate::artifact_store::ArtifactStore;
 use crate::audit_log_store::AuditLogStore;
 use crate::entities::{
-    ConcurrencyGroupBacklog, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, PurgePolicy,
-    PurgeableRun, ReapedRun, Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate,
-    StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval, StepDependency, StepUpdate,
-    WorkerCapabilities, WorkflowPause,
+    AgentRoleStats, ConcurrencyGroupBacklog, LeaseRequest, NewRun, NewStep, NewStepDependency,
+    Page, PurgePolicy, PurgeableRun, ReapedRun, Run, RunCreation, RunFilter, RunStats, RunStatus,
+    RunUpdate, StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval, StepDependency,
+    StepUpdate, WorkerCapabilities, WorkflowPause,
 };
 use crate::error::StoreError;
 use crate::log_store::LogStore;
@@ -465,6 +465,89 @@ pub trait RunStore: Send + Sync {
         &self,
         filter: StatsHistoryFilter,
     ) -> StoreFuture<'_, Vec<StatsHistoryBucket>>;
+
+    /// List the agent steps recorded for one agent role, across every run and
+    /// workflow, newest first (`created_at DESC, id DESC`).
+    ///
+    /// Matches [`Step::agent_role`] exactly. `page` is 1-based. Steps stored
+    /// before roles were recorded have no role and are never listed.
+    ///
+    /// The default implementation returns [`StoreError::Database`]: a store
+    /// that cannot query steps by role does not support it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Database`] on underlying store failures, or when
+    /// the store does not support the query.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_store::store::RunStore;
+    ///
+    /// # async fn example(store: &dyn RunStore) -> Result<(), ironflow_store::error::StoreError> {
+    /// let page = store.list_steps_by_agent_role("Reviewer", 1, 20).await?;
+    /// for step in &page.items {
+    ///     println!("{} in run {}: ${}", step.name, step.run_id, step.cost_usd);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn list_steps_by_agent_role<'a>(
+        &'a self,
+        agent_role: &'a str,
+        page: u32,
+        per_page: u32,
+    ) -> StoreFuture<'a, Page<Step>> {
+        let _ = (agent_role, page, per_page);
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "list_steps_by_agent_role not supported by this store".to_string(),
+            ))
+        })
+    }
+
+    /// Aggregate the agent steps created at or after `created_after` by agent
+    /// role, all workflows combined.
+    ///
+    /// Only steps with a [`Step::agent_role`] count. `executions` is the number
+    /// of step records (each attempt counts), `failed` the steps in the
+    /// `Failed` state, and the cost and duration are sums. Sorted by
+    /// `total_cost_usd` descending, then by role name.
+    ///
+    /// The default implementation returns [`StoreError::Database`]: a store
+    /// that cannot aggregate steps by role does not support it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Database`] on underlying store failures, or when
+    /// the store does not support the query.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use chrono::{Duration, Utc};
+    /// use ironflow_store::store::RunStore;
+    ///
+    /// # async fn example(store: &dyn RunStore) -> Result<(), ironflow_store::error::StoreError> {
+    /// let roles = store.get_agent_role_stats(Utc::now() - Duration::days(7)).await?;
+    /// for role in &roles {
+    ///     println!("{}: {} runs, ${}", role.agent_role, role.executions, role.total_cost_usd);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn get_agent_role_stats(
+        &self,
+        created_after: DateTime<Utc>,
+    ) -> StoreFuture<'_, Vec<AgentRoleStats>> {
+        let _ = created_after;
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "get_agent_role_stats not supported by this store".to_string(),
+            ))
+        })
+    }
 
     /// Create step dependency edges in batch.
     ///

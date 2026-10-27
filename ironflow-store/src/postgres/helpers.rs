@@ -9,6 +9,7 @@ use strum::IntoEnumIterator;
 
 use crate::entities::{
     Assignee, FsmState, ProviderKind, Run, RunActor, RunStatus, Step, StepKind, StepStatus,
+    agent_role_from_input,
 };
 use crate::error::StoreError;
 
@@ -206,17 +207,20 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
     let kind_str: &str = row.get("kind");
     let cost_usd: Decimal = row.get("cost_usd");
     let state_machine_id = row.get("state_machine__id");
+    let kind = parse_step_kind(kind_str)?;
+    let input: Option<Value> = row.get("input");
+    let agent_role = agent_role_from_input(&kind, input.as_ref());
 
     Ok(Step {
         id: row.get("id"),
         trace_id: row.get("trace_id"),
         run_id: row.get("run_id"),
         name: row.get("name"),
-        kind: parse_step_kind(kind_str)?,
+        kind,
         position: row.get::<i32, _>("position") as u32,
         status: FsmState::new(parse_step_status(state_name)?, state_machine_id),
         attempt: row.get::<i32, _>("attempt") as u32,
-        input: row.get("input"),
+        input,
         output: row.get("output"),
         error: row.get("error"),
         duration_ms: row.get::<i64, _>("duration_ms") as u64,
@@ -256,6 +260,7 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
         account_id: row.try_get("account_id").unwrap_or(None),
         environment_id: row.try_get("environment_id").unwrap_or(None),
         session_id: row.try_get("session_id").unwrap_or(None),
+        agent_role,
     })
 }
 

@@ -1,9 +1,10 @@
-//! `get_stats` and `get_stats_history` MCP tools.
+//! `get_stats`, `get_stats_history` and `get_agent_role_stats` MCP tools.
 
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::CallToolResult;
 use rust_mcp_sdk::schema::schema_utils::CallToolError;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, to_string_pretty};
 
 use crate::client::ApiClient;
 
@@ -20,7 +21,7 @@ impl GetStatsTool {
     pub async fn run(&self, client: &ApiClient) -> Result<CallToolResult, CallToolError> {
         let stats: Value = client.get("/stats").await.map_err(CallToolError::new)?;
 
-        let text = serde_json::to_string_pretty(&stats).map_err(CallToolError::new)?;
+        let text = to_string_pretty(&stats).map_err(CallToolError::new)?;
         Ok(CallToolResult::text_content(vec![text.into()]))
     }
 }
@@ -95,7 +96,40 @@ impl GetStatsHistoryTool {
             .get_raw_with_query("/stats/history", &params)
             .await
             .map_err(CallToolError::new)?;
-        let text = serde_json::to_string_pretty(&history).map_err(CallToolError::new)?;
+        let text = to_string_pretty(&history).map_err(CallToolError::new)?;
+        Ok(CallToolResult::text_content(vec![text.into()]))
+    }
+}
+
+/// Get the cost, executions and failures of every agent role over a period.
+#[mcp_tool(
+    name = "get_agent_role_stats",
+    description = "Cost, executions and failures per agent role (AgentRole) over a period (24h/7d/30d/90d, default 7d), all workflows combined."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetAgentRoleStatsTool {
+    /// Time period: 24h, 7d, 30d, 90d. Defaults to 7d.
+    #[serde(default)]
+    pub period: Option<String>,
+}
+
+impl GetAgentRoleStatsTool {
+    /// Execute the tool against the Ironflow API.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallToolError`] on API failure or serialization error.
+    pub async fn run(&self, client: &ApiClient) -> Result<CallToolResult, CallToolError> {
+        let mut params: Vec<(&str, &str)> = Vec::new();
+        if let Some(ref p) = self.period {
+            params.push(("period", p.as_str()));
+        }
+
+        let stats: Value = client
+            .get_raw_with_query("/stats/agent-roles", &params)
+            .await
+            .map_err(CallToolError::new)?;
+        let text = to_string_pretty(&stats).map_err(CallToolError::new)?;
         Ok(CallToolResult::text_content(vec![text.into()]))
     }
 }

@@ -199,6 +199,7 @@ mod tests {
     use crate::commands::schedule::{CatchupArg, OverlapArg, ScheduleCommands};
     use crate::commands::secret::SecretCommands;
     use crate::commands::signal::SignalCommands;
+    use crate::commands::stats::StatsCommands;
     use crate::commands::user::UserCommands;
 
     use super::*;
@@ -1451,5 +1452,54 @@ mod tests {
         assert_eq!(key.as_deref(), Some("k1"));
         assert_eq!(*page, Some(2));
         assert_eq!(*per_page, Some(10));
+    }
+
+    #[test]
+    fn parse_run_steps_by_role() {
+        let cli = parse(&["ironflow-cli", "run", "steps", "--role", "reviewer"]);
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected Run command");
+        };
+        let RunCommands::Steps {
+            role,
+            page,
+            per_page,
+        } = &args.command
+        else {
+            panic!("expected Steps subcommand");
+        };
+        assert_eq!(role, "reviewer");
+        assert_eq!(*page, 1);
+        assert_eq!(*per_page, 20);
+    }
+
+    #[test]
+    fn parse_run_steps_requires_a_role() {
+        let result = Cli::try_parse_from(["ironflow-cli", "run", "steps"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_stats_roles_with_period() {
+        let cli = parse(&["ironflow-cli", "stats", "roles", "--period", "30d"]);
+        let Commands::Stats(args) = &cli.command else {
+            panic!("expected Stats command");
+        };
+        let Some(StatsCommands::Roles { period }) = &args.command else {
+            panic!("expected Roles subcommand");
+        };
+        assert_eq!(period, "30d");
+    }
+
+    #[test]
+    fn parse_stats_roles_defaults_to_7d() {
+        let cli = parse(&["ironflow-cli", "stats", "roles"]);
+        let Commands::Stats(args) = &cli.command else {
+            panic!("expected Stats command");
+        };
+        let Some(StatsCommands::Roles { period }) = &args.command else {
+            panic!("expected Roles subcommand");
+        };
+        assert_eq!(period, "7d");
     }
 }

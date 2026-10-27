@@ -1,4 +1,4 @@
-//! Stats commands: aggregate and historical.
+//! Stats commands: aggregate, historical and per agent role.
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -60,6 +60,12 @@ pub enum StatsCommands {
         #[arg(long)]
         concurrency_group: Option<String>,
     },
+    /// Show cost, executions and failures per agent role, all workflows combined.
+    Roles {
+        /// Time period: 24h, 7d, 30d, 90d. Defaults to 7d.
+        #[arg(long, default_value = "7d")]
+        period: String,
+    },
 }
 
 /// Execute the `stats` command tree.
@@ -96,6 +102,12 @@ pub async fn execute(client: &IronflowClient, args: &StatsArgs, json_mode: bool)
             let response = client.stats_history_with(&params).await?;
             output::print_output(json_mode, &response, || {
                 output::stats_history_table(&response.data)
+            })?;
+        }
+        Some(StatsCommands::Roles { period }) => {
+            let response = client.agent_role_stats(Some(period.as_str())).await?;
+            output::print_output(json_mode, &response, || {
+                output::agent_role_stats_table(&response.data)
             })?;
         }
     }

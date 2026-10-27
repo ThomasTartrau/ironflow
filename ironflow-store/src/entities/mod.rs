@@ -74,9 +74,12 @@ pub use secret::{
 };
 pub use signal::{NewSignal, Signal, SignalFilter, SignalInsert, SignalStepResolution};
 pub use stats::{
-    HistoryGranularity, HistoryPeriod, RunStats, StatsHistoryBucket, StatsHistoryFilter,
+    AgentRoleStats, HistoryGranularity, HistoryPeriod, RunStats, StatsHistoryBucket,
+    StatsHistoryFilter,
 };
-pub use step::{NewStep, Step, StepUpdate, step_trace_id};
+pub use step::{
+    AGENT_ROLE_INPUT_KEY, NewStep, Step, StepUpdate, agent_role_from_input, step_trace_id,
+};
 pub use step_dependency::{NewStepDependency, StepDependency};
 pub use step_kind::StepKind;
 pub use step_status::StepStatus;

@@ -6,6 +6,7 @@
 //! persisted, replayed and run by the worker exactly like a hand-built
 //! [`AgentStepConfig`].
 
+use std::any::type_name;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
@@ -18,6 +19,20 @@ use serde::de::DeserializeOwned;
 use super::agent::{AgentStep, AgentStepConfig, Tool};
 use crate::error::EngineError;
 use crate::executor::StepOutput;
+
+/// Longest [`AgentRole::name`] accepted, in bytes.
+///
+/// [`AgentRole::task`] panics on a longer name, and the API rejects a longer
+/// `agent_role` filter.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::config::MAX_ROLE_NAME_LEN;
+///
+/// assert_eq!(MAX_ROLE_NAME_LEN, 128);
+/// ```
+pub const MAX_ROLE_NAME_LEN: usize = 128;
 
 /// A reusable agent with a fixed role: persona, tools, rights and output type.
 ///
@@ -97,6 +112,57 @@ pub trait AgentRole {
     /// What the role answers; `ctx.agent` returns it.
     type Output: DeserializeOwned + JsonSchema;
 
+    /// Name of the role, recorded on every step it runs and shown by the API,
+    /// CLI and dashboard. Defaults to the type name without its module path
+    /// (`Reviewer`). Override it to keep the name stable across a type rename.
+    ///
+    /// Renaming the type changes the default name: the steps and costs of the
+    /// role are then split between the old and the new name. The caller of
+    /// [`task`](Self::task) cannot override it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::config::{AgentRole, AgentStep};
+    /// # use schemars::JsonSchema;
+    /// # use serde::Deserialize;
+    /// # #[derive(Deserialize, JsonSchema)]
+    /// # struct Verdict { approved: bool }
+    /// struct Reviewer;
+    ///
+    /// impl AgentRole for Reviewer {
+    ///     type Input = String;
+    ///     type Output = Verdict;
+    ///
+    ///     fn prompt(&self, input: String) -> String {
+    ///         input
+    ///     }
+    /// }
+    ///
+    /// struct Named;
+    ///
+    /// impl AgentRole for Named {
+    ///     type Input = String;
+    ///     type Output = Verdict;
+    ///
+    ///     fn name(&self) -> &str {
+    ///         "code-reviewer"
+    ///     }
+    ///
+    ///     fn prompt(&self, input: String) -> String {
+    ///         input
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(Reviewer.name(), "Reviewer");
+    /// assert_eq!(Named.name(), "code-reviewer");
+    /// let config = Named.task("diff".to_string()).into_config();
+    /// assert_eq!(config.role.as_deref(), Some("code-reviewer"));
+    /// ```
+    fn name(&self) -> &str {
+        short_type_name(type_name::<Self>())
+    }
+
     /// The prompt of one task. Required.
     fn prompt(&self, input: Self::Input) -> String;
 
@@ -161,6 +227,12 @@ pub trait AgentRole {
 
     /// Build one task of this role.
     ///
+    /// # Panics
+    ///
+    /// Panics if [`name`](Self::name) is empty or blank, has leading or
+    /// trailing whitespace, or is longer than
+    /// [`MAX_ROLE_NAME_LEN`] bytes.
+    ///
     /// # Examples
     ///
     /// ```
@@ -181,6 +253,16 @@ pub trait AgentRole {
     fn task(&self, input: Self::Input) -> AgentTask<Self::Output> {
         AgentTask::from_role(self, input)
     }
+}
+
+/// Type name without its module path and generic arguments:
+/// `a::b::Wrapper<c::Inner>` gives `Wrapper`.
+fn short_type_name(full: &'static str) -> &'static str {
+    let without_generics = full.split('<').next().unwrap_or(full);
+    without_generics
+        .rsplit("::")
+        .next()
+        .unwrap_or(without_generics)
 }
 
 /// One call of an [`AgentRole`], answering with the `T` of the role.
@@ -296,6 +378,23 @@ pub trait AgentRole {
 /// let _ = Reviewer.task("diff".to_string()).output::<Other>();
 /// ```
 ///
+/// The role name is locked:
+///
+/// ```compile_fail,E0599
+/// # use ironflow_engine::config::AgentRole;
+/// # use schemars::JsonSchema;
+/// # use serde::Deserialize;
+/// # #[derive(Deserialize, JsonSchema)]
+/// # struct Verdict { approved: bool }
+/// # struct Reviewer;
+/// # impl AgentRole for Reviewer {
+/// #     type Input = String;
+/// #     type Output = Verdict;
+/// #     fn prompt(&self, input: String) -> String { input }
+/// # }
+/// let _ = Reviewer.task("diff".to_string()).role("x");
+/// ```
+///
 /// Taking the raw config with [`AgentStep::into_config`] and editing it loses
 /// the typed answer (`ctx.agent` then returns a [`StepOutput`]), so there is no
 /// silent override.
@@ -350,7 +449,23 @@ impl<T> Clone for AgentTask<T> {
 impl<T: JsonSchema> AgentTask<T> {
     /// Builds the task from the role defaults. `pub(crate)`: no other crate can
     /// wrap an arbitrary config in an [`AgentTask`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`AgentRole::name`] is empty or blank, has leading or
+    /// trailing whitespace, or is longer than
+    /// [`MAX_ROLE_NAME_LEN`] bytes.
     pub(crate) fn from_role<R: AgentRole<Output = T> + ?Sized>(role: &R, input: R::Input) -> Self {
+        let name = role.name();
+        assert!(!name.trim().is_empty(), "AgentRole::name must not be empty");
+        assert!(
+            name.trim() == name,
+            "AgentRole::name must not have leading or trailing whitespace"
+        );
+        assert!(
+            name.len() <= MAX_ROLE_NAME_LEN,
+            "AgentRole::name must be at most {MAX_ROLE_NAME_LEN} bytes"
+        );
         let mut config = AgentStepConfig::new(&role.prompt(input));
         if let Some(prompt) = role.system_prompt() {
             config = config.system_prompt(prompt);
@@ -383,6 +498,7 @@ impl<T: JsonSchema> AgentTask<T> {
             config = config.allow_tool(tool).into();
         }
         config = config.output::<T>().into();
+        config.role = Some(name.to_string());
         Self {
             config,
             _output: PhantomData,
@@ -837,7 +953,8 @@ mod tests {
     #[test]
     fn a_role_with_only_a_prompt_takes_the_agent_config_new_defaults() {
         let task = Bare.task("p".to_string());
-        let expected = AgentStepConfig::new("p").output::<Verdict>().into_config();
+        let mut expected = AgentStepConfig::new("p").output::<Verdict>().into_config();
+        expected.role = Some("Bare".to_string());
         assert_eq!(
             to_value(task.into_config()).expect("serialize"),
             to_value(expected).expect("serialize")
@@ -930,5 +1047,110 @@ mod tests {
             to_value(task.into_config()).expect("serialize"),
             to_value(copy.into_config()).expect("serialize")
         );
+    }
+
+    /// Overrides the default name.
+    struct Named;
+
+    impl AgentRole for Named {
+        type Input = String;
+        type Output = Verdict;
+
+        fn name(&self) -> &str {
+            "code-reviewer"
+        }
+
+        fn prompt(&self, input: String) -> String {
+            input
+        }
+    }
+
+    /// Returns a blank name.
+    struct Blank;
+
+    impl AgentRole for Blank {
+        type Input = String;
+        type Output = Verdict;
+
+        fn name(&self) -> &str {
+            "  "
+        }
+
+        fn prompt(&self, input: String) -> String {
+            input
+        }
+    }
+
+    /// Returns a name one byte over the limit.
+    struct TooLong(String);
+
+    impl AgentRole for TooLong {
+        type Input = String;
+        type Output = Verdict;
+
+        fn name(&self) -> &str {
+            &self.0
+        }
+
+        fn prompt(&self, input: String) -> String {
+            input
+        }
+    }
+
+    #[test]
+    fn the_default_name_is_the_short_type_name() {
+        assert_eq!(Bare.name(), "Bare");
+        let config = Bare.task("p".to_string()).into_config();
+        assert_eq!(config.role.as_deref(), Some("Bare"));
+    }
+
+    #[test]
+    fn an_overridden_name_is_recorded() {
+        assert_eq!(Named.name(), "code-reviewer");
+        let config = Named.task("p".to_string()).into_config();
+        assert_eq!(config.role.as_deref(), Some("code-reviewer"));
+    }
+
+    #[test]
+    fn short_type_name_strips_path_and_generics() {
+        assert_eq!(short_type_name("a::b::Wrapper<c::Inner>"), "Wrapper");
+        assert_eq!(short_type_name("Plain"), "Plain");
+    }
+
+    #[test]
+    fn call_site_overrides_keep_the_role_name() {
+        let config = Bare
+            .task("p".to_string())
+            .model("haiku")
+            .allow_failure()
+            .into_config();
+        assert_eq!(config.model, "haiku");
+        assert!(config.allow_failure);
+        assert_eq!(config.role.as_deref(), Some("Bare"));
+    }
+
+    #[test]
+    #[should_panic(expected = "must not be empty")]
+    fn an_empty_role_name_panics() {
+        let _ = Blank.task("p".to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = "must be at most")]
+    fn a_too_long_role_name_panics() {
+        let _ = TooLong("r".repeat(MAX_ROLE_NAME_LEN + 1)).task("p".to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = "must not have leading or trailing whitespace")]
+    fn a_role_name_with_surrounding_whitespace_panics() {
+        let _ = TooLong(" Reviewer".to_string()).task("p".to_string());
+    }
+
+    #[test]
+    fn a_role_name_at_the_limit_is_accepted() {
+        let name = "r".repeat(MAX_ROLE_NAME_LEN);
+        let config = TooLong(name.clone()).task("p".to_string()).into_config();
+        assert_eq!(config.role, Some(name));
     }
 }

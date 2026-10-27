@@ -41,6 +41,53 @@ pub fn step_trace_id(run_id: Uuid, name: &str, position: u32) -> Uuid {
     )
 }
 
+/// Key of the role name (`AgentConfig::role`) in the persisted input of an
+/// agent step.
+///
+/// The engine persists the agent config as the step input; a config built
+/// from an `AgentRole` carries the role name under this key.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::AGENT_ROLE_INPUT_KEY;
+///
+/// assert_eq!(AGENT_ROLE_INPUT_KEY, "role");
+/// ```
+pub const AGENT_ROLE_INPUT_KEY: &str = "role";
+
+/// Role name of an agent step, read from its persisted input.
+///
+/// Returns `Some` only for a [`StepKind::Agent`] step whose input holds a
+/// non-empty string under [`AGENT_ROLE_INPUT_KEY`]. Any other kind, a missing
+/// input or key, or a non-string or empty value gives `None`: steps persisted
+/// before roles were recorded have no role.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::{StepKind, agent_role_from_input};
+/// use serde_json::json;
+///
+/// let input = json!({"type": "agent", "prompt": "p", "role": "Reviewer"});
+/// assert_eq!(
+///     agent_role_from_input(&StepKind::Agent, Some(&input)).as_deref(),
+///     Some("Reviewer")
+/// );
+/// assert_eq!(agent_role_from_input(&StepKind::Shell, Some(&input)), None);
+/// assert_eq!(agent_role_from_input(&StepKind::Agent, None), None);
+/// ```
+pub fn agent_role_from_input(kind: &StepKind, input: Option<&Value>) -> Option<String> {
+    if *kind != StepKind::Agent {
+        return None;
+    }
+    input?
+        .get(AGENT_ROLE_INPUT_KEY)?
+        .as_str()
+        .filter(|role| !role.is_empty())
+        .map(str::to_string)
+}
+
 /// A single operation within a run.
 ///
 /// Steps are executed sequentially in order of [`position`](Step::position).
@@ -156,6 +203,13 @@ pub struct Step {
     /// launched. The engine resumes it when the step was interrupted.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Name of the `AgentRole` the agent step was created from.
+    ///
+    /// Derived by the store from the step input with [`agent_role_from_input`]:
+    /// `None` for any other step, an agent step built by hand, or a step stored
+    /// before roles were recorded.
+    #[serde(default)]
+    pub agent_role: Option<String>,
 }
 
 /// Request to create a new step.
@@ -344,6 +398,7 @@ mod tests {
             account_id: Some(Uuid::now_v7()),
             environment_id: Some("ironflow-env-0a1b2c".to_string()),
             session_id: Some("0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d".to_string()),
+            agent_role: Some("Reviewer".to_string()),
         };
 
         let json = serde_json::to_string(&step).expect("serialize");
@@ -371,6 +426,7 @@ mod tests {
         assert_eq!(back.account_id, step.account_id);
         assert_eq!(back.environment_id, step.environment_id);
         assert_eq!(back.session_id, step.session_id);
+        assert_eq!(back.agent_role, step.agent_role);
         assert_eq!(back.approval_deadline_at, step.approval_deadline_at);
         assert_eq!(back.approval_stage, step.approval_stage);
         assert_eq!(back.approval_assignee, step.approval_assignee);
@@ -421,6 +477,7 @@ mod tests {
         assert!(step.approvals.is_empty());
         assert!(step.environment_id.is_none());
         assert!(step.session_id.is_none());
+        assert!(step.agent_role.is_none());
     }
 
     #[test]
@@ -543,5 +600,46 @@ mod tests {
     fn trace_id_is_uuid_v5() {
         let id = step_trace_id(Uuid::nil(), "build", 0);
         assert_eq!(id.get_version_num(), 5);
+    }
+
+    #[test]
+    fn agent_role_is_read_from_an_agent_step_input() {
+        let input = json!({"type": "agent", "prompt": "p", "role": "Reviewer"});
+        assert_eq!(
+            agent_role_from_input(&StepKind::Agent, Some(&input)).as_deref(),
+            Some("Reviewer")
+        );
+    }
+
+    #[test]
+    fn agent_role_is_none_without_a_usable_role() {
+        for input in [
+            json!({"type": "agent", "prompt": "p"}),
+            json!({"type": "agent", "prompt": "p", "role": null}),
+            json!({"type": "agent", "prompt": "p", "role": 42}),
+            json!({"type": "agent", "prompt": "p", "role": ""}),
+            json!("not an object"),
+        ] {
+            assert_eq!(
+                agent_role_from_input(&StepKind::Agent, Some(&input)),
+                None,
+                "input: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_role_is_none_for_another_kind() {
+        let input = json!({"type": "shell", "command": "ls", "role": "Reviewer"});
+        assert_eq!(agent_role_from_input(&StepKind::Shell, Some(&input)), None);
+        assert_eq!(
+            agent_role_from_input(&StepKind::Custom("x".to_string()), Some(&input)),
+            None
+        );
+    }
+
+    #[test]
+    fn agent_role_is_none_without_input() {
+        assert_eq!(agent_role_from_input(&StepKind::Agent, None), None);
     }
 }

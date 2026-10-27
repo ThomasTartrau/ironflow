@@ -90,6 +90,11 @@ export const router = createBrowserRouter([
 				errorElement: <ErrorBoundary />,
 			},
 			{
+				path: "/agent-roles",
+				lazy: () => import("./routes/agent-roles"),
+				errorElement: <ErrorBoundary />,
+			},
+			{
 				path: "/audit-logs",
 				lazy: () => import("./routes/audit-logs"),
 				errorElement: <ErrorBoundary />,

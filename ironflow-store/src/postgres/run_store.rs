@@ -1,14 +1,15 @@
 use chrono::{DateTime, Duration, Utc};
+use rust_decimal::Decimal;
 use serde_json::to_value;
 use sqlx::{PgConnection, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use crate::entities::{
-    ConcurrencyGroupBacklog, ConcurrencyLimit, IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep,
-    NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run, RunActor,
-    RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter,
-    Step, StepApproval, StepDependency, StepUpdate, WorkerCapabilities, WorkflowPause,
-    normalize_worker_tags, validate_concurrency_limits, validate_worker_tags,
+    AgentRoleStats, ConcurrencyGroupBacklog, ConcurrencyLimit, IDEMPOTENCY_WINDOW, LeaseRequest,
+    NewRun, NewStep, NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun,
+    Run, RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket,
+    StatsHistoryFilter, Step, StepApproval, StepDependency, StepUpdate, WorkerCapabilities,
+    WorkflowPause, normalize_worker_tags, validate_concurrency_limits, validate_worker_tags,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -1759,7 +1760,7 @@ impl RunStore for PostgresStore {
                 cancelled_runs: row.get::<i64, _>("cancelled") as u64,
                 active_runs: row.get::<i64, _>("active") as u64,
                 awaiting_approval_runs: row.get::<i64, _>("awaiting_approval") as u64,
-                total_cost_usd: row.get::<rust_decimal::Decimal, _>("total_cost"),
+                total_cost_usd: row.get::<Decimal, _>("total_cost"),
                 total_duration_ms: row.get::<i64, _>("total_duration") as u64,
             })
         })
@@ -1770,6 +1771,109 @@ impl RunStore for PostgresStore {
         filter: StatsHistoryFilter,
     ) -> StoreFuture<'_, Vec<StatsHistoryBucket>> {
         self.stats_history_impl(filter)
+    }
+
+    fn list_steps_by_agent_role<'a>(
+        &'a self,
+        agent_role: &'a str,
+        page: u32,
+        per_page: u32,
+    ) -> StoreFuture<'a, Page<Step>> {
+        Box::pin(async move {
+            let page = page.max(1);
+            let per_page = per_page.clamp(1, 100);
+            let offset = i64::from(page - 1) * i64::from(per_page);
+
+            // `role` is `AGENT_ROLE_INPUT_KEY`: the key of `AgentConfig::role` in
+            // the persisted agent step input, indexed by `idx_steps_agent_role`.
+            let rows = sqlx::query(
+                r#"
+                SELECT s.*, ast.name as state_name
+                FROM ironflow.steps s
+                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = s.state_machine__id
+                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                WHERE s.kind = 'agent'
+                  AND jsonb_typeof(s.input->'role') = 'string'
+                  AND s.input->>'role' = $1
+                ORDER BY s.created_at DESC, s.id DESC
+                LIMIT $2 OFFSET $3
+                "#,
+            )
+            .bind(agent_role)
+            .bind(per_page as i64)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let total: i64 = sqlx::query_scalar(
+                r#"
+                SELECT COUNT(*) FROM ironflow.steps s
+                WHERE s.kind = 'agent'
+                  AND jsonb_typeof(s.input->'role') = 'string'
+                  AND s.input->>'role' = $1
+                "#,
+            )
+            .bind(agent_role)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let items = rows
+                .iter()
+                .map(row_to_step)
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(Page {
+                items,
+                total: total as u64,
+                page,
+                per_page,
+            })
+        })
+    }
+
+    fn get_agent_role_stats(
+        &self,
+        created_after: DateTime<Utc>,
+    ) -> StoreFuture<'_, Vec<AgentRoleStats>> {
+        Box::pin(async move {
+            // `role` is `AGENT_ROLE_INPUT_KEY`, see `list_steps_by_agent_role`.
+            let rows = sqlx::query(
+                r#"
+                SELECT
+                    s.input->>'role' AS agent_role,
+                    COUNT(*) AS executions,
+                    COUNT(*) FILTER (WHERE ast.name = 'failed') AS failed,
+                    COALESCE(SUM(s.cost_usd), 0) AS total_cost,
+                    COALESCE(SUM(s.duration_ms), 0)::BIGINT AS total_duration
+                FROM ironflow.steps s
+                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = s.state_machine__id
+                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                WHERE s.kind = 'agent'
+                  AND jsonb_typeof(s.input->'role') = 'string'
+                  AND s.input->>'role' <> ''
+                  AND s.created_at >= $1
+                GROUP BY s.input->>'role'
+                ORDER BY total_cost DESC, agent_role ASC
+                "#,
+            )
+            .bind(created_after)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(rows
+                .iter()
+                .map(|row| AgentRoleStats {
+                    agent_role: row.get("agent_role"),
+                    executions: row.get::<i64, _>("executions") as u64,
+                    failed: row.get::<i64, _>("failed") as u64,
+                    total_cost_usd: row.get::<Decimal, _>("total_cost"),
+                    total_duration_ms: row.get::<i64, _>("total_duration") as u64,
+                })
+                .collect())
+        })
     }
 
     fn create_step_dependencies(&self, deps: Vec<NewStepDependency>) -> StoreFuture<'_, ()> {
