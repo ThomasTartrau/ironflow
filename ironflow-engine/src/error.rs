@@ -484,6 +484,34 @@ pub enum EngineError {
         /// The handler's current version.
         current_version: String,
     },
+
+    /// An agent supervisor run by
+    /// [`WorkflowContext::supervise`](crate::context::WorkflowContext::supervise)
+    /// cannot go on: a turn with both tasks and an answer or with neither, a
+    /// round over its task limit, or a supervisor still delegating after its
+    /// last round.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// let err = EngineError::SupervisionFailed {
+    ///     supervisor: "lead".to_string(),
+    ///     reason: "still delegating after 5 rounds".to_string(),
+    /// };
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     "supervisor \"lead\" failed: still delegating after 5 rounds"
+    /// );
+    /// ```
+    #[error("supervisor {supervisor:?} failed: {reason}")]
+    SupervisionFailed {
+        /// Name the supervisor was run under.
+        supervisor: String,
+        /// What stopped it.
+        reason: String,
+    },
 }
 
 impl From<StoreError> for EngineError {

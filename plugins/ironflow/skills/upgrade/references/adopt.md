@@ -588,3 +588,42 @@ calendar UTC day or month; once it is reached, the step fails with
 - }
   let review = ctx.agent("review", Reviewer.task(diff).max_budget_usd(0.50)).await?;
 ```
+
+## agent-supervisor
+- kind: adopt
+- since: ironflow-engine after 2.57.0 (#233)
+
+An agent that hands tasks to other agents used to be a loop written in the handler: an
+agent turn, a `workflows_with` wave of delegate workflows named by hand
+(`delegate-{tour}-{agent}`), the results pasted into the next prompt, and nothing that
+limited which agents could be called. `ctx.supervise` runs that loop: the targets are the
+variants of a `Team` enum, each task is a child run of `TeamWorkflow::<Team>` (guard and cost
+cap of the tree apply), a target the enum does not name is refused before any child starts,
+and every task and result reaches the next round in an untrusted block. Rounds and children
+are replayed on resume. The step names change (`lead/turn-{n}`, `lead/turn-{n}/{i}-{role}`):
+migrate a workflow with no run in flight. Register `TeamWorkflow::<Team>::new()` on the
+server and the worker. Section: Agent.
+
+```diff
+- loop {
+-     let decision = ctx.agent(&format!("lead-{tour}"), lead_config(&history)).await?;
+-     if decision.done { break decision.answer; }
+-     let wave = decision.agents.iter().map(|agent| /* DelegateInput + step name */).collect();
+-     let outcomes = ctx.workflows_with(&Delegate, wave).await?;
+-     history.push(format!("{outcomes:?}"));
+-     tour += 1;
+- }
++ #[derive(Serialize, Deserialize, JsonSchema)]
++ enum Squad { Coder(String), Reviewer(String) }
++ impl Team for Squad {
++     const NAME: &'static str = "squad";
++     fn assign(self) -> Assignment {
++         match self {
++             Squad::Coder(task) => Coder.task(task).into(),
++             Squad::Reviewer(task) => Reviewer.task(task).into(),
++         }
++     }
++ }
++ // Lead: impl AgentRole with type Output = Turn<Report, Squad>
++ let report = ctx.supervise("lead", Lead.task(input), SupervisionLimits::default()).await?;
+```

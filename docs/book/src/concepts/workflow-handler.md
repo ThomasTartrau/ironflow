@@ -130,4 +130,8 @@ let mut engine = Engine::new(store, provider);
 engine.register(Box::new(Greeting))?;
 ```
 
+An agent supervisor needs the workflow of its team registered too:
+`engine.register(TeamWorkflow::<Squad>::new())?`. See
+[A supervisor delegating to its team](steps.md#a-supervisor-delegating-to-its-team).
+
 See [Writing a Workflow](../guides/writing-a-workflow.md) for a step-by-step guide.
