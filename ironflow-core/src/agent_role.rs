@@ -410,7 +410,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "invalid agent role name")]
     fn binding_with_an_invalid_name_panics() {
-        let _ = AgentRoleBinding::new("Reviewer", None);
+        let _ = AgentRoleBinding::new(" reviewer", None);
     }
 
     #[test]
