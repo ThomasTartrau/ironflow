@@ -29,6 +29,7 @@ use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::{Engine, EnqueueOptions};
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::testing::{MissingAgentProvider, TestEngine};
+use ironflow_store::entities::AGENT_ROLE_INPUT_KEY;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{RunFilter, RunStatus, StepStatus, StepUpdate, TriggerKind};
 use ironflow_store::store::{RunStore, Store};
@@ -223,7 +224,7 @@ async fn the_persisted_step_is_the_agent_config_of_the_role() {
         .await
         .expect("the harness ran the handler");
 
-    let by_hand = AgentStepConfig::new("Review: diff")
+    let mut by_hand = AgentStepConfig::new("Review: diff")
         .append_system_prompt("You are a strict reviewer.")
         .allow_tool(Tool::Read)
         .permission_mode(PermissionMode::Auto)
@@ -233,10 +234,67 @@ async fn the_persisted_step_is_the_agent_config_of_the_role() {
         .max_budget_usd(0.10)
         .output::<Verdict>()
         .into_config();
+    by_hand.role = Some("Reviewer".to_string());
     assert_eq!(
         *result.step("review").input(),
         to_value(StepConfig::Agent(by_hand)).expect("serialize the config")
     );
+}
+
+#[tokio::test]
+async fn the_step_of_a_role_task_records_the_role_name() {
+    let seen = Arc::new(Mutex::new(None));
+    let result = TestEngine::new()
+        .with_handler(RoleReview { seen })
+        .with_mock_agent(|_cfg| Ok(AgentOutput::new(json!({"approved": true, "score": 9}))))
+        .run(json!({}))
+        .await
+        .expect("the harness ran the handler");
+
+    assert_eq!(result.status(), RunStatus::Completed);
+    assert_eq!(
+        result.step("review").raw().agent_role.as_deref(),
+        Some("Reviewer")
+    );
+}
+
+/// Runs an agent step built by hand, without a role.
+struct PlainAgent;
+
+impl WorkflowHandler for PlainAgent {
+    fn name(&self) -> &str {
+        "plain-agent"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.agent("plain", AgentStepConfig::new("p").max_budget_usd(0.10))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn an_agent_step_built_by_hand_has_no_role() {
+    let result = TestEngine::new()
+        .with_handler(PlainAgent)
+        .with_mock_agent(|_cfg| Ok(AgentOutput::new(json!({"done": true}))))
+        .run(json!({}))
+        .await
+        .expect("the harness ran the handler");
+
+    assert_eq!(result.status(), RunStatus::Completed);
+    let step = result.step("plain");
+    assert!(step.raw().agent_role.is_none());
+    assert!(step.input().get(AGENT_ROLE_INPUT_KEY).is_none());
+}
+
+#[test]
+fn the_role_key_of_the_step_input_is_the_one_the_store_reads() {
+    let input = to_value(StepConfig::Agent(Reviewer.task("d".into()).into_config()))
+        .expect("serialize the config");
+    assert_eq!(input[AGENT_ROLE_INPUT_KEY], json!("Reviewer"));
 }
 
 /// Provider answering with a fixed verdict and counting invocations.

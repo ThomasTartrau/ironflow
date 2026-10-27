@@ -397,6 +397,12 @@ and per-call settings (`working_dir`, `allow_failure`, `retry_policy`, ..) can b
 overridden on the task. An override changes the step config, so it also changes the
 record/replay fixture hash.
 
+`name()` is recorded on every step of the role as `agent_role`, to list its steps
+(`GET /api/v1/steps?agent_role=`, `ironflow-cli run steps --role`) and its cost
+(`GET /api/v1/stats/agent-roles`, `ironflow-cli stats roles`) across workflows. It defaults
+to the type name (`Reviewer`); override it so a type rename does not split the statistics.
+The caller of `task` cannot change it.
+
 ```rust,no_run
 use ironflow_engine::config::{AgentRole, Prompt, Tool};
 use ironflow_engine::context::WorkflowContext;
@@ -415,6 +421,10 @@ struct Reviewer;
 impl AgentRole for Reviewer {
     type Input = String;
     type Output = Review;
+
+    fn name(&self) -> &str {
+        "reviewer"
+    }
 
     fn prompt(&self, input: String) -> String {
         Prompt::new()

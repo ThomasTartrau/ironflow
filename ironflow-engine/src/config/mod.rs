@@ -21,7 +21,7 @@ pub use agent::{
     AgentStep, AgentStepConfig, DEFAULT_RESUME_PROMPT, DEFAULT_UNTRUSTED_INSTRUCTION, Prompt, Tool,
     ToolProfile,
 };
-pub use agent_role::{AgentRole, AgentTask};
+pub use agent_role::{AgentRole, AgentTask, MAX_ROLE_NAME_LEN};
 pub use approval::ApprovalConfig;
 pub use approvers::Approvers;
 pub use artifact::{ArtifactInput, ArtifactOutput, ArtifactRef};

@@ -46,6 +46,8 @@ $ ironflow-cli logs 019f9f50-17c8-73b1-9288-b41cbed28d1a
 $ ironflow-cli run list --status completed --workflow ci-pipeline
 $ ironflow-cli run get <run-id> --verbose
 $ ironflow-cli stats
+$ ironflow-cli stats roles --period 30d
+$ ironflow-cli run steps --role reviewer
 ```
 
 Configuration is resolved in this order: command-line flags (`--url`, `--api-key`), then the
@@ -125,7 +127,8 @@ Or declare it in `.mcp.json`:
 ```
 
 Exposed tools include `list_workflows`, `get_workflow`, `list_runs`, `get_run`, `create_run`,
-`approve_run`, `reject_run`, `cancel_run`, `retry_run` and `get_stats`.
+`approve_run`, `reject_run`, `cancel_run`, `retry_run`, `get_stats`, `get_agent_role_stats`
+(cost and executions per agent role) and `list_agent_role_steps` (the steps of one role).
 
 ## Claude Code plugin
 

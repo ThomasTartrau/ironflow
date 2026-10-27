@@ -1,6 +1,7 @@
 import {
 	BarChart3,
 	BookOpen,
+	Bot,
 	CalendarClock,
 	Gauge,
 	KeyRound,
@@ -37,6 +38,11 @@ const baseNavItems: NavItem[] = [
 				url: "/",
 				exactMatch: true,
 				icon: BarChart3,
+			},
+			{
+				title: "Agent Roles",
+				url: "/agent-roles",
+				icon: Bot,
 			},
 		],
 	},

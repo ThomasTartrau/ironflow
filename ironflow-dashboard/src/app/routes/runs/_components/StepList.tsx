@@ -141,6 +141,40 @@ export function AccountBadge({ step }: { step: StepResponse }) {
 }
 
 /**
+ * Agent role an agent step was created from, e.g. `role Reviewer`. With
+ * `link` (the default), it links to the Agent Roles page filtered on that
+ * role. Renders nothing for a step without a role.
+ */
+export function AgentRoleBadge({
+	step,
+	link = true,
+}: {
+	step: StepResponse;
+	link?: boolean;
+}) {
+	const role = step.agent_role;
+	if (!role) return null;
+	const badge = (
+		<Badge
+			variant="outline"
+			className="text-[10px] font-medium min-w-0 max-w-full shrink"
+		>
+			<span className="truncate">{`role ${role}`}</span>
+		</Badge>
+	);
+	if (!link) return badge;
+	return (
+		<Link
+			to={`/agent-roles?role=${encodeURIComponent(role)}`}
+			onClick={(e) => e.stopPropagation()}
+			className="min-w-0 max-w-full shrink"
+		>
+			{badge}
+		</Link>
+	);
+}
+
+/**
  * Vote counter for an approval gate, e.g. `1/2 approvals`.
  *
  * When the gate carries an approval requirement, a tooltip explains why the
@@ -371,6 +405,7 @@ function NestedStep({ step }: { step: StepResponse }) {
 				<ApprovalSla step={step} />
 				<ApprovalProgress step={step} />
 				<AccountBadge step={step} />
+				<AgentRoleBadge step={step} link={false} />
 				<span className="text-xs text-muted-foreground ml-auto shrink-0">
 					{formatDuration(step.duration_ms)}
 				</span>
@@ -821,6 +856,7 @@ function StepRow({ step }: { step: StepResponse }) {
 						<ApprovalSla step={step} />
 						<ApprovalProgress step={step} />
 						<AccountBadge step={step} />
+						<AgentRoleBadge step={step} />
 					</div>
 				</TableCell>
 				<TableCell>{formatDuration(step.duration_ms)}</TableCell>

@@ -11,12 +11,12 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, CellAlignment, Color, ContentArrangement, Table};
 use ironflow_sdk::client::ApiResponse;
 use ironflow_sdk::types::{
-    AccountState, AccountWindowResponse, AccountWindowStatus, ApiKeyResponse, ApiKeyScope,
-    ArtifactResponse, AuditLogEntry, ConcurrencyLimit, CreateApiKeyResponse, ExecutionPlanResponse,
-    KeyVersionsResponse, PlannedStepResponse, ProviderAccountResponse, RunDetailResponse,
-    RunResponse, RunStatus, ScopeEntry, SecretResponse, StatsHistoryResponse, StatsResponse,
-    StepResponse, StepStatus, UserGroupsResponse, UserResponse, WorkerRouting,
-    WorkflowDetailResponse, WorkflowSummary,
+    AccountState, AccountWindowResponse, AccountWindowStatus, AgentRoleStatsResponse,
+    ApiKeyResponse, ApiKeyScope, ArtifactResponse, AuditLogEntry, ConcurrencyLimit,
+    CreateApiKeyResponse, ExecutionPlanResponse, KeyVersionsResponse, PlannedStepResponse,
+    ProviderAccountResponse, RunDetailResponse, RunResponse, RunStatus, ScopeEntry, SecretResponse,
+    StatsHistoryResponse, StatsResponse, StepResponse, StepStatus, UserGroupsResponse,
+    UserResponse, WorkerRouting, WorkflowDetailResponse, WorkflowSummary,
 };
 use serde::Serialize;
 use serde_json::to_string_pretty;
@@ -459,6 +459,7 @@ pub fn steps_table(steps: &[StepResponse]) -> Table {
     table.set_header(vec![
         "ID",
         "Name",
+        "Role",
         "Status",
         "SLA",
         "Attempt",
@@ -480,6 +481,7 @@ pub fn steps_table(steps: &[StepResponse]) -> Table {
         table.add_row(vec![
             Cell::new(step.id.to_string().split('-').next().unwrap_or("")),
             Cell::new(&step.name),
+            Cell::new(step.agent_role.as_deref().unwrap_or("-")),
             Cell::new(step.status)
                 .fg(color)
                 .set_alignment(CellAlignment::Center),
@@ -490,6 +492,48 @@ pub fn steps_table(steps: &[StepResponse]) -> Table {
             Cell::new(format_artifacts(&step.artifacts)).set_alignment(CellAlignment::Center),
             Cell::new(format_optional_datetime(&step.started_at)),
             Cell::new(format_optional_datetime(&step.completed_at)),
+        ]);
+    }
+
+    table
+}
+
+/// Render the agent steps of one role, across runs, as a table.
+pub fn role_steps_table(steps: &[StepResponse]) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        "ID", "Run ID", "Step", "Status", "Duration", "Cost", "Created",
+    ]);
+
+    for step in steps {
+        table.add_row(vec![
+            Cell::new(short_id(step.id)),
+            Cell::new(short_id(step.run_id)),
+            Cell::new(&step.name),
+            Cell::new(step.status)
+                .fg(step_status_color(&step.status))
+                .set_alignment(CellAlignment::Center),
+            Cell::new(format_duration_ms(step.duration_ms)),
+            Cell::new(format!("${:.4}", step.cost_usd)),
+            Cell::new(format_datetime(&step.created_at)),
+        ]);
+    }
+
+    table
+}
+
+/// Render the cost, executions and failures per agent role as a table.
+pub fn agent_role_stats_table(stats: &AgentRoleStatsResponse) -> Table {
+    let mut table = base_table();
+    table.set_header(vec!["Role", "Executions", "Failed", "Cost", "Duration"]);
+
+    for role in &stats.roles {
+        table.add_row(vec![
+            Cell::new(&role.agent_role),
+            Cell::new(role.executions),
+            Cell::new(role.failed).fg(Color::Red),
+            Cell::new(format!("${:.4}", role.total_cost_usd)),
+            Cell::new(format_duration_ms(role.total_duration_ms)),
         ]);
     }
 
@@ -2177,5 +2221,99 @@ mod tests {
             .find(|l| l.contains("child-step"))
             .expect("nested line");
         assert!(nested.starts_with("  "), "{nested}");
+    }
+
+    /// A completed agent step, with `agent_role` when set.
+    fn agent_step(agent_role: Option<&str>) -> StepResponse {
+        from_value(json!({
+            "id": Uuid::now_v7(),
+            "trace_id": Uuid::now_v7(),
+            "run_id": Uuid::now_v7(),
+            "name": "review",
+            "kind": "agent",
+            "position": 0,
+            "status": "completed",
+            "attempt": 1,
+            "duration_ms": 1500,
+            "cost_usd": 0.25,
+            "created_at": "2026-10-27T12:00:00Z",
+            "updated_at": "2026-10-27T12:00:01Z",
+            "dependencies": [],
+            "agent_role": agent_role,
+        }))
+        .expect("valid StepResponse")
+    }
+
+    #[test]
+    fn steps_table_shows_the_role_of_each_step() {
+        let output = steps_table(&[agent_step(Some("Reviewer"))]).to_string();
+        assert!(output.contains("Role"), "{output}");
+        assert!(output.contains("Reviewer"), "{output}");
+    }
+
+    #[test]
+    fn steps_table_shows_a_dash_without_role() {
+        let mut table = steps_table(&[agent_step(None)]);
+        // Wide enough that no cell wraps, so the row stays on a single line.
+        table.set_width(1000);
+        let output = table.to_string();
+        let split = |line: &str| -> Vec<String> {
+            line.split(['│', '┆'])
+                .map(|cell| cell.trim().to_string())
+                .collect()
+        };
+        let header = output
+            .lines()
+            .find(|line| line.contains("Role"))
+            .expect("header row");
+        let role_index = split(header)
+            .iter()
+            .position(|cell| cell == "Role")
+            .expect("Role column");
+        let row = output
+            .lines()
+            .find(|line| line.contains("review"))
+            .expect("step row");
+        assert_eq!(split(row)[role_index], "-", "{row}");
+    }
+
+    #[test]
+    fn role_steps_table_lists_the_run_of_each_step() {
+        let step = agent_step(Some("Reviewer"));
+        let run = short_id(step.run_id);
+        let output = role_steps_table(slice::from_ref(&step)).to_string();
+        assert!(output.contains(&run), "{output}");
+        assert!(output.contains("review"), "{output}");
+        assert!(output.contains("$0.2500"), "{output}");
+    }
+
+    #[test]
+    fn agent_role_stats_table_renders_a_row_per_role() {
+        let stats: AgentRoleStatsResponse = from_value(json!({
+            "period": "7d",
+            "roles": [
+                {
+                    "agent_role": "Reviewer",
+                    "executions": 3,
+                    "failed": 1,
+                    "total_cost_usd": 1.5,
+                    "total_duration_ms": 4500
+                },
+                {
+                    "agent_role": "Writer",
+                    "executions": 1,
+                    "failed": 0,
+                    "total_cost_usd": 0.1,
+                    "total_duration_ms": 900
+                }
+            ]
+        }))
+        .expect("valid AgentRoleStatsResponse");
+
+        let output = agent_role_stats_table(&stats).to_string();
+        assert!(output.contains("Reviewer"), "{output}");
+        assert!(output.contains("Writer"), "{output}");
+        assert!(output.contains("$1.5000"), "{output}");
+        assert!(output.contains("4s"), "{output}");
     }
 }

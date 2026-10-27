@@ -1183,6 +1183,29 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/stats/agent-roles": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get the cost, executions and failures of every agent role over a period.
+		 * @description Aggregates the agent steps created during the period (`24h`, `7d`, `30d`
+		 *     or `90d`, default `7d`) by the `AgentRole` they were created from, all
+		 *     workflows combined. Each step record counts as one execution, retried
+		 *     attempts included. Agent steps without a role are left out.
+		 */
+		get: operations["get_agent_role_stats"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/stats/history": {
 		parameters: {
 			query?: never;
@@ -1203,6 +1226,34 @@ export interface paths {
 		 *     `concurrency_group`).
 		 */
 		get: operations["get_stats_history"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/steps": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List the agent steps of one agent role, across every run and workflow.
+		 * @description # Query Parameters
+		 *
+		 *     - `agent_role` - Name of the `AgentRole`, matched exactly (required, at
+		 *       most 128 bytes)
+		 *     - `page` - Page number, 1-based (default: 1)
+		 *     - `per_page` - Items per page (default: 20, max: 100)
+		 *
+		 *     Steps are sorted newest first. Steps stored before roles were recorded have
+		 *     no role and are never listed.
+		 */
+		get: operations["list_steps"];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -1542,6 +1593,76 @@ export interface components {
 		 * @enum {string}
 		 */
 		AccountWindowStatus: "allowed" | "allowed_warning" | "rejected";
+		/**
+		 * @description Cost, executions and failures of one agent role.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::entities::AgentRoleStatsEntryResponse;
+		 *     use ironflow_store::entities::AgentRoleStats;
+		 *     use rust_decimal::Decimal;
+		 *
+		 *     let entry = AgentRoleStatsEntryResponse::from(AgentRoleStats {
+		 *         agent_role: "Reviewer".to_string(),
+		 *         executions: 3,
+		 *         failed: 1,
+		 *         total_cost_usd: Decimal::new(42, 2),
+		 *         total_duration_ms: 1200,
+		 *     });
+		 *     assert_eq!(entry.agent_role, "Reviewer");
+		 *     ```
+		 */
+		AgentRoleStatsEntryResponse: {
+			/** @description Name of the role (`AgentRole::name`). */
+			agent_role: string;
+			/**
+			 * Format: int64
+			 * @description Number of agent steps the role ran, each attempt included.
+			 */
+			executions: number;
+			/**
+			 * Format: int64
+			 * @description Steps of the role that failed.
+			 */
+			failed: number;
+			/**
+			 * Format: double
+			 * @description Total cost in USD of the steps of the role.
+			 */
+			total_cost_usd: number;
+			/**
+			 * Format: int64
+			 * @description Total execution time in milliseconds of the steps of the role.
+			 */
+			total_duration_ms: number;
+		};
+		/**
+		 * @description Cost, executions and failures per agent role over a period, all workflows
+		 *     combined.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::entities::AgentRoleStatsResponse;
+		 *     use ironflow_store::entities::HistoryPeriod;
+		 *
+		 *     let response = AgentRoleStatsResponse {
+		 *         period: HistoryPeriod::SevenDays,
+		 *         roles: Vec::new(),
+		 *     };
+		 *     assert!(response.roles.is_empty());
+		 *     ```
+		 */
+		AgentRoleStatsResponse: {
+			/** @description The period that was queried. */
+			period: components["schemas"]["HistoryPeriod"];
+			/**
+			 * @description One entry per role that ran an agent step in the period, sorted by
+			 *     total cost descending, then by role name.
+			 */
+			roles: components["schemas"]["AgentRoleStatsEntryResponse"][];
+		};
 		/** @description API key summary (never includes the hash or raw key). */
 		ApiKeyResponse: {
 			/**
@@ -4461,6 +4582,12 @@ export interface components {
 			 * @description Provider Account the agent step ran under, if any.
 			 */
 			account_id?: string | null;
+			/**
+			 * @description Name of the `AgentRole` the agent step was created from; null for any
+			 *     other step, an agent step built by hand, or a step stored before roles
+			 *     were recorded.
+			 */
+			agent_role?: string | null;
 			/**
 			 * @description Who the approval is currently assigned to.
 			 *
@@ -7832,6 +7959,43 @@ export interface operations {
 			};
 		};
 	};
+	get_agent_role_stats: {
+		parameters: {
+			query?: {
+				/** @description Time period to query: `24h`, `7d`, `30d` or `90d`. Defaults to `7d`. */
+				period?: null | components["schemas"]["HistoryPeriod"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Statistics per agent role */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["AgentRoleStatsResponse"];
+				};
+			};
+			/** @description Invalid period */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
 	get_stats_history: {
 		parameters: {
 			query?: {
@@ -7880,6 +8044,50 @@ export interface operations {
 				};
 			};
 			/** @description Invalid period, granularity or filter */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	list_steps: {
+		parameters: {
+			query: {
+				/**
+				 * @description Name of the `AgentRole` whose agent steps to list, across every run and
+				 *     workflow. Matched exactly. Required.
+				 */
+				agent_role: string;
+				/** @description Page number (1-based, default 1). */
+				page?: number | null;
+				/** @description Items per page (default 20, max 100). */
+				per_page?: number | null;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Agent steps of the role with pagination */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["StepResponse"][];
+				};
+			};
+			/** @description Missing, blank or too long agent_role */
 			400: {
 				headers: {
 					[name: string]: unknown;

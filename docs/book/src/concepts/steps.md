@@ -117,6 +117,10 @@ impl AgentRole for Reviewer {
     type Input = String;
     type Output = Verdict;
 
+    fn name(&self) -> &str {
+        "reviewer"
+    }
+
     fn prompt(&self, diff: String) -> String {
         Prompt::new().text("Review this diff:").untrusted(&diff).to_string()
     }
@@ -144,6 +148,17 @@ are locked by the role: the task has no setter for them, so a call that widens t
 does not compile (a role with more rights is another role). The model, budget, `max_turns`,
 effort and per-call settings (`working_dir`, `allow_failure`, `retry_policy`, pod labels,
 resume settings) are defaults the caller may override.
+
+`name()` names the role. It defaults to the type name without its module path (`Reviewer`);
+override it, as above, to keep the name stable across a type rename, since renaming the type
+splits the role's steps and costs between the old and the new name. The caller of `task`
+cannot override it. The name must not be blank and holds at most 128 bytes: `task` panics
+otherwise. It is recorded on every step the role runs, as the step's `agent_role`. The steps
+of a role, across every workflow and run, are listed by `GET /api/v1/steps?agent_role=reviewer`,
+`ironflow-cli run steps --role reviewer` and the dashboard page Agent Roles. The cost,
+executions and failures per role over a period are returned by
+`GET /api/v1/stats/agent-roles?period=7d` and `ironflow-cli stats roles`. Steps stored before
+roles were recorded have no role.
 
 The step is stored and replayed like any `AgentStepConfig` step. An override changes the
 step config, so it changes the hash of a `RecordReplayProvider` fixture: a fixture recorded

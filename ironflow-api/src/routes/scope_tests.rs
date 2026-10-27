@@ -219,6 +219,12 @@ fn rows(run_id: Uuid, step_id: Uuid, user_id: Uuid, schedule_id: Uuid) -> Vec<Ro
     let mut rows = vec![
         // runs_read
         row("GET", "/api/v1/runs", ApiKeyScope::RunsRead),
+        // The query string lets `Query` extract: the scope is checked in the handler.
+        row(
+            "GET",
+            "/api/v1/steps?agent_role=reviewer",
+            ApiKeyScope::RunsRead,
+        ),
         row("GET", run.clone(), ApiKeyScope::RunsRead),
         row("GET", format!("{run}/logs"), ApiKeyScope::RunsRead),
         row("GET", format!("{run}/events"), ApiKeyScope::RunsRead),
@@ -289,6 +295,7 @@ fn rows(run_id: Uuid, step_id: Uuid, user_id: Uuid, schedule_id: Uuid) -> Vec<Ro
         ),
         // stats_read
         row("GET", "/api/v1/stats", ApiKeyScope::StatsRead),
+        row("GET", "/api/v1/stats/agent-roles", ApiKeyScope::StatsRead),
         row("GET", "/api/v1/stats/history", ApiKeyScope::StatsRead),
         // admin
         row("GET", "/api/v1/secrets", ApiKeyScope::Admin),

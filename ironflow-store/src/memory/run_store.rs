@@ -6,12 +6,12 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::entities::{
-    ApiKey, Assignee, ConcurrencyGroupBacklog, IDEMPOTENCY_WINDOW, LeaseRequest, LeaseUpdate,
-    NewRun, NewStep, NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun,
-    Run, RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket,
-    StatsHistoryFilter, Step, StepApproval, StepDependency, StepStatus, StepUpdate, TriggerKind,
-    User, WorkerCapabilities, WorkflowPause, normalize_worker_tags, validate_concurrency_limits,
-    validate_priority, validate_worker_tags,
+    AgentRoleStats, ApiKey, Assignee, ConcurrencyGroupBacklog, IDEMPOTENCY_WINDOW, LeaseRequest,
+    LeaseUpdate, NewRun, NewStep, NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun,
+    ReapedRun, Run, RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate,
+    StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval, StepDependency, StepStatus,
+    StepUpdate, TriggerKind, User, WorkerCapabilities, WorkflowPause, agent_role_from_input,
+    normalize_worker_tags, validate_concurrency_limits, validate_priority, validate_worker_tags,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -799,6 +799,7 @@ impl RunStore for InMemoryStore {
                 .retry_count
                 + 1;
 
+            let agent_role = agent_role_from_input(&req.kind, req.input.as_ref());
             let now = Utc::now();
             let step = Step {
                 id: Uuid::now_v7(),
@@ -833,6 +834,7 @@ impl RunStore for InMemoryStore {
                 account_id: None,
                 environment_id: None,
                 session_id: None,
+                agent_role,
             };
 
             state.steps.insert(step.id, step.clone());
@@ -1058,6 +1060,83 @@ impl RunStore for InMemoryStore {
                 filter.granularity,
             );
             Ok(buckets)
+        })
+    }
+
+    fn list_steps_by_agent_role<'a>(
+        &'a self,
+        agent_role: &'a str,
+        page: u32,
+        per_page: u32,
+    ) -> StoreFuture<'a, Page<Step>> {
+        Box::pin(async move {
+            let state = self.state.read().await;
+
+            let mut steps: Vec<&Step> = state
+                .steps
+                .values()
+                .filter(|s| s.agent_role.as_deref() == Some(agent_role))
+                .collect();
+            steps.sort_by_key(|s| Reverse((s.created_at, s.id)));
+
+            let total = steps.len() as u64;
+            let page = page.max(1);
+            let per_page = per_page.clamp(1, 100);
+            // Computed in u64: a large page times per_page overflows u32.
+            let offset =
+                usize::try_from(u64::from(page - 1) * u64::from(per_page)).unwrap_or(usize::MAX);
+            let items: Vec<Step> = steps
+                .into_iter()
+                .skip(offset)
+                .take(per_page as usize)
+                .cloned()
+                .collect();
+
+            Ok(Page {
+                items,
+                total,
+                page,
+                per_page,
+            })
+        })
+    }
+
+    fn get_agent_role_stats(
+        &self,
+        created_after: DateTime<Utc>,
+    ) -> StoreFuture<'_, Vec<AgentRoleStats>> {
+        Box::pin(async move {
+            let state = self.state.read().await;
+
+            let mut by_role: BTreeMap<String, AgentRoleStats> = BTreeMap::new();
+            for step in state.steps.values() {
+                if step.created_at < created_after {
+                    continue;
+                }
+                let Some(role) = step.agent_role.as_deref() else {
+                    continue;
+                };
+                let stats = by_role
+                    .entry(role.to_string())
+                    .or_insert_with(|| AgentRoleStats {
+                        agent_role: role.to_string(),
+                        ..AgentRoleStats::default()
+                    });
+                stats.executions += 1;
+                if step.status.state == StepStatus::Failed {
+                    stats.failed += 1;
+                }
+                stats.total_cost_usd += step.cost_usd;
+                stats.total_duration_ms += step.duration_ms;
+            }
+
+            let mut roles: Vec<AgentRoleStats> = by_role.into_values().collect();
+            roles.sort_by(|a, b| {
+                b.total_cost_usd
+                    .cmp(&a.total_cost_usd)
+                    .then_with(|| a.agent_role.cmp(&b.agent_role))
+            });
+            Ok(roles)
         })
     }
 

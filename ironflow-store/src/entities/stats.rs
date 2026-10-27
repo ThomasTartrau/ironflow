@@ -1,5 +1,6 @@
 //! [`RunStats`] — aggregated statistics across all runs.
 //! [`StatsHistoryBucket`] — time-bucketed statistics for trend charts.
+//! [`AgentRoleStats`] - cost and executions per agent role.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -54,6 +55,41 @@ pub struct RunStats {
     /// Total cost in USD across all runs.
     pub total_cost_usd: Decimal,
     /// Total execution time in milliseconds across all runs.
+    pub total_duration_ms: u64,
+}
+
+/// Cost, executions and failures of one agent role over a period.
+///
+/// Returned by [`RunStore::get_agent_role_stats`](crate::store::RunStore::get_agent_role_stats),
+/// all workflows combined. Each step record counts as one execution, retried
+/// attempts included.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::AgentRoleStats;
+/// use rust_decimal::Decimal;
+///
+/// let stats = AgentRoleStats {
+///     agent_role: "Reviewer".to_string(),
+///     executions: 12,
+///     failed: 1,
+///     total_cost_usd: Decimal::new(342, 2),
+///     total_duration_ms: 90_000,
+/// };
+/// assert_eq!(stats.executions, 12);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentRoleStats {
+    /// Name of the role (`AgentRole::name`).
+    pub agent_role: String,
+    /// Number of agent steps the role ran.
+    pub executions: u64,
+    /// Steps of the role in the `Failed` state.
+    pub failed: u64,
+    /// Total cost in USD of the steps of the role.
+    pub total_cost_usd: Decimal,
+    /// Total execution time in milliseconds of the steps of the role.
     pub total_duration_ms: u64,
 }
 

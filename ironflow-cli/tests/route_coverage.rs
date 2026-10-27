@@ -39,6 +39,11 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
     // ── Runs ──
     ("GET", "/api/v1/runs", Coverage::Command(&["run", "list"])),
     (
+        "GET",
+        "/api/v1/steps",
+        Coverage::Command(&["run", "steps", "--role", "reviewer"]),
+    ),
+    (
         "POST",
         "/api/v1/runs",
         Coverage::Command(&["run", "create", "deploy"]),
@@ -131,6 +136,11 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
     ),
     // ── Stats ──
     ("GET", "/api/v1/stats", Coverage::Command(&["stats"])),
+    (
+        "GET",
+        "/api/v1/stats/agent-roles",
+        Coverage::Command(&["stats", "roles"]),
+    ),
     (
         "GET",
         "/api/v1/stats/history",
