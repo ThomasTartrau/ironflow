@@ -59,7 +59,7 @@ impl WorkflowHandler for PrSummary {
                 ShellConfig::new(&format!(
                     "glab mr note {} --message \"{}\"",
                     input.mr_iid,
-                    summary.text()
+                    summary.text().raw()
                 )),
             )
             .await?;

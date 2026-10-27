@@ -1,4 +1,4 @@
-use ironflow_engine::config::AgentStepConfig;
+use ironflow_engine::config::{AgentAnswer, AgentStepConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::executor::StepOutput;
 use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler, sub_workflow_names};
@@ -12,7 +12,7 @@ use super::Collect;
 pub const STRUCTURE_STEP: &str = "structure";
 
 /// System metrics, as the agent reads them from the raw command output.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, AgentAnswer)]
 pub struct SystemMetrics {
     /// Used share of the root disk, in percent.
     pub disk_usage_percent: f64,

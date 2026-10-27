@@ -1,9 +1,10 @@
 //! Derive macros for Ironflow workflow authors.
 //!
-//! Depend on `ironflow-engine`, not on this crate: it re-exports both derives
-//! in `ironflow_engine::decision`, next to the traits they implement, and the
-//! generated code refers to `::ironflow_engine`. The derives are documented
-//! and tested there.
+//! Depend on `ironflow-engine`, not on this crate: it re-exports
+//! `DecisionAnswers` and `DecisionChoice` in `ironflow_engine::decision` and
+//! `AgentAnswer` in `ironflow_engine::config`, next to the traits they
+//! implement, and the generated code refers to `::ironflow_engine`. The
+//! derives are documented and tested there.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -14,7 +15,7 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
     Attribute, Data, DeriveInput, Error, Field, Fields, Ident, LitStr, Result, Token, Type,
-    bracketed, parse_macro_input,
+    bracketed, parse_macro_input, parse_quote,
 };
 
 /// Derive `ironflow_engine::decision::DecisionAnswers` on a struct whose
@@ -409,6 +410,79 @@ fn expand_choice(input: &DeriveInput) -> Result<TokenStream2> {
                 }
             }
         }
+    })
+}
+
+/// Derive `ironflow_engine::config::AgentAnswer` on a struct or an enum whose
+/// fields all implement `AgentAnswer`: free text from the agent is
+/// `AgentText`, never `String`.
+///
+/// Every type parameter must implement `AgentAnswer` too. A field of another
+/// type fails to compile, pointing at that field.
+///
+/// # Examples
+///
+/// Compiled and run in `ironflow_engine::config`:
+///
+/// ```ignore
+/// use ironflow_engine::config::{AgentAnswer, AgentText};
+///
+/// #[derive(AgentAnswer)]
+/// struct Review {
+///     score: u8,
+///     summary: AgentText,
+/// }
+/// ```
+#[proc_macro_derive(AgentAnswer)]
+pub fn derive_agent_answer(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand_agent_answer(&input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+fn expand_agent_answer(input: &DeriveInput) -> Result<TokenStream2> {
+    let field_types: Vec<&Type> = match &input.data {
+        Data::Struct(data) => data.fields.iter().map(|field| &field.ty).collect(),
+        Data::Enum(data) => data
+            .variants
+            .iter()
+            .flat_map(|variant| variant.fields.iter().map(|field| &field.ty))
+            .collect(),
+        Data::Union(_) => {
+            return Err(Error::new(
+                input.ident.span(),
+                "`AgentAnswer` derives on a struct or an enum",
+            ));
+        }
+    };
+
+    let support = quote!(::ironflow_engine::config::AgentAnswer);
+    let mut generics = input.generics.clone();
+    for param in generics.type_params_mut() {
+        param.bounds.push(parse_quote!(#support));
+    }
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    let asserts = field_types.iter().map(|ty| {
+        quote_spanned! {ty.span()=>
+            __assert_agent_answer::<#ty>();
+        }
+    });
+
+    let type_name = &input.ident;
+    Ok(quote! {
+        impl #impl_generics #support for #type_name #ty_generics #where_clause {}
+
+        const _: () = {
+            #[allow(dead_code, clippy::extra_unused_type_parameters)]
+            fn __assert_agent_answer<__T: #support + ?Sized>() {}
+
+            #[allow(dead_code, clippy::extra_unused_type_parameters)]
+            fn __assert_fields #impl_generics () #where_clause {
+                #(#asserts)*
+            }
+        };
     })
 }
 

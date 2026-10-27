@@ -5,6 +5,7 @@
 //! and reconstructed by the executor at runtime.
 
 mod agent;
+mod agent_answer;
 mod agent_role;
 mod approval;
 mod approvers;
@@ -18,9 +19,10 @@ mod shell;
 mod workflow;
 
 pub use agent::{
-    AgentStep, AgentStepConfig, DEFAULT_RESUME_PROMPT, DEFAULT_UNTRUSTED_INSTRUCTION, Prompt, Tool,
-    ToolProfile,
+    AgentStep, AgentStepConfig, AgentText, DEFAULT_RESUME_PROMPT, DEFAULT_UNTRUSTED_INSTRUCTION,
+    Prompt, Tool, ToolProfile, UntrustedContent,
 };
+pub use agent_answer::AgentAnswer;
 pub use agent_role::{AgentRole, AgentTask, MAX_ROLE_NAME_LEN};
 pub use approval::ApprovalConfig;
 pub use approvers::Approvers;

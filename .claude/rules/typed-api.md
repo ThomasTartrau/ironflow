@@ -24,6 +24,8 @@ or `""` in silence. Do not reintroduce the patterns below.
 | A sub-workflow payload built with `json!({..})` | `impl TypedWorkflow for Child { type Input = ChildInput; }` and `ctx.workflow(&Child, ChildInput { .. })` |
 | Handler names as strings in `sub_workflows()` | `sub_workflow_names(&[&Child])` |
 | A JSON Schema written by hand | `input_schema_for::<T>()`, or `Self::typed_input_schema()` with `TypedWorkflow` |
+| Agent text formatted into a prompt: `format!("..{}", out.text().raw())` | `Prompt::new().text("..").untrusted(&out.text())` |
+| A `String` field in an agent answer type | `AgentText`, and `#[derive(AgentAnswer)]` on the type |
 
 ## Strings that stay strings
 

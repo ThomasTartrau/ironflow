@@ -23,7 +23,7 @@ use ironflow_core::operations::agent::{Effort, Model, PermissionMode};
 use ironflow_core::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture};
 use ironflow_core::providers::record_replay::{RecordReplayProvider, hash_config};
 use ironflow_engine::config::{
-    AgentRole, AgentStep, AgentStepConfig, HumanInputConfig, StepConfig, Tool,
+    AgentAnswer, AgentRole, AgentStep, AgentStepConfig, HumanInputConfig, StepConfig, Tool,
 };
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::{Engine, EnqueueOptions};
@@ -41,7 +41,7 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 const WORKFLOW: &str = "fixture-review";
 
 /// What the reviewer role answers.
-#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema, AgentAnswer)]
 struct Verdict {
     approved: bool,
     score: u8,

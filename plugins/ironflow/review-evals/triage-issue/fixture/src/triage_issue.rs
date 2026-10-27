@@ -1,4 +1,6 @@
-use ironflow_engine::config::{AgentStepConfig, HumanInputConfig, Prompt, ShellConfig, Tool};
+use ironflow_engine::config::{
+    AgentAnswer, AgentStepConfig, AgentText, HumanInputConfig, Prompt, ShellConfig, Tool,
+};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, input_schema_for};
 use schemars::JsonSchema;
@@ -13,12 +15,12 @@ pub struct TriageIssueInput {
 }
 
 /// Labels proposed by the agent.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema, AgentAnswer)]
 pub struct Triage {
     /// Labels to put on the issue.
-    pub labels: Vec<String>,
+    pub labels: Vec<AgentText>,
     /// One-paragraph summary for the maintainer.
-    pub summary: String,
+    pub summary: AgentText,
 }
 
 /// The maintainer's final say on the labels.
@@ -78,8 +80,13 @@ impl WorkflowHandler for TriageIssue {
                     "confirm-labels",
                     HumanInputConfig::new(&format!(
                         "{}\n\nProposed labels: {}",
-                        triage.summary,
-                        triage.labels.join(", ")
+                        triage.summary.raw(),
+                        triage
+                            .labels
+                            .iter()
+                            .map(AgentText::raw)
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     )),
                 )
                 .await?;

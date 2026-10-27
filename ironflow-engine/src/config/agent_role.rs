@@ -17,6 +17,7 @@ use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 
 use super::agent::{AgentStep, AgentStepConfig, Tool};
+use super::agent_answer::AgentAnswer;
 use crate::error::EngineError;
 use crate::executor::StepOutput;
 
@@ -45,11 +46,11 @@ pub const MAX_ROLE_NAME_LEN: usize = 128;
 /// # Examples
 ///
 /// ```
-/// use ironflow_engine::config::{AgentRole, AgentStep, Tool};
+/// use ironflow_engine::config::{AgentAnswer, AgentRole, AgentStep, Tool};
 /// use schemars::JsonSchema;
 /// use serde::Deserialize;
 ///
-/// #[derive(Deserialize, JsonSchema)]
+/// #[derive(Deserialize, JsonSchema, AgentAnswer)]
 /// struct Verdict {
 ///     approved: bool,
 /// }
@@ -91,8 +92,9 @@ pub const MAX_ROLE_NAME_LEN: usize = 128;
 /// # use ironflow_engine::context::WorkflowContext;
 /// # use ironflow_engine::error::EngineError;
 /// # use schemars::JsonSchema;
+/// # use ironflow_engine::config::AgentAnswer;
 /// # use serde::Deserialize;
-/// # #[derive(Deserialize, JsonSchema)]
+/// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
 /// # struct Verdict { approved: bool }
 /// # struct Reviewer;
 /// # impl AgentRole for Reviewer {
@@ -109,8 +111,9 @@ pub trait AgentRole {
     /// What the caller passes to [`task`](Self::task) to build the prompt.
     type Input;
 
-    /// What the role answers; `ctx.agent` returns it.
-    type Output: DeserializeOwned + JsonSchema;
+    /// What the role answers; `ctx.agent` returns it. Its free-text fields
+    /// are [`AgentText`](super::AgentText): see [`AgentAnswer`].
+    type Output: DeserializeOwned + JsonSchema + AgentAnswer;
 
     /// Name of the role, recorded on every step it runs and shown by the API,
     /// CLI and dashboard. Defaults to the type name without its module path
@@ -125,8 +128,9 @@ pub trait AgentRole {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// struct Reviewer;
     ///
@@ -238,8 +242,9 @@ pub trait AgentRole {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -276,8 +281,9 @@ fn short_type_name(full: &'static str) -> &'static str {
 /// ```compile_fail,E0599
 /// # use ironflow_engine::config::AgentRole;
 /// # use schemars::JsonSchema;
+/// # use ironflow_engine::config::AgentAnswer;
 /// # use serde::Deserialize;
-/// # #[derive(Deserialize, JsonSchema)]
+/// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
 /// # struct Verdict { approved: bool }
 /// # struct Reviewer;
 /// # impl AgentRole for Reviewer {
@@ -293,8 +299,9 @@ fn short_type_name(full: &'static str) -> &'static str {
 /// ```compile_fail,E0599
 /// # use ironflow_engine::config::AgentRole;
 /// # use schemars::JsonSchema;
+/// # use ironflow_engine::config::AgentAnswer;
 /// # use serde::Deserialize;
-/// # #[derive(Deserialize, JsonSchema)]
+/// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
 /// # struct Verdict { approved: bool }
 /// # struct Reviewer;
 /// # impl AgentRole for Reviewer {
@@ -310,8 +317,9 @@ fn short_type_name(full: &'static str) -> &'static str {
 /// ```compile_fail,E0599
 /// # use ironflow_engine::config::{AgentRole, Tool};
 /// # use schemars::JsonSchema;
+/// # use ironflow_engine::config::AgentAnswer;
 /// # use serde::Deserialize;
-/// # #[derive(Deserialize, JsonSchema)]
+/// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
 /// # struct Verdict { approved: bool }
 /// # struct Reviewer;
 /// # impl AgentRole for Reviewer {
@@ -328,8 +336,9 @@ fn short_type_name(full: &'static str) -> &'static str {
 /// # use ironflow_core::operations::agent::PermissionMode;
 /// # use ironflow_engine::config::AgentRole;
 /// # use schemars::JsonSchema;
+/// # use ironflow_engine::config::AgentAnswer;
 /// # use serde::Deserialize;
-/// # #[derive(Deserialize, JsonSchema)]
+/// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
 /// # struct Verdict { approved: bool }
 /// # struct Reviewer;
 /// # impl AgentRole for Reviewer {
@@ -347,8 +356,9 @@ fn short_type_name(full: &'static str) -> &'static str {
 /// ```compile_fail,E0599
 /// # use ironflow_engine::config::AgentRole;
 /// # use schemars::JsonSchema;
+/// # use ironflow_engine::config::AgentAnswer;
 /// # use serde::Deserialize;
-/// # #[derive(Deserialize, JsonSchema)]
+/// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
 /// # struct Verdict { approved: bool }
 /// # struct Reviewer;
 /// # impl AgentRole for Reviewer {
@@ -364,10 +374,11 @@ fn short_type_name(full: &'static str) -> &'static str {
 /// ```compile_fail,E0599
 /// # use ironflow_engine::config::AgentRole;
 /// # use schemars::JsonSchema;
+/// # use ironflow_engine::config::AgentAnswer;
 /// # use serde::Deserialize;
-/// # #[derive(Deserialize, JsonSchema)]
+/// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
 /// # struct Verdict { approved: bool }
-/// # #[derive(Deserialize, JsonSchema)]
+/// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
 /// # struct Other { n: u8 }
 /// # struct Reviewer;
 /// # impl AgentRole for Reviewer {
@@ -383,8 +394,9 @@ fn short_type_name(full: &'static str) -> &'static str {
 /// ```compile_fail,E0599
 /// # use ironflow_engine::config::AgentRole;
 /// # use schemars::JsonSchema;
+/// # use ironflow_engine::config::AgentAnswer;
 /// # use serde::Deserialize;
-/// # #[derive(Deserialize, JsonSchema)]
+/// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
 /// # struct Verdict { approved: bool }
 /// # struct Reviewer;
 /// # impl AgentRole for Reviewer {
@@ -408,8 +420,9 @@ fn short_type_name(full: &'static str) -> &'static str {
 /// ```
 /// # use ironflow_engine::config::{AgentRole, AgentStep};
 /// # use schemars::JsonSchema;
+/// # use ironflow_engine::config::AgentAnswer;
 /// # use serde::Deserialize;
-/// # #[derive(Deserialize, JsonSchema)]
+/// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
 /// # struct Verdict { approved: bool }
 /// # struct Reviewer;
 /// # impl AgentRole for Reviewer {
@@ -514,8 +527,9 @@ impl<T> AgentTask<T> {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -538,8 +552,9 @@ impl<T> AgentTask<T> {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -562,8 +577,9 @@ impl<T> AgentTask<T> {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -587,8 +603,9 @@ impl<T> AgentTask<T> {
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use ironflow_core::operations::agent::Effort;
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -611,8 +628,9 @@ impl<T> AgentTask<T> {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -635,8 +653,9 @@ impl<T> AgentTask<T> {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -659,8 +678,9 @@ impl<T> AgentTask<T> {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -683,8 +703,9 @@ impl<T> AgentTask<T> {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -707,8 +728,9 @@ impl<T> AgentTask<T> {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -732,8 +754,9 @@ impl<T> AgentTask<T> {
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use ironflow_core::retry::RetryPolicy;
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -756,8 +779,9 @@ impl<T> AgentTask<T> {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -780,8 +804,9 @@ impl<T> AgentTask<T> {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -804,8 +829,9 @@ impl<T> AgentTask<T> {
     /// ```
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -829,8 +855,9 @@ impl<T> AgentTask<T> {
     /// # use ironflow_engine::config::{AgentRole, AgentStep};
     /// # use std::collections::BTreeMap;
     /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
     /// # use serde::Deserialize;
-    /// # #[derive(Deserialize, JsonSchema)]
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// # struct Verdict { approved: bool }
     /// # struct Reviewer;
     /// # impl AgentRole for Reviewer {
@@ -848,7 +875,7 @@ impl<T> AgentTask<T> {
     }
 }
 
-impl<T: DeserializeOwned> AgentStep for AgentTask<T> {
+impl<T: DeserializeOwned + AgentAnswer> AgentStep for AgentTask<T> {
     type Answer = T;
 
     fn into_config(self) -> AgentStepConfig {
@@ -868,7 +895,7 @@ mod tests {
     use serde::Deserialize;
     use serde_json::{Value, json, to_value};
 
-    #[derive(Debug, PartialEq, Deserialize, JsonSchema)]
+    #[derive(Debug, PartialEq, Deserialize, JsonSchema, AgentAnswer)]
     struct Verdict {
         approved: bool,
     }

@@ -31,7 +31,7 @@ use uuid::Uuid;
 use ironflow_core::provider::{AgentProvider, DebugMessage};
 use ironflow_store::entities::{StepKind, StepStatus};
 
-use crate::config::StepConfig;
+use crate::config::{AgentText, StepConfig};
 use crate::error::EngineError;
 use crate::log_sender::StepLogSender;
 
@@ -296,7 +296,14 @@ impl StepOutput {
     }
 
     /// Text answer of an agent step without structured output, or an empty
-    /// string for other kinds.
+    /// [`AgentText`] for other kinds.
+    ///
+    /// The agent wrote this text, possibly repeating instructions planted in
+    /// what it read: it is an [`AgentText`], not a `&str`, so it reaches the
+    /// next prompt only inside an `untrusted` block,
+    /// `Prompt::new().text("..").untrusted(&out.text())`. Read it with
+    /// [`AgentText::raw`] for a log, an artifact, a shell argument or a
+    /// comment. Its `{:?}` prints `AgentText(<N bytes>)`, not the text.
     ///
     /// # Examples
     ///
@@ -320,10 +327,42 @@ impl StepOutput {
     ///     environment_id: None,
     /// };
     /// assert_eq!(answer.text(), "Looks good.");
+    /// assert_eq!(answer.text().raw(), "Looks good.");
     /// assert_eq!(StepOutput { output: json!({"stdout": "x"}), ..answer }.text(), "");
     /// ```
-    pub fn text(&self) -> &str {
-        self.output.as_str().unwrap_or_default()
+    ///
+    /// In the prompt of the next step:
+    ///
+    /// ```no_run
+    /// use ironflow_engine::config::{AgentStepConfig, Prompt};
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// let summary = ctx.agent("summarize", AgentStepConfig::new("Summarize the page")).await?;
+    /// let prompt = Prompt::new()
+    ///     .text("Act on this summary:")
+    ///     .untrusted(&summary.text());
+    /// ctx.agent("act", AgentStepConfig::new(&prompt.to_string())).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// It is no prompt by itself:
+    ///
+    /// ```compile_fail,E0308
+    /// use ironflow_engine::config::AgentStepConfig;
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// let out = ctx.agent("summarize", AgentStepConfig::new("Summarize the page")).await?;
+    /// ctx.agent("act", AgentStepConfig::new(&out.text())).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn text(&self) -> AgentText {
+        AgentText::from(self.output.as_str().unwrap_or_default())
     }
 
     /// Error message of a step tolerated with `allow_failure()` that failed.
@@ -434,8 +473,14 @@ impl StepOutput {
 
     /// Deserialize the step output into `T`.
     ///
-    /// Intended for agent steps constrained by a JSON schema, and for custom
-    /// operations that return structured JSON.
+    /// Intended for custom operations that return structured JSON. For an
+    /// agent step, prefer `.output::<T>()` on the config: `ctx.agent` then
+    /// returns the `T`, which must implement
+    /// [`AgentAnswer`](crate::config::AgentAnswer) so its free-text fields
+    /// are [`AgentText`]. `json` checks nothing of the kind: `json::<String>()`
+    /// or a `String` field reads agent text unmarked, and so does
+    /// [`output`](Self::output) or the `{:?}` of a `StepOutput`, which prints
+    /// that `Value`. Never put such text in a prompt.
     ///
     /// # Errors
     ///

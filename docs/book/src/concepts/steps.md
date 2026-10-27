@@ -64,9 +64,9 @@ same `{"error": ...}` output and the step is not executed again. Files a shell s
 
 ```rust,ignore
 let result = ctx.agent("analyze", AgentStepConfig::new("Analyze this log file")).await?;
-println!("{}", result.text());
+println!("{}", result.text().raw());
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, JsonSchema, AgentAnswer)]
 struct Verdict { approved: bool }
 
 // With `.output::<T>()` the step returns the `T` itself.
@@ -198,6 +198,51 @@ works in library mode too (`Agent::new().prompt(&prompt.to_string())`).
 
 `RecordReplayProvider` masks the nonce when it names a fixture: the same prompt finds its
 fixture from one run to the next.
+
+#### Agent output in a prompt
+
+What an agent wrote is untrusted too: it may repeat, word for word, instructions planted in
+a page, an issue or a log it read. `StepOutput::text()` returns an `AgentText`, which
+enters a prompt only through `untrusted(..)`. It has no `Display`, no `AsRef<str>`:
+`AgentStepConfig::new(&out.text())` and `format!("{}", out.text())` do not compile.
+
+```rust,ignore
+use ironflow_engine::config::{AgentAnswer, AgentStepConfig, AgentText, Prompt};
+
+let summary = ctx.agent("summarize", AgentStepConfig::new("Summarize the page")).await?;
+let prompt = Prompt::new()
+    .text("Act on this summary:")
+    .untrusted(&summary.text());
+ctx.agent("act", AgentStepConfig::new(&prompt.to_string())).await?;
+
+// A typed answer derives `AgentAnswer`; its free-text fields are `AgentText`.
+#[derive(Deserialize, JsonSchema, AgentAnswer)]
+struct Findings {
+    title: AgentText,
+    severity: u8,
+}
+
+let findings = ctx
+    .agent("audit", AgentStepConfig::new("Audit the repo").output::<Findings>())
+    .await?;
+let prompt = Prompt::new().text("Fix this finding:").untrusted(&findings.title);
+```
+
+The `T` of `.output::<T>()` and the `Output` of an `AgentRole` implement `AgentAnswer`,
+which `#[derive(AgentAnswer)]` provides when every field does: numbers, `bool`,
+`AgentText`, `Uuid`, `Decimal`, collections and options of them, other derived types. A
+`String` or a `serde_json::Value` field fails to compile. `AgentText` serializes as a plain
+string with the schema of a `String`, so the stored output and the fixtures are the same.
+
+`{:?}` of an `AgentText` prints `AgentText(<N bytes>)`, never the text, and so does the
+`{:?}` of a type deriving `Debug` that holds one: `format!("{:?}", answer)` carries no
+agent text into a prompt.
+
+The raw text stays reachable, explicitly, for what is not a prompt (a log, an artifact, a
+shell argument, a comment): `.raw()`, `into_raw()`, `serde_json::to_string` or `to_value`
+of an `AgentText` or of a typed answer, `StepOutput::json::<String>()`, the public
+`output.output` `Value` (and the `{:?}` of a `StepOutput`, which prints it), and
+`output_schema_raw` with `json::<T>()`. Never put their result in a prompt.
 
 ## Sub-workflow steps
 

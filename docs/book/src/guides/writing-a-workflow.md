@@ -80,6 +80,9 @@ An agent reused across workflows is a role rather than a config built in each ha
 `impl AgentRole for Reviewer`, then `ctx.agent("review", Reviewer.task(input))`. See
 [Reusable agent roles](../concepts/steps.md#reusable-agent-roles).
 
+What an agent wrote reaches the next prompt only through `Prompt::untrusted`: see
+[Agent output in a prompt](../concepts/steps.md#agent-output-in-a-prompt).
+
 ## 3. Register in your handlers list
 
 ```rust,ignore
