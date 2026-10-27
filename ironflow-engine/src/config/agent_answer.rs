@@ -256,6 +256,13 @@ mod tests {
         total: usize,
     }
 
+    #[derive(AgentAnswer)]
+    #[allow(dead_code)]
+    struct Finding {
+        children: Vec<Self>,
+        note: AgentText,
+    }
+
     #[test]
     fn std_types_without_free_text_are_answers() {
         assert_answer::<bool>();
@@ -286,5 +293,6 @@ mod tests {
         assert_answer::<Page<AgentText>>();
         assert_answer::<Page<Verdict>>();
         assert_answer::<Option<Page<Named>>>();
+        assert_answer::<Finding>();
     }
 }

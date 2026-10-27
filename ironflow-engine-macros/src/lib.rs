@@ -478,9 +478,13 @@ fn expand_agent_answer(input: &DeriveInput) -> Result<TokenStream2> {
             #[allow(dead_code, clippy::extra_unused_type_parameters)]
             fn __assert_agent_answer<__T: #support + ?Sized>() {}
 
-            #[allow(dead_code, clippy::extra_unused_type_parameters)]
-            fn __assert_fields #impl_generics () #where_clause {
-                #(#asserts)*
+            // An inherent impl, not a free fn, so a field naming the type as
+            // `Self` (a recursive answer) resolves.
+            impl #impl_generics #type_name #ty_generics #where_clause {
+                #[allow(dead_code)]
+                fn __ironflow_assert_agent_answer_fields() {
+                    #(#asserts)*
+                }
             }
         };
     })
