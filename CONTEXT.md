@@ -34,6 +34,14 @@ _Avoid_: output file, attachment, asset
 A user-defined key-value pair on a Run, used for categorization and filtering. Workflows can declare default Labels applied to every Run they produce.
 _Avoid_: tag, annotation, metadata
 
+**Supervisor**:
+An agent role whose output is a `Turn`: each round it answers, or delegates tasks to its Team. Each delegated task is a child Run; the next round gets the tasks and results as untrusted content.
+_Avoid_: orchestrator, manager agent
+
+**Team**:
+The enum of the roles a Supervisor may delegate to, one variant per role. A role the enum does not name cannot be a target.
+_Avoid_: crew, org chart
+
 ### Execution
 
 **Engine**:

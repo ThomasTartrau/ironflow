@@ -17,3 +17,4 @@ mod shell;
 mod signal;
 mod skip;
 pub(super) mod sub_workflow;
+mod supervise;
