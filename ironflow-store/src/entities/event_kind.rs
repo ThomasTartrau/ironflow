@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn all_has_correct_count() {
-        assert_eq!(EventKind::ALL.len(), 23);
+        assert_eq!(EventKind::ALL.len(), 24);
     }
 
     #[test]

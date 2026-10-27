@@ -39,8 +39,8 @@
 //! # let _ = provider;
 //! ```
 
+use std::convert::Infallible;
 use std::fmt;
-use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -96,6 +96,20 @@ struct ReservationGuard {
 }
 
 impl ReservationGuard {
+    /// Guard of a reservation the store may be recording: the provider has
+    /// not been called, so a release before admission completes charges
+    /// nothing. Settling an id the store never recorded is a no-op.
+    fn pending(store: Arc<dyn Store>, reservation_id: Uuid, binding: &AgentRoleBinding) -> Self {
+        Self {
+            store,
+            reservation_id,
+            role: binding.name.clone(),
+            period: binding.period,
+            reserved_usd: Decimal::ZERO,
+            settled: false,
+        }
+    }
+
     async fn settle(mut self, cost_usd: Decimal) {
         self.settled = true;
         let settlement = RoleCostSettlement {
@@ -212,32 +226,41 @@ impl RoleCostProvider {
         };
         let guard = self.admit(binding, config.max_budget_usd).await?;
 
-        let mut invoke = pin!(self.invoke_inner(config, sink));
-        let mut ticker = interval_at(Instant::now() + RENEW_EVERY, RENEW_EVERY);
-        let ttl_secs = ttl_secs();
-        let result = loop {
-            select! {
-                result = &mut invoke => break result,
-                _ = ticker.tick() => {
-                    if let Err(err) = self
-                        .store
-                        .renew_agent_role_reservation(guard.reservation_id, ttl_secs)
-                        .await
-                    {
-                        warn!(
-                            role = %binding.name,
-                            reservation_id = %guard.reservation_id,
-                            error = %err,
-                            "failed to renew the reservation of an agent role step"
-                        );
-                    }
-                }
-            }
+        // Both futures are polled together: a slow renewal (the worker retries
+        // the API call) never stalls the provider call or its log stream.
+        let result = select! {
+            result = self.invoke_inner(config, sink) => result,
+            never = self.keep_reservation(binding, guard.reservation_id) => match never {},
         };
 
         let cost_usd = reported_cost(&result).unwrap_or(guard.reserved_usd);
         guard.settle(cost_usd).await;
         result
+    }
+
+    /// Renew the lease of a reservation every [`RENEW_EVERY`] until dropped.
+    async fn keep_reservation(
+        &self,
+        binding: &AgentRoleBinding,
+        reservation_id: Uuid,
+    ) -> Infallible {
+        let mut ticker = interval_at(Instant::now() + RENEW_EVERY, RENEW_EVERY);
+        let ttl_secs = ttl_secs();
+        loop {
+            ticker.tick().await;
+            if let Err(err) = self
+                .store
+                .renew_agent_role_reservation(reservation_id, ttl_secs)
+                .await
+            {
+                warn!(
+                    role = %binding.name,
+                    reservation_id = %reservation_id,
+                    error = %err,
+                    "failed to renew the reservation of an agent role step"
+                );
+            }
+        }
     }
 
     /// Reserve room for the step, or refuse it.
@@ -253,15 +276,9 @@ impl RoleCostProvider {
             .and_then(|b| Decimal::try_from(b).ok())
             .filter(|b| *b >= Decimal::ZERO);
         // Armed before the reservation exists: a future dropped while the store
-        // records it still releases it (settling an unknown id is a no-op).
-        let mut guard = ReservationGuard {
-            store: Arc::clone(&self.store),
-            reservation_id,
-            role: binding.name.clone(),
-            period: binding.period,
-            reserved_usd: budget_usd.unwrap_or(Decimal::ZERO),
-            settled: false,
-        };
+        // records it still releases it, charging nothing: the provider was
+        // never called.
+        let mut guard = ReservationGuard::pending(Arc::clone(&self.store), reservation_id, binding);
         let request = RoleCostReservationRequest {
             reservation_id,
             role: binding.name.clone(),
@@ -274,7 +291,8 @@ impl RoleCostProvider {
         match self.store.reserve_agent_role_cost(request).await {
             Err(err) => {
                 // The guard stays armed: the store may have recorded the
-                // reservation before the error reached us.
+                // reservation before the error reached us. It releases it at
+                // zero cost, the provider was never called.
                 warn!(
                     role = %binding.name,
                     error = %err,
@@ -309,6 +327,7 @@ impl RoleCostProvider {
                 })
             }
             Ok(RoleCostAdmission::Admitted { amount_usd, .. }) => {
+                // From here the provider is called: a drop is charged the room.
                 guard.reserved_usd = amount_usd;
                 Ok(guard)
             }
@@ -484,6 +503,52 @@ mod tests {
         // The provider may have spent the room it held: the cap stays closed.
         let record = store.get_agent_role("reviewer").await.unwrap().unwrap();
         assert_eq!(record.spent_usd, Decimal::ONE);
+    }
+
+    #[tokio::test]
+    async fn a_reservation_released_before_the_provider_call_is_charged_nothing() {
+        // The store recorded the reservation but the reply was lost (a worker
+        // HTTP timeout, a 5xx after commit, a cancellation mid-request).
+        let store = Arc::new(InMemoryStore::new());
+        let reservation_id = Uuid::now_v7();
+        let binding = AgentRoleBinding::new("reviewer", Some(RoleCostCap::per_month(Decimal::ONE)));
+        let admission = store
+            .reserve_agent_role_cost(RoleCostReservationRequest {
+                reservation_id,
+                role: binding.name.clone(),
+                code_cap_usd: binding.cost_cap_usd,
+                period: binding.period.as_str().to_string(),
+                period_start: binding.period.start(Utc::now()),
+                budget_usd: Some(Decimal::new(5, 1)),
+                ttl_secs: ttl_secs(),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(admission, RoleCostAdmission::Admitted { .. }));
+
+        drop(ReservationGuard::pending(
+            store.clone(),
+            reservation_id,
+            &binding,
+        ));
+
+        // The release runs on a spawned task.
+        let mut reserved = Decimal::ONE;
+        for _ in 0..100 {
+            reserved = store
+                .get_agent_role("reviewer")
+                .await
+                .unwrap()
+                .unwrap()
+                .reserved_usd;
+            if reserved == Decimal::ZERO {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(reserved, Decimal::ZERO);
+        let record = store.get_agent_role("reviewer").await.unwrap().unwrap();
+        assert_eq!(record.spent_usd, Decimal::ZERO);
     }
 
     #[tokio::test]
