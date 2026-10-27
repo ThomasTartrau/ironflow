@@ -138,6 +138,32 @@ pub struct StatsHistoryParams<'a> {
     pub concurrency_group: Option<&'a str>,
 }
 
+/// Query parameters for [`IronflowClient::list_steps`].
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_sdk::client::ListStepsParams;
+///
+/// let params = ListStepsParams {
+///     agent_role: "Reviewer",
+///     page: Some(2),
+///     per_page: None,
+/// };
+/// assert_eq!(params.agent_role, "Reviewer");
+/// ```
+#[derive(Debug, Clone, Serialize)]
+pub struct ListStepsParams<'a> {
+    /// Name of the `AgentRole` whose agent steps to list. Matched exactly.
+    pub agent_role: &'a str,
+    /// Page number (1-based).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+    /// Items per page (max 100).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_page: Option<u32>,
+}
+
 /// Filtering options for [`IronflowClient::get_run_logs`].
 ///
 /// # Examples
@@ -858,6 +884,72 @@ impl IronflowClient {
         params: &StatsHistoryParams<'_>,
     ) -> Result<ApiResponse<types::StatsHistoryResponse>, Error> {
         self.send_envelope(self.get("/api/v1/stats/history").query(params))
+            .await
+    }
+
+    /// `GET /api/v1/stats/agent-roles` -- Cost, executions and failures per
+    /// agent role over a period, all workflows combined.
+    ///
+    /// `period` is `24h`, `7d`, `30d` or `90d`; the server defaults to `7d`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(client: &ironflow_sdk::IronflowClient) -> Result<(), ironflow_sdk::error::Error> {
+    /// let stats = client.agent_role_stats(Some("30d")).await?;
+    /// for role in &stats.data.roles {
+    ///     println!("{}: {} executions", role.agent_role, role.executions);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 401, 403 or 400 (invalid period).
+    pub async fn agent_role_stats(
+        &self,
+        period: Option<&str>,
+    ) -> Result<ApiResponse<types::AgentRoleStatsResponse>, Error> {
+        let mut request = self.get("/api/v1/stats/agent-roles");
+        if let Some(period) = period {
+            request = request.query(&[("period", period)]);
+        }
+        self.send_envelope(request).await
+    }
+
+    // ── Steps ──────────────────────────────────────────────────────
+
+    /// `GET /api/v1/steps` -- List the agent steps of one agent role across
+    /// every run and workflow, newest first.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_sdk::client::ListStepsParams;
+    ///
+    /// # async fn example(client: &ironflow_sdk::IronflowClient) -> Result<(), ironflow_sdk::error::Error> {
+    /// let params = ListStepsParams {
+    ///     agent_role: "Reviewer",
+    ///     page: None,
+    ///     per_page: Some(50),
+    /// };
+    /// let steps = client.list_steps(&params).await?;
+    /// for step in &steps.data {
+    ///     println!("{} in run {}", step.name, step.run_id);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 401, 403 or 400 (blank or too long role).
+    pub async fn list_steps(
+        &self,
+        params: &ListStepsParams<'_>,
+    ) -> Result<ApiResponse<Vec<types::StepResponse>>, Error> {
+        self.send_envelope(self.get("/api/v1/steps").query(params))
             .await
     }
 

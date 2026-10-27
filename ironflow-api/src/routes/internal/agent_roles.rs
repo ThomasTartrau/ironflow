@@ -172,7 +172,7 @@ mod tests {
     async fn invalid_reservations_are_rejected() {
         let state = test_state();
         let uri = "/api/v1/internal/agent-roles/reservations";
-        let bad_name = reservation(Uuid::now_v7(), "Not Valid");
+        let bad_name = reservation(Uuid::now_v7(), " padded ");
         let (status, _) = call(&state, "POST", uri, WORKER, Some(bad_name)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
 

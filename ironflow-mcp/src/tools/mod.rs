@@ -2,7 +2,7 @@
 //!
 //! Each tool lives in its own file, grouped by domain:
 //! - `workflows/` - list, inspect, plan, pause and resume workflows
-//! - `runs/` - create, list, search, and inspect runs
+//! - `runs/` - create, list, search, and inspect runs; list the steps of an agent role
 //! - `actions/` - cancel, pause, resume, approve, reject, retry, replay runs; submit and
 //!   reject human input
 //! - `secrets/` - list, create, update, delete, rotate secrets
@@ -12,7 +12,7 @@
 //! - `signals/` - send and list signals
 //! - `audit_logs.rs` - list audit log entries
 //! - `artifacts.rs` - download step artifacts
-//! - `stats.rs` - aggregated statistics
+//! - `stats.rs` - aggregated statistics, per run and per agent role
 
 pub mod actions;
 pub mod api_keys;
@@ -43,7 +43,9 @@ pub use provider_accounts::{
     ListProviderAccountsTool, ProviderAccountUsageTool, TestProviderAccountTool,
     UpdateProviderAccountTool,
 };
-pub use runs::{CreateRunTool, GetRunLogsTool, GetRunTool, ListRunsTool, SearchRunsTool};
+pub use runs::{
+    CreateRunTool, GetRunLogsTool, GetRunTool, ListAgentRoleStepsTool, ListRunsTool, SearchRunsTool,
+};
 pub use schedules::{
     CreateScheduleTool, DeleteScheduleTool, ListSchedulesTool, PauseScheduleTool,
     ResumeScheduleTool, TriggerScheduleTool,
@@ -52,7 +54,7 @@ pub use secrets::{
     CreateSecretTool, DeleteSecretTool, ListSecretsTool, RotateSecretKeyTool, UpdateSecretTool,
 };
 pub use signals::{ListSignalsTool, SendSignalTool};
-pub use stats::{GetStatsHistoryTool, GetStatsTool};
+pub use stats::{GetAgentRoleStatsTool, GetStatsHistoryTool, GetStatsTool};
 pub use users::{CreateUserTool, DeleteUserTool, ListUsersTool, UpdateUserRoleTool};
 pub use workflows::{
     GetWorkflowTool, ListWorkflowsTool, PauseWorkflowTool, PlanWorkflowTool, ResumeWorkflowTool,
@@ -71,6 +73,7 @@ rust_mcp_sdk::tool_box!(
         SearchRunsTool,
         GetRunTool,
         GetRunLogsTool,
+        ListAgentRoleStepsTool,
         CancelRunTool,
         PauseRunTool,
         ResumeRunTool,
@@ -82,6 +85,7 @@ rust_mcp_sdk::tool_box!(
         RejectInputTool,
         GetStatsTool,
         GetStatsHistoryTool,
+        GetAgentRoleStatsTool,
         ListSecretsTool,
         CreateSecretTool,
         UpdateSecretTool,
@@ -411,6 +415,49 @@ mod tests {
                             "concurrency_group": params.get("concurrency_group").cloned()
                         }
                     }))
+                }),
+            )
+            .route(
+                "/api/v1/stats/agent-roles",
+                get(|Query(params): Query<HashMap<String, String>>| async move {
+                    Json(json!({
+                        "data": {
+                            "period": params.get("period").cloned().unwrap_or_else(|| "7d".to_string()),
+                            "roles": [{
+                                "agent_role": "Reviewer",
+                                "executions": 2,
+                                "failed": 1,
+                                "total_cost_usd": 0.5,
+                                "total_duration_ms": 1500
+                            }]
+                        }
+                    }))
+                }),
+            )
+            .route(
+                "/api/v1/steps",
+                get(|Query(params): Query<HashMap<String, String>>| async move {
+                    match params.get("agent_role").map(|role| role.trim()) {
+                        Some(role) if !role.is_empty() => Json(json!({
+                            "data": [{ "id": "s1", "name": "review", "agent_role": role }],
+                            "meta": {
+                                "page": params.get("page").cloned(),
+                                "per_page": params.get("per_page").cloned(),
+                                "total": 1
+                            }
+                        }))
+                        .into_response(),
+                        _ => (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({
+                                "error": {
+                                    "code": "BAD_REQUEST",
+                                    "message": "agent_role must not be empty"
+                                }
+                            })),
+                        )
+                            .into_response(),
+                    }
                 }),
             )
             // Secrets
@@ -1519,6 +1566,75 @@ mod tests {
             "01936f5a-0000-7000-8000-000000000001"
         );
         assert_eq!(parsed["meta"]["concurrency_group"], "g");
+    }
+
+    // ---------------------------------------------------------------
+    // GetAgentRoleStatsTool
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn get_agent_role_stats_returns_the_roles() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = GetAgentRoleStatsTool { period: None };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["data"]["period"], "7d");
+        assert_eq!(parsed["data"]["roles"][0]["agent_role"], "Reviewer");
+        assert_eq!(parsed["data"]["roles"][0]["executions"], 2);
+    }
+
+    #[tokio::test]
+    async fn get_agent_role_stats_forwards_the_period() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = GetAgentRoleStatsTool {
+            period: Some("30d".to_string()),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["data"]["period"], "30d");
+    }
+
+    // ---------------------------------------------------------------
+    // ListAgentRoleStepsTool
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn list_agent_role_steps_forwards_the_role_and_pagination() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = ListAgentRoleStepsTool {
+            agent_role: "Reviewer".to_string(),
+            page: Some(2),
+            per_page: Some(10),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["data"][0]["agent_role"], "Reviewer");
+        assert_eq!(parsed["meta"]["page"], "2");
+        assert_eq!(parsed["meta"]["per_page"], "10");
+    }
+
+    #[tokio::test]
+    async fn list_agent_role_steps_propagates_a_bad_request() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = ListAgentRoleStepsTool {
+            agent_role: " ".to_string(),
+            page: None,
+            per_page: None,
+        };
+
+        let err = tool.run(&client).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("agent_role must not be empty"), "got: {msg}");
     }
 
     // ---------------------------------------------------------------

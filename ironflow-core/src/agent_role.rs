@@ -1,7 +1,7 @@
 //! Identity and cost cap of an agent role.
 //!
-//! An agent role (see `ironflow_engine::config::AgentRole`) may declare a
-//! name and a [`RoleCostCap`]. The role's tasks carry an [`AgentRoleBinding`]
+//! An agent role (see `ironflow_engine::config::AgentRole`) has a name and
+//! may declare a [`RoleCostCap`]. The role's tasks carry an [`AgentRoleBinding`]
 //! on their [`AgentConfig`](crate::provider::AgentConfig), which the engine
 //! reads to charge every agent step of the role to one shared counter over a
 //! calendar [`CostPeriod`] (UTC).
@@ -26,13 +26,21 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString, IntoStaticStr};
 
 /// Longest name an agent role may have, in bytes.
-pub const MAX_ROLE_NAME_LEN: usize = 64;
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::agent_role::MAX_ROLE_NAME_LEN;
+///
+/// assert_eq!(MAX_ROLE_NAME_LEN, 128);
+/// ```
+pub const MAX_ROLE_NAME_LEN: usize = 128;
 
 /// Whether `name` is a valid agent role name.
 ///
-/// A name has 1 to [`MAX_ROLE_NAME_LEN`] bytes of ASCII lowercase letters,
-/// digits, `-`, `_` and `.`, and starts with a letter or a digit. It is used
-/// in URLs and as a database key, so nothing else is accepted.
+/// A name is not blank, has no leading or trailing whitespace, and has at
+/// most [`MAX_ROLE_NAME_LEN`] bytes. The default name of a role, its type
+/// name (`Reviewer`), is valid.
 ///
 /// # Examples
 ///
@@ -40,18 +48,12 @@ pub const MAX_ROLE_NAME_LEN: usize = 64;
 /// use ironflow_core::agent_role::is_valid_role_name;
 ///
 /// assert!(is_valid_role_name("code-reviewer.v2"));
-/// assert!(!is_valid_role_name("Reviewer"));
-/// assert!(!is_valid_role_name("-reviewer"));
+/// assert!(is_valid_role_name("Reviewer"));
+/// assert!(!is_valid_role_name(" reviewer"));
 /// assert!(!is_valid_role_name(""));
 /// ```
 pub fn is_valid_role_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    let alphanumeric = |b: &u8| b.is_ascii_lowercase() || b.is_ascii_digit();
-    bytes.first().is_some_and(alphanumeric)
-        && bytes.len() <= MAX_ROLE_NAME_LEN
-        && bytes
-            .iter()
-            .all(|b| alphanumeric(b) || matches!(b, b'-' | b'_' | b'.'))
+    !name.trim().is_empty() && name.trim() == name && name.len() <= MAX_ROLE_NAME_LEN
 }
 
 /// Calendar period, in UTC, over which the cost of a role is counted.
@@ -297,7 +299,7 @@ impl AgentRoleBinding {
     pub fn new(name: &str, cap: Option<RoleCostCap>) -> Self {
         assert!(
             is_valid_role_name(name),
-            "invalid agent role name {name:?}: 1 to {MAX_ROLE_NAME_LEN} ASCII lowercase letters, digits, '-', '_' or '.', starting with a letter or a digit"
+            "invalid agent role name {name:?}: not blank, no leading or trailing whitespace, at most {MAX_ROLE_NAME_LEN} bytes"
         );
         Self {
             name: name.to_string(),
@@ -323,16 +325,16 @@ mod tests {
     fn role_names_are_validated() {
         assert!(is_valid_role_name("code-reviewer.v2"));
         assert!(is_valid_role_name("a"));
-        assert!(is_valid_role_name("9_lives"));
-        assert!(is_valid_role_name(&"a".repeat(64)));
-        assert!(!is_valid_role_name(&"a".repeat(65)));
+        assert!(is_valid_role_name("Reviewer"));
+        assert!(is_valid_role_name("revi\u{e9}wer"));
+        assert!(is_valid_role_name("code reviewer"));
+        assert!(is_valid_role_name("a/b"));
+        assert!(is_valid_role_name(&"a".repeat(MAX_ROLE_NAME_LEN)));
+        assert!(!is_valid_role_name(&"a".repeat(MAX_ROLE_NAME_LEN + 1)));
         assert!(!is_valid_role_name(""));
-        assert!(!is_valid_role_name("Reviewer"));
-        assert!(!is_valid_role_name("revi\u{e9}wer"));
-        assert!(!is_valid_role_name("-reviewer"));
-        assert!(!is_valid_role_name(".reviewer"));
-        assert!(!is_valid_role_name("a b"));
-        assert!(!is_valid_role_name("a/b"));
+        assert!(!is_valid_role_name("   "));
+        assert!(!is_valid_role_name(" reviewer"));
+        assert!(!is_valid_role_name("reviewer\n"));
     }
 
     #[test]

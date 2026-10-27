@@ -1,5 +1,5 @@
-//! `/api/v1/agent-roles` -- Agent roles: the cost each named role consumed
-//! over its period, and its cap.
+//! `/api/v1/agent-roles` -- Agent roles: the cost each role consumed over its
+//! period, and its cap.
 //!
 //! Reading needs the `stats_read` scope for an API key; setting the operator
 //! cap is admin only. A role appears once one of its agent steps ran.
@@ -8,7 +8,7 @@ pub mod get;
 pub mod list;
 pub mod update_cost_cap;
 
-use ironflow_core::agent_role::is_valid_role_name;
+use ironflow_core::agent_role::{MAX_ROLE_NAME_LEN, is_valid_role_name};
 
 use crate::error::ApiError;
 
@@ -18,7 +18,7 @@ fn validate_role_name(name: &str) -> Result<(), ApiError> {
         Ok(())
     } else {
         Err(ApiError::BadRequest(format!(
-            "invalid agent role name '{name}': 1 to 64 ASCII lowercase letters, digits, '-', '_' or '.', starting with a letter or a digit"
+            "invalid agent role name '{name}': not blank, no leading or trailing whitespace, at most {MAX_ROLE_NAME_LEN} bytes"
         )))
     }
 }

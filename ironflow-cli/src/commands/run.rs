@@ -1,4 +1,4 @@
-//! Run subcommands: create, list, get, cancel, pause, resume, approve, reject, input,
+//! Run subcommands: create, list, steps, get, cancel, pause, resume, approve, reject, input,
 //! reject-input, retry, replay, watch, plan, diff.
 
 use std::fs;
@@ -12,7 +12,7 @@ use clap::{Args, Subcommand, value_parser};
 use futures_util::StreamExt;
 use humantime::format_duration;
 use ironflow_sdk::IronflowClient;
-use ironflow_sdk::client::ListRunsFilter;
+use ironflow_sdk::client::{ListRunsFilter, ListStepsParams};
 use ironflow_sdk::types::{ConcurrencyLimit, CreateRunRequest, PlanWorkflowRequest, RunStatus};
 use ironflow_types::parse_concurrency_limit as shared_parse_concurrency_limit;
 use serde_json::{Map, Value, from_str, json, to_string};
@@ -114,6 +114,18 @@ pub enum RunCommands {
         /// Items per page.
         #[arg(long)]
         per_page: Option<u32>,
+    },
+    /// List the agent steps of a role across every workflow and run.
+    Steps {
+        /// Name of the agent role (`AgentRole::name`), matched exactly.
+        #[arg(long)]
+        role: String,
+        /// Page number (1-based).
+        #[arg(long, default_value_t = 1)]
+        page: u32,
+        /// Items per page (max 100).
+        #[arg(long, default_value_t = 20)]
+        per_page: u32,
     },
     /// Get details of a specific run.
     Get {
@@ -344,6 +356,21 @@ pub async fn execute(
             };
             let response = client.list_runs_filtered(&filter).await?;
             output::print_output(json_mode, &response, || output::runs_table(&response.data))?;
+        }
+        RunCommands::Steps {
+            role,
+            page,
+            per_page,
+        } => {
+            let params = ListStepsParams {
+                agent_role: role,
+                page: Some(*page),
+                per_page: Some(*per_page),
+            };
+            let response = client.list_steps(&params).await?;
+            output::print_output(json_mode, &response, || {
+                output::role_steps_table(&response.data)
+            })?;
         }
         RunCommands::Get { id } => {
             let response = client.get_run(*id).await?;

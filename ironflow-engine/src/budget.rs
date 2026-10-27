@@ -9,7 +9,7 @@
 //!   the run *before* the step is launched, so no spend happens.
 //! - **Monthly quota** -- checked when a new run is created. Crossing it
 //!   refuses the creation; runs already in flight are untouched.
-//! - **Per-role cap** -- an `AgentRole` with a name and a cost cap is bounded
+//! - **Per-role cap** -- an `AgentRole` with a cost cap is bounded
 //!   over a calendar period across every run of every workflow: see
 //!   [`crate::role_cost`].
 //!

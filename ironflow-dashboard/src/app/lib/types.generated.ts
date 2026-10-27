@@ -4,6 +4,90 @@
  */
 
 export interface paths {
+	"/api/v1/agent-roles": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List the agent roles seen by the platform, ordered by name, with the cost
+		 *     spent and reserved over their current period and the room left.
+		 * @description An API key needs the `stats_read` scope.
+		 *
+		 *     # Errors
+		 *
+		 *     - 401 if not authenticated
+		 *     - 403 if the API key lacks `stats_read`
+		 */
+		get: operations["list_agent_roles"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/agent-roles/{name}": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get the cost spent and reserved by an agent role over its current period,
+		 *     its cap and the room left.
+		 * @description An API key needs the `stats_read` scope.
+		 *
+		 *     # Errors
+		 *
+		 *     - 400 if the name is not a valid role name
+		 *     - 401 if not authenticated
+		 *     - 403 if the API key lacks `stats_read`
+		 *     - 404 if no step of the role ever ran
+		 */
+		get: operations["get_agent_role"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/agent-roles/{name}/cost-cap": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		/**
+		 * Set (`operator_cap_usd` a number) or clear (`null`) the operator cap of an
+		 *     agent role. Admin only; audited.
+		 * @description The cap enforced is the lower of the cap declared in code and the operator
+		 *     cap: an operator can lower the cap of a role, never raise it.
+		 *
+		 *     # Errors
+		 *
+		 *     - 400 if the name is not a valid role name or the cap is negative
+		 *     - 401 if not authenticated
+		 *     - 403 if the caller is not an admin
+		 *     - 404 if no step of the role ever ran
+		 *     - 422 if the body lacks `operator_cap_usd` or has unknown fields
+		 */
+		put: operations["update_agent_role_cost_cap"];
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/api-keys": {
 		parameters: {
 			query?: never;
@@ -1183,6 +1267,29 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/stats/agent-roles": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get the cost, executions and failures of every agent role over a period.
+		 * @description Aggregates the agent steps created during the period (`24h`, `7d`, `30d`
+		 *     or `90d`, default `7d`) by the `AgentRole` they were created from, all
+		 *     workflows combined. Each step record counts as one execution, retried
+		 *     attempts included. Agent steps without a role are left out.
+		 */
+		get: operations["get_agent_role_stats"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/stats/history": {
 		parameters: {
 			query?: never;
@@ -1203,6 +1310,34 @@ export interface paths {
 		 *     `concurrency_group`).
 		 */
 		get: operations["get_stats_history"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/steps": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List the agent steps of one agent role, across every run and workflow.
+		 * @description # Query Parameters
+		 *
+		 *     - `agent_role` - Name of the `AgentRole`, matched exactly (required, at
+		 *       most 128 bytes)
+		 *     - `page` - Page number, 1-based (default: 1)
+		 *     - `per_page` - Items per page (default: 20, max: 100)
+		 *
+		 *     Steps are sorted newest first. Steps stored before roles were recorded have
+		 *     no role and are never listed.
+		 */
+		get: operations["list_steps"];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -1542,6 +1677,159 @@ export interface components {
 		 * @enum {string}
 		 */
 		AccountWindowStatus: "allowed" | "allowed_warning" | "rejected";
+		/**
+		 * @description Cost consumed by an agent role over its current period, and its cap.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_api::entities::AgentRoleResponse;
+		 *     use ironflow_store::entities::AgentRoleRecord;
+		 *     use rust_decimal::Decimal;
+		 *     use uuid::Uuid;
+		 *
+		 *     # fn example() -> Result<(), ironflow_api::error::ApiError> {
+		 *     let now = Utc::now();
+		 *     let record = AgentRoleRecord {
+		 *         id: Uuid::now_v7(),
+		 *         name: "reviewer".to_string(),
+		 *         code_cap_usd: Some(Decimal::TEN),
+		 *         operator_cap_usd: None,
+		 *         period: "month".to_string(),
+		 *         period_start: now,
+		 *         spent_usd: Decimal::TWO,
+		 *         reserved_usd: Decimal::ONE,
+		 *         created_at: now,
+		 *         updated_at: now,
+		 *     };
+		 *     let response = AgentRoleResponse::from_record(record, now)?;
+		 *     assert_eq!(response.remaining_usd, Some(Decimal::new(7, 0)));
+		 *     # Ok(())
+		 *     # }
+		 *     ```
+		 */
+		AgentRoleResponse: {
+			/**
+			 * Format: double
+			 * @description Cap enforced: the lower of the code and operator caps.
+			 */
+			cap_usd?: number | null;
+			/**
+			 * Format: double
+			 * @description Cap declared in code, as last seen by a step of the role.
+			 */
+			code_cap_usd?: number | null;
+			/** @description Name of the role, as declared by `AgentRole::name`. */
+			name: string;
+			/**
+			 * Format: double
+			 * @description Cap set by an operator; it can only lower the code cap.
+			 */
+			operator_cap_usd?: number | null;
+			/** @description Period of the counter: `day` or `month` (calendar, UTC). */
+			period: string;
+			/**
+			 * Format: date-time
+			 * @description Start of the current period.
+			 */
+			period_start: string;
+			/**
+			 * Format: double
+			 * @description Room left under the cap, never negative. `null` without a cap.
+			 */
+			remaining_usd?: number | null;
+			/**
+			 * Format: double
+			 * @description Cost held by the steps of the role running now.
+			 */
+			reserved_usd: number;
+			/**
+			 * Format: date-time
+			 * @description When the counter resets.
+			 */
+			resets_at: string;
+			/**
+			 * Format: double
+			 * @description Cost settled in the current period.
+			 */
+			spent_usd: number;
+			/**
+			 * Format: date-time
+			 * @description Last change of the counter or of a cap.
+			 */
+			updated_at: string;
+		};
+		/**
+		 * @description Cost, executions and failures of one agent role.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::entities::AgentRoleStatsEntryResponse;
+		 *     use ironflow_store::entities::AgentRoleStats;
+		 *     use rust_decimal::Decimal;
+		 *
+		 *     let entry = AgentRoleStatsEntryResponse::from(AgentRoleStats {
+		 *         agent_role: "Reviewer".to_string(),
+		 *         executions: 3,
+		 *         failed: 1,
+		 *         total_cost_usd: Decimal::new(42, 2),
+		 *         total_duration_ms: 1200,
+		 *     });
+		 *     assert_eq!(entry.agent_role, "Reviewer");
+		 *     ```
+		 */
+		AgentRoleStatsEntryResponse: {
+			/** @description Name of the role (`AgentRole::name`). */
+			agent_role: string;
+			/**
+			 * Format: int64
+			 * @description Number of agent steps the role ran, each attempt included.
+			 */
+			executions: number;
+			/**
+			 * Format: int64
+			 * @description Steps of the role that failed.
+			 */
+			failed: number;
+			/**
+			 * Format: double
+			 * @description Total cost in USD of the steps of the role.
+			 */
+			total_cost_usd: number;
+			/**
+			 * Format: int64
+			 * @description Total execution time in milliseconds of the steps of the role.
+			 */
+			total_duration_ms: number;
+		};
+		/**
+		 * @description Cost, executions and failures per agent role over a period, all workflows
+		 *     combined.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::entities::AgentRoleStatsResponse;
+		 *     use ironflow_store::entities::HistoryPeriod;
+		 *
+		 *     let response = AgentRoleStatsResponse {
+		 *         period: HistoryPeriod::SevenDays,
+		 *         roles: Vec::new(),
+		 *     };
+		 *     assert!(response.roles.is_empty());
+		 *     ```
+		 */
+		AgentRoleStatsResponse: {
+			/** @description The period that was queried. */
+			period: components["schemas"]["HistoryPeriod"];
+			/**
+			 * @description One entry per role that ran an agent step in the period, sorted by
+			 *     total cost descending, then by role name.
+			 */
+			roles: components["schemas"]["AgentRoleStatsEntryResponse"][];
+		};
 		/** @description API key summary (never includes the hash or raw key). */
 		ApiKeyResponse: {
 			/**
@@ -2552,7 +2840,8 @@ export interface components {
 			| "signal_received"
 			| "schedule_occurrences_missed"
 			| "workflow_paused"
-			| "workflow_resumed";
+			| "workflow_resumed"
+			| "agent_role.cost_cap_updated";
 		/** @description The execution plan of one workflow for one input payload. */
 		ExecutionPlanResponse: {
 			/**
@@ -2644,6 +2933,19 @@ export interface components {
 			missing: number[];
 			/** @description Versions that can be removed from the key ring safely. */
 			retirable: number[];
+		};
+		/** @description Query parameters for listing agent roles. */
+		ListAgentRolesQuery: {
+			/**
+			 * Format: int32
+			 * @description Page number (1-based, defaults to 1).
+			 */
+			page?: number | null;
+			/**
+			 * Format: int32
+			 * @description Items per page (defaults to 50, max 100).
+			 */
+			per_page?: number | null;
 		};
 		/**
 		 * @description Query parameters for listing delegations.
@@ -4462,6 +4764,12 @@ export interface components {
 			 */
 			account_id?: string | null;
 			/**
+			 * @description Name of the `AgentRole` the agent step was created from; null for any
+			 *     other step, an agent step built by hand, or a step stored before roles
+			 *     were recorded.
+			 */
+			agent_role?: string | null;
+			/**
 			 * @description Who the approval is currently assigned to.
 			 *
 			 *     Serialized as a prefixed string: `user:{name}` or `group:{name}`.
@@ -4731,6 +5039,21 @@ export interface components {
 					/** @description Name of the probe that fired (e.g. `"http"`, `"sql"`). */
 					probe: string;
 			  };
+		/**
+		 * @description Set or clear the operator cap of an agent role.
+		 *
+		 *     The field is required and unknown fields are refused: only an explicit
+		 *     `null` clears the cap, so `{}` or a misspelled key cannot raise the
+		 *     enforced cap back to the code cap.
+		 */
+		UpdateAgentRoleCostCapRequest: {
+			/**
+			 * Format: double
+			 * @description Cap in USD over the role's period, at least 0; `null` clears it. It can
+			 *     only lower the cap declared in code.
+			 */
+			operator_cap_usd: number | null;
+		};
 		/**
 		 * @description Request body to update a Provider Account. All fields optional; `name`
 		 *     and `kind` are immutable.
@@ -5426,6 +5749,159 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+	list_agent_roles: {
+		parameters: {
+			query?: {
+				/** @description Page number (1-based, defaults to 1). */
+				page?: number | null;
+				/** @description Items per page (defaults to 50, max 100). */
+				per_page?: number | null;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Paginated list of agent roles */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["AgentRoleResponse"][];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Insufficient scope */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	get_agent_role: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Agent role name */
+				name: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Agent role */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["AgentRoleResponse"];
+				};
+			};
+			/** @description Invalid role name */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Insufficient scope */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Agent role not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	update_agent_role_cost_cap: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Agent role name */
+				name: string;
+			};
+			cookie?: never;
+		};
+		/** @description Operator cap, null to clear it */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["UpdateAgentRoleCostCapRequest"];
+			};
+		};
+		responses: {
+			/** @description Agent role updated */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["AgentRoleResponse"];
+				};
+			};
+			/** @description Invalid input */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Agent role not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Body without operator_cap_usd or with unknown fields */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
 	list_api_keys: {
 		parameters: {
 			query?: never;
@@ -7832,6 +8308,43 @@ export interface operations {
 			};
 		};
 	};
+	get_agent_role_stats: {
+		parameters: {
+			query?: {
+				/** @description Time period to query: `24h`, `7d`, `30d` or `90d`. Defaults to `7d`. */
+				period?: null | components["schemas"]["HistoryPeriod"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Statistics per agent role */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["AgentRoleStatsResponse"];
+				};
+			};
+			/** @description Invalid period */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
 	get_stats_history: {
 		parameters: {
 			query?: {
@@ -7880,6 +8393,50 @@ export interface operations {
 				};
 			};
 			/** @description Invalid period, granularity or filter */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	list_steps: {
+		parameters: {
+			query: {
+				/**
+				 * @description Name of the `AgentRole` whose agent steps to list, across every run and
+				 *     workflow. Matched exactly. Required.
+				 */
+				agent_role: string;
+				/** @description Page number (1-based, default 1). */
+				page?: number | null;
+				/** @description Items per page (default 20, max 100). */
+				per_page?: number | null;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Agent steps of the role with pagination */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["StepResponse"][];
+				};
+			};
+			/** @description Missing, blank or too long agent_role */
 			400: {
 				headers: {
 					[name: string]: unknown;

@@ -166,7 +166,7 @@ mod tests {
         let (status, _) = call(&state, "PUT", unknown, &admin, Some(body.clone())).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
 
-        let invalid = "/api/v1/agent-roles/Not%20Valid/cost-cap";
+        let invalid = "/api/v1/agent-roles/reviewer%20/cost-cap";
         let (status, _) = call(&state, "PUT", invalid, &admin, Some(body)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }

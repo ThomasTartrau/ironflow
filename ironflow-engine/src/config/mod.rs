@@ -30,9 +30,9 @@ pub use delay::DelayConfig;
 pub use escalation::{EscalationPolicy, NotificationTarget};
 pub use http::HttpConfig;
 pub use human_input::{HUMAN_INPUT_SCHEMA_KEY, HumanInputConfig};
-// Re-exported so workflow authors can declare the cost cap of a role without
-// depending on `ironflow-core` directly.
-pub use ironflow_core::agent_role::{CostPeriod, RoleCostCap};
+// Re-exported so workflow authors can declare the cost cap of a role, and the
+// API can bound a role name, without depending on `ironflow-core` directly.
+pub use ironflow_core::agent_role::{CostPeriod, MAX_ROLE_NAME_LEN, RoleCostCap};
 // Re-exported so workflow authors can name approval assignees and read approval
 // requirements without depending on `ironflow-store` directly.
 pub use ironflow_store::entities::{ApprovalRequirement, Assignee};

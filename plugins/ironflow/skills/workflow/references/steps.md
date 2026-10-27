@@ -397,13 +397,20 @@ and per-call settings (`working_dir`, `allow_failure`, `retry_policy`, ..) can b
 overridden on the task. An override changes the step config, so it also changes the
 record/replay fixture hash.
 
-A role with a `name` may declare a `cost_cap` over a calendar UTC period (`per_day`,
-`per_month`), shared by every run of every workflow calling the role. Once the cost spent
-plus the room held by running steps reaches the cap, the step fails with
+`name()` is recorded on every step of the role as `agent_role`, to list its steps
+(`GET /api/v1/steps?agent_role=`, `ironflow-cli run steps --role`) and its cost
+(`GET /api/v1/stats/agent-roles`, `ironflow-cli stats roles`) across workflows. It defaults
+to the type name (`Reviewer`); override it so a type rename does not split the statistics
+and the cost counter. The caller of `task` cannot change it.
+
+A role may declare a `cost_cap` over a calendar UTC period (`per_day`, `per_month`), shared
+by every run of every workflow calling a role of that `name`. Once the cost spent plus the
+room held by running steps reaches the cap, the step fails with
 `AgentError::RoleCostCapReached` before the provider is called, and is not retried. Give
 capped steps a `max_budget_usd`: a running step holds its budget, and one without a budget
-holds all the room left. A `cost_cap` without `name` panics. An operator can lower the cap
-(`ironflow agent-role set-cap`), never raise it.
+holds all the room left. A role without `cost_cap` is still counted over a month. An
+operator can cap any role (`ironflow agent-role set-cap`), and only lower a code cap, never
+raise it.
 
 ```rust,no_run
 use ironflow_engine::config::{AgentRole, Prompt, RoleCostCap, Tool};
@@ -425,6 +432,10 @@ impl AgentRole for Reviewer {
     type Input = String;
     type Output = Review;
 
+    fn name(&self) -> &str {
+        "reviewer"
+    }
+
     fn prompt(&self, input: String) -> String {
         Prompt::new()
             .text("Review this diff:")
@@ -442,10 +453,6 @@ impl AgentRole for Reviewer {
 
     fn max_turns(&self) -> Option<u32> {
         Some(6)
-    }
-
-    fn name(&self) -> Option<&str> {
-        Some("rust-reviewer")
     }
 
     fn cost_cap(&self) -> Option<RoleCostCap> {

@@ -117,6 +117,10 @@ impl AgentRole for Reviewer {
     type Input = String;
     type Output = Verdict;
 
+    fn name(&self) -> &str {
+        "reviewer"
+    }
+
     fn prompt(&self, diff: String) -> String {
         Prompt::new().text("Review this diff:").untrusted(&diff).to_string()
     }
@@ -145,6 +149,17 @@ does not compile (a role with more rights is another role). The model, budget, `
 effort and per-call settings (`working_dir`, `allow_failure`, `retry_policy`, pod labels,
 resume settings) are defaults the caller may override.
 
+`name()` names the role. It defaults to the type name without its module path (`Reviewer`);
+override it, as above, to keep the name stable across a type rename, since renaming the type
+splits the role's steps and costs between the old and the new name. The caller of `task`
+cannot override it. The name must not be blank and holds at most 128 bytes: `task` panics
+otherwise. It is recorded on every step the role runs, as the step's `agent_role`. The steps
+of a role, across every workflow and run, are listed by `GET /api/v1/steps?agent_role=reviewer`,
+`ironflow-cli run steps --role reviewer` and the dashboard page Agent Roles. The cost,
+executions and failures per role over a period are returned by
+`GET /api/v1/stats/agent-roles?period=7d` and `ironflow-cli stats roles`. Steps stored before
+roles were recorded have no role.
+
 The step is stored and replayed like any `AgentStepConfig` step. An override changes the
 step config, so it changes the hash of a `RecordReplayProvider` fixture: a fixture recorded
 for the role defaults does not match an overridden task.
@@ -155,7 +170,7 @@ needs at least 2 turns.
 
 #### Cost cap of a role
 
-A role with a `name` can declare a cost cap over a calendar period:
+A role can declare a cost cap over a calendar period, counted under its `name()`:
 
 ```rust,ignore
 use ironflow_engine::config::RoleCostCap;
@@ -163,8 +178,8 @@ use rust_decimal::Decimal;
 
 impl AgentRole for Reviewer {
     // ...
-    fn name(&self) -> Option<&str> {
-        Some("reviewer")
+    fn name(&self) -> &str {
+        "reviewer"
     }
 
     fn cost_cap(&self) -> Option<RoleCostCap> {
@@ -174,9 +189,9 @@ impl AgentRole for Reviewer {
 ```
 
 - The counter is shared by every run of every workflow that calls the role: steps of
-  roles with the same name share one counter. Renaming a role starts a new counter; a role
-  without `name` is not tracked, and a `cost_cap` without `name` panics when the task is
-  built.
+  roles with the same name share one counter. Renaming a role, or its type when it keeps
+  the default name, starts a new counter. A role without `cost_cap` is still counted over a
+  month, so an operator can cap it later.
 - The period is calendar and UTC: `RoleCostCap::per_day` resets at midnight UTC,
   `RoleCostCap::per_month` on the 1st at 00:00 UTC (the window of
   `IRONFLOW_MONTHLY_COST_LIMIT_USD`). A cap of 0 disables the role.
@@ -194,7 +209,7 @@ impl AgentRole for Reviewer {
   step fails with `AgentError::RoleCostUnavailable` without calling the provider.
 - A worker that crashes mid-step frees the room it held after at most 10 minutes.
 - An operator reads the counters with `GET /api/v1/agent-roles` (or
-  `ironflow agent-role list`) and can lower a cap with
+  `ironflow agent-role list`) and can set or lower a cap with
   `PUT /api/v1/agent-roles/{name}/cost-cap` (or `ironflow agent-role set-cap reviewer --usd 20`).
   The cap enforced is the lower of the two: an operator cap never raises the code cap.
 

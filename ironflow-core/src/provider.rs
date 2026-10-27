@@ -402,6 +402,14 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_pool: Option<String>,
 
+    /// Name of the `AgentRole` reusable role this config was built from.
+    ///
+    /// Set by `AgentRole::task` in ironflow-engine; `None` for a config built by
+    /// hand. Persisted with the step so steps and costs can be grouped by role.
+    /// Not hashed by `hash_config`, so replay fixtures keep their name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+
     /// Recorder observed rate-limit windows go to when the invocation runs
     /// without an [`AccountSession`] (the worker environment token).
     ///
@@ -477,6 +485,7 @@ impl AgentConfig {
             max_capacity_wait: None,
             account_name: None,
             account_pool: None,
+            role: None,
             rate_limits: None,
             capacity_wait_since: None,
             agent_role: None,
@@ -1392,6 +1401,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             max_capacity_wait: self.max_capacity_wait,
             account_name: self.account_name,
             account_pool: self.account_pool,
+            role: self.role,
             rate_limits: self.rate_limits,
             capacity_wait_since: self.capacity_wait_since,
             agent_role: self.agent_role,
@@ -1996,7 +2006,7 @@ pub use crate::decision::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{from_str, json, to_string};
+    use serde_json::{from_str, json, to_string, to_value};
 
     use crate::auth_proxy::SecretInjection;
 
@@ -2037,6 +2047,7 @@ mod tests {
             max_capacity_wait: None,
             account_name: None,
             account_pool: None,
+            role: None,
             rate_limits: None,
             capacity_wait_since: None,
             agent_role: None,
@@ -2099,6 +2110,7 @@ mod tests {
             max_capacity_wait: None,
             account_name: None,
             account_pool: None,
+            role: None,
             rate_limits: None,
             capacity_wait_since: None,
             agent_role: None,
@@ -2759,6 +2771,28 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let back: AgentConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.pod, config.pod);
+    }
+
+    #[test]
+    fn role_is_skipped_when_none() {
+        let json = to_value(AgentConfig::new("p")).unwrap();
+        assert!(json.get("role").is_none());
+    }
+
+    #[test]
+    fn role_roundtrips() {
+        let config: AgentConfig = from_str(r#"{"prompt":"p","role":"Reviewer"}"#).unwrap();
+        assert_eq!(config.role.as_deref(), Some("Reviewer"));
+        let json = to_value(&config).unwrap();
+        assert_eq!(json["role"], json!("Reviewer"));
+    }
+
+    #[test]
+    fn role_survives_typestate_change() {
+        let mut config = AgentConfig::new("p");
+        config.role = Some("R".to_string());
+        let config = config.allow_tool(Tool::Read);
+        assert_eq!(config.role.as_deref(), Some("R"));
     }
 
     #[test]

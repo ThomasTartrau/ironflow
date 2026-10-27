@@ -1,8 +1,10 @@
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import type { StepResponse } from "@/app/lib/types";
 import {
 	AccountBadge,
+	AgentRoleBadge,
 	ApprovalProgress,
 	describeApprovalReason,
 	StepList,
@@ -323,5 +325,62 @@ describe("AccountBadge", () => {
 		const { container } = render(<AccountBadge step={stepFixture()} />);
 
 		expect(container).toBeEmptyDOMElement();
+	});
+});
+
+describe("AgentRoleBadge", () => {
+	it("links the role name to the Agent Roles page", () => {
+		render(
+			<MemoryRouter>
+				<AgentRoleBadge
+					step={stepFixture({ kind: "agent", agent_role: "Reviewer" })}
+				/>
+			</MemoryRouter>,
+		);
+
+		expect(screen.getByText("role Reviewer")).toBeInTheDocument();
+		expect(screen.getByRole("link")).toHaveAttribute(
+			"href",
+			"/agent-roles?role=Reviewer",
+		);
+	});
+
+	it("encodes the role name in the link", () => {
+		render(
+			<MemoryRouter>
+				<AgentRoleBadge
+					step={stepFixture({ kind: "agent", agent_role: "code review" })}
+				/>
+			</MemoryRouter>,
+		);
+
+		expect(screen.getByRole("link")).toHaveAttribute(
+			"href",
+			"/agent-roles?role=code%20review",
+		);
+	});
+
+	it("renders the badge without a link when asked", () => {
+		render(
+			<AgentRoleBadge
+				step={stepFixture({ kind: "agent", agent_role: "Reviewer" })}
+				link={false}
+			/>,
+		);
+
+		expect(screen.getByText("role Reviewer")).toBeInTheDocument();
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+	});
+
+	it("renders nothing without a role", () => {
+		const { container: withNull } = render(
+			<AgentRoleBadge step={stepFixture({ agent_role: null })} />,
+		);
+		expect(withNull).toBeEmptyDOMElement();
+
+		const { container: withUndefined } = render(
+			<AgentRoleBadge step={stepFixture()} />,
+		);
+		expect(withUndefined).toBeEmptyDOMElement();
 	});
 });

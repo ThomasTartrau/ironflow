@@ -394,11 +394,11 @@ async fn invalid_role_name_is_rejected() {
     let app = app().await;
     let admin = jwt(&app, &app.admin);
 
-    let (status, _) = call(&app, "GET", "/api/v1/agent-roles/Reviewer", &admin, None).await;
+    let (status, _) = call(&app, "GET", "/api/v1/agent-roles/%20reviewer", &admin, None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     let body = json!({"operator_cap_usd": 1.0});
-    let uri = "/api/v1/agent-roles/-reviewer/cost-cap";
+    let uri = "/api/v1/agent-roles/reviewer%20/cost-cap";
     let (status, _) = call(&app, "PUT", uri, &admin, Some(body)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }

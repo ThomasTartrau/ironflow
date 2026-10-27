@@ -7,7 +7,9 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use ironflow_store::entities::{HistoryGranularity, HistoryPeriod, StatsHistoryBucket};
+use ironflow_store::entities::{
+    AgentRoleStats, HistoryGranularity, HistoryPeriod, StatsHistoryBucket,
+};
 use ironflow_store::models::RunStatus;
 
 use super::run::parse_label_param;
@@ -194,6 +196,96 @@ impl From<StatsHistoryBucket> for StatsHistoryBucketResponse {
             avg_duration_ms: b.avg_duration_ms,
             p95_duration_ms: b.p95_duration_ms,
             total_cost_usd: b.total_cost_usd,
+        }
+    }
+}
+
+/// Query parameters for `GET /api/v1/stats/agent-roles`.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_api::entities::AgentRoleStatsQuery;
+/// use ironflow_store::entities::HistoryPeriod;
+///
+/// let query = AgentRoleStatsQuery {
+///     period: Some(HistoryPeriod::ThirtyDays),
+/// };
+/// assert_eq!(query.period, Some(HistoryPeriod::ThirtyDays));
+/// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::IntoParams))]
+#[derive(Debug, Deserialize)]
+pub struct AgentRoleStatsQuery {
+    /// Time period to query: `24h`, `7d`, `30d` or `90d`. Defaults to `7d`.
+    pub period: Option<HistoryPeriod>,
+}
+
+/// Cost, executions and failures per agent role over a period, all workflows
+/// combined.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_api::entities::AgentRoleStatsResponse;
+/// use ironflow_store::entities::HistoryPeriod;
+///
+/// let response = AgentRoleStatsResponse {
+///     period: HistoryPeriod::SevenDays,
+///     roles: Vec::new(),
+/// };
+/// assert!(response.roles.is_empty());
+/// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Serialize)]
+pub struct AgentRoleStatsResponse {
+    /// The period that was queried.
+    pub period: HistoryPeriod,
+    /// One entry per role that ran an agent step in the period, sorted by
+    /// total cost descending, then by role name.
+    pub roles: Vec<AgentRoleStatsEntryResponse>,
+}
+
+/// Cost, executions and failures of one agent role.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_api::entities::AgentRoleStatsEntryResponse;
+/// use ironflow_store::entities::AgentRoleStats;
+/// use rust_decimal::Decimal;
+///
+/// let entry = AgentRoleStatsEntryResponse::from(AgentRoleStats {
+///     agent_role: "Reviewer".to_string(),
+///     executions: 3,
+///     failed: 1,
+///     total_cost_usd: Decimal::new(42, 2),
+///     total_duration_ms: 1200,
+/// });
+/// assert_eq!(entry.agent_role, "Reviewer");
+/// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Serialize)]
+pub struct AgentRoleStatsEntryResponse {
+    /// Name of the role (`AgentRole::name`).
+    pub agent_role: String,
+    /// Number of agent steps the role ran, each attempt included.
+    pub executions: u64,
+    /// Steps of the role that failed.
+    pub failed: u64,
+    /// Total cost in USD of the steps of the role.
+    pub total_cost_usd: Decimal,
+    /// Total execution time in milliseconds of the steps of the role.
+    pub total_duration_ms: u64,
+}
+
+impl From<AgentRoleStats> for AgentRoleStatsEntryResponse {
+    fn from(stats: AgentRoleStats) -> Self {
+        AgentRoleStatsEntryResponse {
+            agent_role: stats.agent_role,
+            executions: stats.executions,
+            failed: stats.failed,
+            total_cost_usd: stats.total_cost_usd,
+            total_duration_ms: stats.total_duration_ms,
         }
     }
 }

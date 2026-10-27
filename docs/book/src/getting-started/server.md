@@ -184,11 +184,11 @@ implies every other scope. Paths below are relative to `/api/v1`.
 
 | Scope | Routes |
 |-------|--------|
-| `runs_read` | `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/logs`, `GET /runs/{id}/events`, `GET /runs/{id}/steps/{step_id}/artifacts/{name}`, `GET /events` |
+| `runs_read` | `GET /runs`, `GET /steps`, `GET /runs/{id}`, `GET /runs/{id}/logs`, `GET /runs/{id}/events`, `GET /runs/{id}/steps/{step_id}/artifacts/{name}`, `GET /events` |
 | `runs_write` | `POST /runs`, `POST /schedules`, `DELETE /schedules/{id}`, `POST /schedules/{id}/pause`, `/resume`, `/trigger` |
 | `runs_manage` | `POST /runs/{id}/approve`, `/reject`, `/cancel`, `/retry`, `/replay`, `/pause`, `/resume`, `POST /runs/{id}/steps/{step_id}/input`, `/reject`, `GET /approval-delegations`, `POST /approval-delegations`, `DELETE /approval-delegations/{id}` |
 | `workflows_read` | `GET /workflows`, `GET /workflows/{name}`, `POST /workflows/{name}/plan`, `GET /schedules`, `GET /schedules/{id}`, `GET /templates/registry` |
-| `stats_read` | `GET /stats`, `GET /stats/history`, `GET /metrics` |
+| `stats_read` | `GET /stats`, `GET /stats/history`, `GET /stats/agent-roles`, `GET /metrics` |
 | `admin` | `/secrets/*`, `/users/*`, `GET /audit-logs`, `POST /workflows/{name}/pause`, `POST /workflows/{name}/resume` |
 
 Routes that were admin-only stay so: `POST /runs`, cancel, retry, replay, pause and resume

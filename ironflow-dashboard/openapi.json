@@ -3172,6 +3172,57 @@
         ]
       }
     },
+    "/api/v1/stats/agent-roles": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Get the cost, executions and failures of every agent role over a period.",
+        "description": "Aggregates the agent steps created during the period (`24h`, `7d`, `30d`\nor `90d`, default `7d`) by the `AgentRole` they were created from, all\nworkflows combined. Each step record counts as one execution, retried\nattempts included. Agent steps without a role are left out.",
+        "operationId": "get_agent_role_stats",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "description": "Time period to query: `24h`, `7d`, `30d` or `90d`. Defaults to `7d`.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/HistoryPeriod"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Statistics per agent role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRoleStatsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid period"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/stats/history": {
       "get": {
         "tags": [
@@ -3304,6 +3355,81 @@
           },
           "400": {
             "description": "Invalid period, granularity or filter"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/steps": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "List the agent steps of one agent role, across every run and workflow.",
+        "description": "# Query Parameters\n\n- `agent_role` - Name of the `AgentRole`, matched exactly (required, at\n  most 128 bytes)\n- `page` - Page number, 1-based (default: 1)\n- `per_page` - Items per page (default: 20, max: 100)\n\nSteps are sorted newest first. Steps stored before roles were recorded have\nno role and are never listed.",
+        "operationId": "list_steps",
+        "parameters": [
+          {
+            "name": "agent_role",
+            "in": "query",
+            "description": "Name of the `AgentRole` whose agent steps to list, across every run and\nworkflow. Matched exactly. Required.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number (1-based, default 1).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page (default 20, max 100).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent steps of the role with pagination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StepResponse"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing, blank or too long agent_role"
           },
           "401": {
             "description": "Unauthorized"
@@ -4152,6 +4278,67 @@
             "type": "string",
             "format": "date-time",
             "description": "Last change of the counter or of a cap."
+          }
+        }
+      },
+      "AgentRoleStatsEntryResponse": {
+        "type": "object",
+        "description": "Cost, executions and failures of one agent role.\n\n# Examples\n\n```\nuse ironflow_api::entities::AgentRoleStatsEntryResponse;\nuse ironflow_store::entities::AgentRoleStats;\nuse rust_decimal::Decimal;\n\nlet entry = AgentRoleStatsEntryResponse::from(AgentRoleStats {\n    agent_role: \"Reviewer\".to_string(),\n    executions: 3,\n    failed: 1,\n    total_cost_usd: Decimal::new(42, 2),\n    total_duration_ms: 1200,\n});\nassert_eq!(entry.agent_role, \"Reviewer\");\n```",
+        "required": [
+          "agent_role",
+          "executions",
+          "failed",
+          "total_cost_usd",
+          "total_duration_ms"
+        ],
+        "properties": {
+          "agent_role": {
+            "type": "string",
+            "description": "Name of the role (`AgentRole::name`)."
+          },
+          "executions": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of agent steps the role ran, each attempt included.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Steps of the role that failed.",
+            "minimum": 0
+          },
+          "total_cost_usd": {
+            "type": "number",
+            "format": "double",
+            "description": "Total cost in USD of the steps of the role."
+          },
+          "total_duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total execution time in milliseconds of the steps of the role.",
+            "minimum": 0
+          }
+        }
+      },
+      "AgentRoleStatsResponse": {
+        "type": "object",
+        "description": "Cost, executions and failures per agent role over a period, all workflows\ncombined.\n\n# Examples\n\n```\nuse ironflow_api::entities::AgentRoleStatsResponse;\nuse ironflow_store::entities::HistoryPeriod;\n\nlet response = AgentRoleStatsResponse {\n    period: HistoryPeriod::SevenDays,\n    roles: Vec::new(),\n};\nassert!(response.roles.is_empty());\n```",
+        "required": [
+          "period",
+          "roles"
+        ],
+        "properties": {
+          "period": {
+            "$ref": "#/components/schemas/HistoryPeriod",
+            "description": "The period that was queried."
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentRoleStatsEntryResponse"
+            },
+            "description": "One entry per role that ran an agent step in the period, sorted by\ntotal cost descending, then by role name."
           }
         }
       },
@@ -8283,6 +8470,13 @@
             ],
             "format": "uuid",
             "description": "Provider Account the agent step ran under, if any."
+          },
+          "agent_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the `AgentRole` the agent step was created from; null for any\nother step, an agent step built by hand, or a step stored before roles\nwere recorded."
           },
           "approval_assignee": {
             "type": [

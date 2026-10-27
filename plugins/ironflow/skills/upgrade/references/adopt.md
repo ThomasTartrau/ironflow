@@ -563,10 +563,11 @@ effort and per-call settings. Section: Agent.
 - kind: adopt
 - since: ironflow-engine after 2.56.0, ironflow-core after 4.20.0 (#234)
 
-`AgentRole` gained `name()` and `cost_cap()`. A role whose spend had to be bounded across
-runs was tracked by hand: summing the cost of its steps from the store, or a per-run cap
-(`max_cost_usd`) that does not bound the role over a month. A named role with a
-`RoleCostCap` is charged to one counter shared by every run of every workflow, over a
+`AgentRole` gained `cost_cap()`. A role whose spend had to be bounded across runs was
+tracked by hand: summing the cost of its steps from the store, or a per-run cap
+(`max_cost_usd`) that does not bound the role over a month. A role with a `RoleCostCap` is
+charged, under its `name()` (the type name by default; override it to keep the counter
+across a type rename), to one counter shared by every run of every workflow, over a
 calendar UTC day or month; once it is reached, the step fails with
 `AgentError::RoleCostCapReached` before the provider is called. Give its tasks a
 `max_budget_usd`: a step without one holds all the room left while it runs. Section: Agent.
@@ -576,7 +577,7 @@ calendar UTC day or month; once it is reached, the step fails with
       type Input = String;
       type Output = Review;
       fn prompt(&self, input: String) -> String { input }
-+     fn name(&self) -> Option<&str> { Some("reviewer") }
++     fn name(&self) -> &str { "reviewer" }
 +     fn cost_cap(&self) -> Option<RoleCostCap> {
 +         Some(RoleCostCap::per_month(Decimal::new(50, 0)))
 +     }

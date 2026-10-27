@@ -416,6 +416,16 @@ mod tests {
     }
 
     #[test]
+    fn hash_config_ignores_role() {
+        // The role name only labels the persisted step: renaming a role must
+        // not invalidate its recorded fixtures.
+        let mut with_role = AgentConfig::new("Review");
+        with_role.role = Some("Reviewer".to_string());
+        let plain = AgentConfig::new("Review");
+        assert_eq!(hash_config(&with_role), hash_config(&plain));
+    }
+
+    #[test]
     fn test_hash_config_format() {
         let config = AgentConfig::new("Test");
         let hash = hash_config(&config);

@@ -1506,6 +1506,19 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn agent_role_queries_not_supported() {
+        let store = ApiRunStore::new("http://localhost:3000", "token");
+        match store.list_steps_by_agent_role("Reviewer", 1, 20).await {
+            Err(StoreError::Database(msg)) => assert!(msg.contains("not supported")),
+            _ => panic!("expected Database error"),
+        }
+        match store.get_agent_role_stats(Utc::now()).await {
+            Err(StoreError::Database(msg)) => assert!(msg.contains("not supported")),
+            _ => panic!("expected Database error"),
+        }
+    }
+
     #[test]
     fn api_run_store_clone() {
         let store = ApiRunStore::new("http://localhost:3000", "token");

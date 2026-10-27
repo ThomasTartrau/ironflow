@@ -140,11 +140,15 @@ pub(crate) async fn create_user_auth_header(
 
 /// A pending run in this state's store.
 pub(crate) async fn create_run(state: &AppState) -> Run {
-    state
-        .store
+    create_named_run(state.store.as_ref(), "test").await
+}
+
+/// A pending run of the workflow `name` in `store`.
+pub(crate) async fn create_named_run(store: &dyn Store, name: &str) -> Run {
+    store
         .create_run(NewRun {
             created_by: None,
-            workflow_name: "test".to_string(),
+            workflow_name: name.to_string(),
             trigger: TriggerKind::Manual,
             payload: json!({}),
             max_retries: 0,
@@ -164,26 +168,7 @@ pub(crate) async fn create_run(state: &AppState) -> Run {
 }
 
 pub(crate) async fn create_terminal_run(store: &dyn Store, name: &str, status: RunStatus) -> Run {
-    let run = store
-        .create_run(NewRun {
-            created_by: None,
-            workflow_name: name.to_string(),
-            trigger: TriggerKind::Manual,
-            payload: json!({}),
-            max_retries: 0,
-            handler_version: None,
-            labels: HashMap::new(),
-            scheduled_at: None,
-            idempotency_key: None,
-            concurrency_key: None,
-            priority: 0,
-            concurrency_limits: Vec::new(),
-            max_cost_usd: None,
-            worker_tags: Vec::new(),
-        })
-        .await
-        .unwrap()
-        .into_run();
+    let run = create_named_run(store, name).await;
     store
         .update_run_status(run.id, RunStatus::Running)
         .await

@@ -44,6 +44,10 @@ export type StatsHistoryResponse =
 	components["schemas"]["StatsHistoryResponse"];
 export type StatsHistoryBucketResponse =
 	components["schemas"]["StatsHistoryBucketResponse"];
+export type AgentRoleStatsResponse =
+	components["schemas"]["AgentRoleStatsResponse"];
+export type AgentRoleStatsEntryResponse =
+	components["schemas"]["AgentRoleStatsEntryResponse"];
 
 // -- Users --
 export type UserResponse = components["schemas"]["UserResponse"];

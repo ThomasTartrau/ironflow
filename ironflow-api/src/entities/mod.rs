@@ -53,9 +53,10 @@ pub use signal::{
     SignalDeliveryResponse, SignalResponse,
 };
 pub use stats::{
+    AgentRoleStatsEntryResponse, AgentRoleStatsQuery, AgentRoleStatsResponse,
     StatsHistoryBucketResponse, StatsHistoryQuery, StatsHistoryResponse, StatsResponse,
 };
-pub use step::{StepAccountResponse, StepResponse};
+pub use step::{ListStepsQuery, StepAccountResponse, StepResponse};
 pub use user::{
     CreateUserRequest, UpdateRoleRequest, UpdateUserGroupsRequest, UserGroupsResponse, UserResponse,
 };

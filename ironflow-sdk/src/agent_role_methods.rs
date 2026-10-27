@@ -1,4 +1,4 @@
-//! Agent role methods for [`IronflowClient`]: the cost each named role
+//! Agent role methods for [`IronflowClient`]: the cost each role
 //! consumed over its period, and its cap.
 
 use ironflow_types::ApiResponse;

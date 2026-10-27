@@ -10,6 +10,7 @@ pub mod cancel_run;
 pub mod create_run;
 pub mod download_artifact;
 pub mod events;
+pub mod get_agent_role_stats;
 pub mod get_run;
 pub mod get_run_logs;
 pub mod get_stats;
@@ -19,6 +20,7 @@ pub mod health_check;
 pub mod human_input;
 mod internal;
 pub mod list_runs;
+pub mod list_steps;
 pub mod list_workflows;
 #[cfg(feature = "prometheus")]
 pub mod metrics;
@@ -325,7 +327,12 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             post(pause_workflow::resume_workflow),
         )
         .route("/stats", get(get_stats::get_stats))
+        .route(
+            "/stats/agent-roles",
+            get(get_agent_role_stats::get_agent_role_stats),
+        )
         .route("/stats/history", get(get_stats_history::get_stats_history))
+        .route("/steps", get(list_steps::list_steps))
         .route("/audit-logs", get(audit_logs::list_audit_logs))
         .route("/events", get(events::events))
         .route(

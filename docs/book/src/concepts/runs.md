@@ -3,6 +3,8 @@
 A Run is one execution of a workflow. It is created by a trigger, waits in the queue as
 `pending`, is picked by a worker, and ends `completed`, `failed`, `warning` or `cancelled`.
 Every step it executes is persisted with its output, duration and cost.
+An agent step built from an [`AgentRole`](steps.md#reusable-agent-roles) also records the
+role name as `agent_role`, so steps and costs can be grouped by role across workflows.
 
 This page covers how runs are created and the options that control it. How workers pick
 them, with [concurrency groups](engine-worker.md#concurrency-groups) and

@@ -96,7 +96,11 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body["error"]["code"], "AGENT_ROLE_NOT_FOUND");
 
+        // A type name is a valid role name: unknown, not malformed.
         let (status, _) = get(&state, "/api/v1/agent-roles/Ghost", &auth).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, _) = get(&state, "/api/v1/agent-roles/%20ghost", &auth).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }

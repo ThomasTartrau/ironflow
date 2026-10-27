@@ -14,7 +14,7 @@ use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::notify::Event;
 use ironflow_sdk::IronflowClient;
-use ironflow_sdk::client::ClientConfig;
+use ironflow_sdk::client::{ClientConfig, ListStepsParams};
 use ironflow_sdk::types::PlanWorkflowRequest;
 use ironflow_store::entities::{
     NewStep, NewUser, RunStatus, StepKind, StepStatus, StepUpdate, TriggerKind, step_trace_id,
@@ -737,4 +737,90 @@ async fn reject_input_records_the_reason() {
     let step = store.get_step(step_id).await.unwrap().unwrap();
     assert_eq!(step.status.state, StepStatus::Rejected);
     assert_eq!(step.error.as_deref(), Some("out of scope"));
+}
+
+// ── Agent roles ───────────────────────────────────────────────
+
+/// Create a `deploy` run holding one agent step of `role`.
+async fn create_role_step(store: &Arc<dyn Store>, client: &IronflowClient, role: &str) -> Uuid {
+    let run = client.create_run(&deploy_request()).await.unwrap();
+    let run_id = run.data.id;
+    store
+        .create_step(NewStep {
+            run_id,
+            trace_id: step_trace_id(run_id, "review", 0),
+            name: "review".to_string(),
+            kind: StepKind::Agent,
+            position: 0,
+            input: Some(json!({"type": "agent", "prompt": "p", "role": role})),
+            is_error_handler: false,
+        })
+        .await
+        .unwrap()
+        .id
+}
+
+#[tokio::test]
+async fn list_steps_returns_the_steps_of_a_role() {
+    let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+    let (base_url, token) = spawn_server_from(store.clone()).await;
+    let client = make_client(&base_url, &token);
+
+    let step_id = create_role_step(&store, &client, "Reviewer").await;
+    create_role_step(&store, &client, "Writer").await;
+
+    let response = client
+        .list_steps(&ListStepsParams {
+            agent_role: "Reviewer",
+            page: None,
+            per_page: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(response.data.len(), 1);
+    assert_eq!(response.data[0].id, step_id);
+    assert_eq!(response.data[0].agent_role.as_deref(), Some("Reviewer"));
+}
+
+#[tokio::test]
+async fn list_steps_rejects_a_blank_role() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let err = client
+        .list_steps(&ListStepsParams {
+            agent_role: " ",
+            page: None,
+            per_page: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(err.is_api_error());
+    assert_eq!(err.status(), Some(400));
+}
+
+#[tokio::test]
+async fn agent_role_stats_returns_one_entry_per_role() {
+    let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+    let (base_url, token) = spawn_server_from(store.clone()).await;
+    let client = make_client(&base_url, &token);
+
+    create_role_step(&store, &client, "Reviewer").await;
+    create_role_step(&store, &client, "Reviewer").await;
+
+    let response = client.agent_role_stats(Some("24h")).await.unwrap();
+    assert_eq!(response.data.roles.len(), 1);
+    assert_eq!(response.data.roles[0].agent_role, "Reviewer");
+    assert_eq!(response.data.roles[0].executions, 2);
+    assert_eq!(response.data.roles[0].failed, 0);
+}
+
+#[tokio::test]
+async fn agent_role_stats_rejects_an_unknown_period() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let err = client.agent_role_stats(Some("1y")).await.unwrap_err();
+    assert!(err.is_api_error());
+    assert_eq!(err.status(), Some(400));
 }

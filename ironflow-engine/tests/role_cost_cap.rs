@@ -1,6 +1,6 @@
 //! Integration tests for the cost cap of agent roles.
 //!
-//! A named [`AgentRole`] with a cost cap is bounded over a calendar period
+//! An [`AgentRole`] with a cost cap is bounded over a calendar period
 //! across every run of every workflow. The engine is real (`Engine::new` with
 //! an in-memory store); the agent provider is the harness mock playing the
 //! model, reporting a fixed cost per call.
@@ -54,8 +54,8 @@ impl AgentRole for Reviewer {
         format!("Review: {input}")
     }
 
-    fn name(&self) -> Option<&str> {
-        Some("reviewer")
+    fn name(&self) -> &str {
+        "reviewer"
     }
 
     fn cost_cap(&self) -> Option<RoleCostCap> {
@@ -74,12 +74,12 @@ impl AgentRole for Triage {
         format!("Triage: {input}")
     }
 
-    fn name(&self) -> Option<&str> {
-        Some("triage")
+    fn name(&self) -> &str {
+        "triage"
     }
 }
 
-/// Without a name: never tracked.
+/// Keeps its default name, its type name: counted as `Anonymous`.
 struct Anonymous;
 
 impl AgentRole for Anonymous {
@@ -338,7 +338,7 @@ async fn a_role_without_cap_runs_and_its_cost_is_counted() {
             .get_agent_role("triage")
             .await
             .expect("get role")
-            .expect("named role is tracked");
+            .expect("every role is tracked");
         assert_eq!(triage.spent_usd, Decimal::new(18, 1));
         assert_eq!(triage.effective_cap_usd(), None);
     })
@@ -347,7 +347,7 @@ async fn a_role_without_cap_runs_and_its_cost_is_counted() {
 }
 
 #[tokio::test]
-async fn a_role_without_name_is_not_tracked() {
+async fn a_role_with_the_default_name_is_tracked_under_its_type_name() {
     timeout(TEST_TIMEOUT, async {
         let store = Arc::new(InMemoryStore::new());
         let calls = Arc::new(AtomicUsize::new(0));
@@ -356,7 +356,7 @@ async fn a_role_without_name_is_not_tracked() {
         run(&engine, &store, "untracked").await;
         let roles = store.list_agent_roles(1, 100).await.expect("list roles");
         let names: Vec<_> = roles.items.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, ["triage"], "only the named role is tracked");
+        assert_eq!(names, ["Anonymous", "triage"], "every role is tracked");
     })
     .await
     .expect("test timed out");

@@ -1,8 +1,8 @@
 //! Cost cap of agent roles, enforced across every run of every workflow.
 //!
 //! [`RoleCostProvider`] wraps the engine's [`AgentProvider`]. An invocation
-//! whose config carries an [`AgentRoleBinding`] (set by `AgentTask` for a
-//! named [`AgentRole`](crate::config::AgentRole)) goes through three phases:
+//! whose config carries an [`AgentRoleBinding`] (set by `AgentTask` for every
+//! [`AgentRole`](crate::config::AgentRole)) goes through three phases:
 //!
 //! 1. **Admission**: the store reserves room for the step under the role's
 //!    cap, atomically across workers. Once the settled cost plus the room held
