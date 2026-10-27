@@ -3990,6 +3990,7 @@ dependencies = [
  "ironflow-ops-gitlab",
  "ironflow-store",
  "reqwest 0.12.28",
+ "rust_decimal",
  "schemars 1.2.2",
  "serde",
  "serde_json",

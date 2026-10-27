@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 
+use ironflow_core::agent_role::{AgentRoleBinding, RoleCostCap};
 use ironflow_core::operations::agent::{Effort, PermissionMode};
 use ironflow_core::retry::RetryPolicy;
 use schemars::JsonSchema;
@@ -159,6 +160,30 @@ pub trait AgentRole {
         None
     }
 
+    /// Name identifying the role on the platform. `None` by default: the role
+    /// is not tracked.
+    ///
+    /// Steps of roles with the same name share one cost counter; renaming a
+    /// role starts a new counter. Required by [`cost_cap`](Self::cost_cap).
+    /// Must be valid per [`is_valid_role_name`](ironflow_core::agent_role::is_valid_role_name):
+    /// ASCII lowercase letters, digits, `-`, `_` and `.`, at most 64 bytes.
+    fn name(&self) -> Option<&str> {
+        None
+    }
+
+    /// Cost cap of the role over a calendar period (UTC), across every run of
+    /// every workflow. `None` by default.
+    ///
+    /// Checked by the engine before each agent step of the role: once the cap
+    /// is reached, the step fails with `AgentError::RoleCostCapReached`
+    /// without calling the provider. A step already running may overshoot it
+    /// by at most its own `max_budget_usd`; a step without one holds all the
+    /// remaining room while it runs. An operator may lower the cap from the
+    /// API, never raise it.
+    fn cost_cap(&self) -> Option<RoleCostCap> {
+        None
+    }
+
     /// Build one task of this role.
     ///
     /// # Examples
@@ -178,6 +203,11 @@ pub trait AgentRole {
     /// let config = Reviewer.task("diff".to_string()).into_config();
     /// assert_eq!(config.prompt, "Review: diff");
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the role declares a [`cost_cap`](Self::cost_cap) without a
+    /// [`name`](Self::name), or a name that is not valid.
     fn task(&self, input: Self::Input) -> AgentTask<Self::Output> {
         AgentTask::from_role(self, input)
     }
@@ -188,6 +218,9 @@ pub trait AgentRole {
 /// The role locks its persona, tools, permission mode, MCP config and output
 /// type: none of them has a setter here, and each of these calls does not
 /// compile.
+///
+/// The name and cost cap of the role are locked too: no setter of the task
+/// changes or removes them, so every task of the role is charged to its counter.
 ///
 /// The system prompt is locked:
 ///
@@ -350,6 +383,10 @@ impl<T> Clone for AgentTask<T> {
 impl<T: JsonSchema> AgentTask<T> {
     /// Builds the task from the role defaults. `pub(crate)`: no other crate can
     /// wrap an arbitrary config in an [`AgentTask`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the role declares a cost cap without a name, or an invalid name.
     pub(crate) fn from_role<R: AgentRole<Output = T> + ?Sized>(role: &R, input: R::Input) -> Self {
         let mut config = AgentStepConfig::new(&role.prompt(input));
         if let Some(prompt) = role.system_prompt() {
@@ -381,6 +418,11 @@ impl<T: JsonSchema> AgentTask<T> {
         }
         for tool in role.tools() {
             config = config.allow_tool(tool).into();
+        }
+        match (role.name(), role.cost_cap()) {
+            (Some(name), cap) => config = config.agent_role(AgentRoleBinding::new(name, cap)),
+            (None, Some(_)) => panic!("an AgentRole with a cost_cap must declare a name"),
+            (None, None) => {}
         }
         config = config.output::<T>().into();
         Self {
@@ -748,6 +790,7 @@ impl<T: DeserializeOwned> AgentStep for AgentTask<T> {
 mod tests {
     use super::*;
     use crate::executor::StepArtifacts;
+    use ironflow_core::agent_role::CostPeriod;
     use rust_decimal::Decimal;
     use serde::Deserialize;
     use serde_json::{Value, json, to_value};
@@ -815,6 +858,131 @@ mod tests {
         fn effort(&self) -> Option<Effort> {
             Some(Effort::Low)
         }
+    }
+
+    /// Named and capped at 2 USD a day.
+    struct Capped;
+
+    impl AgentRole for Capped {
+        type Input = String;
+        type Output = Verdict;
+
+        fn prompt(&self, input: String) -> String {
+            input
+        }
+
+        fn name(&self) -> Option<&str> {
+            Some("reviewer")
+        }
+
+        fn cost_cap(&self) -> Option<RoleCostCap> {
+            Some(RoleCostCap::per_day(Decimal::TWO))
+        }
+    }
+
+    /// Named, without a cap: its cost is only counted.
+    struct Named;
+
+    impl AgentRole for Named {
+        type Input = String;
+        type Output = Verdict;
+
+        fn prompt(&self, input: String) -> String {
+            input
+        }
+
+        fn name(&self) -> Option<&str> {
+            Some("triage")
+        }
+    }
+
+    /// Capped without a name: rejected.
+    struct Anonymous;
+
+    impl AgentRole for Anonymous {
+        type Input = String;
+        type Output = Verdict;
+
+        fn prompt(&self, input: String) -> String {
+            input
+        }
+
+        fn cost_cap(&self) -> Option<RoleCostCap> {
+            Some(RoleCostCap::per_month(Decimal::ONE))
+        }
+    }
+
+    /// Named with a name that is not valid.
+    struct BadName;
+
+    impl AgentRole for BadName {
+        type Input = String;
+        type Output = Verdict;
+
+        fn prompt(&self, input: String) -> String {
+            input
+        }
+
+        fn name(&self) -> Option<&str> {
+            Some("Code Reviewer")
+        }
+    }
+
+    #[test]
+    fn a_named_role_binds_its_tasks_with_its_cap_and_period() {
+        let config = Capped.task("p".to_string()).into_config();
+        assert_eq!(
+            config.agent_role,
+            Some(AgentRoleBinding {
+                name: "reviewer".to_string(),
+                cost_cap_usd: Some(Decimal::TWO),
+                period: CostPeriod::Day,
+            })
+        );
+    }
+
+    #[test]
+    fn a_role_without_name_is_not_bound() {
+        assert_eq!(Bare.task("p".to_string()).into_config().agent_role, None);
+    }
+
+    #[test]
+    fn a_named_role_without_cap_counts_over_a_month() {
+        let binding = Named
+            .task("p".to_string())
+            .into_config()
+            .agent_role
+            .expect("named role is bound");
+        assert_eq!(binding.name, "triage");
+        assert_eq!(binding.cost_cap_usd, None);
+        assert_eq!(binding.period, CostPeriod::Month);
+    }
+
+    #[test]
+    #[should_panic(expected = "must declare a name")]
+    fn a_cost_cap_without_name_panics() {
+        let _ = Anonymous.task("p".to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid agent role name")]
+    fn an_invalid_role_name_panics() {
+        let _ = BadName.task("p".to_string());
+    }
+
+    #[test]
+    fn call_site_overrides_keep_the_binding() {
+        let config = Capped
+            .task("p".to_string())
+            .max_budget_usd(5.0)
+            .model("haiku")
+            .allow_failure()
+            .into_config();
+        assert_eq!(config.max_budget_usd, Some(5.0));
+        assert_eq!(
+            config.agent_role.map(|b| b.name),
+            Some("reviewer".to_string())
+        );
     }
 
     fn step_output(output: Value) -> StepOutput {

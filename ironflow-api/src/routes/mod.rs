@@ -1,5 +1,6 @@
 //! Router assembly — one module per route.
 
+pub mod agent_roles;
 pub mod api_keys;
 pub mod approval_delegations;
 pub mod approve_run;
@@ -214,6 +215,18 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             "/provider-accounts/{id}/observations",
             post(internal::provider_accounts::record_observation),
         )
+        .route(
+            "/agent-roles/reservations",
+            post(internal::agent_roles::reserve_agent_role_cost),
+        )
+        .route(
+            "/agent-roles/reservations/{id}/lease",
+            put(internal::agent_roles::renew_agent_role_reservation),
+        )
+        .route(
+            "/agent-roles/settlements",
+            put(internal::agent_roles::settle_agent_role_cost),
+        )
         .layer(axum_mw::from_fn(worker_token_auth))
         .layer(Extension(WorkerToken(state.worker_token.clone())))
         .with_state(state.clone());
@@ -373,6 +386,12 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route(
             "/provider-accounts/{id}/usage",
             get(provider_accounts::usage::provider_account_usage),
+        )
+        .route("/agent-roles", get(agent_roles::list::list_agent_roles))
+        .route("/agent-roles/{name}", get(agent_roles::get::get_agent_role))
+        .route(
+            "/agent-roles/{name}/cost-cap",
+            put(agent_roles::update_cost_cap::update_agent_role_cost_cap),
         )
         .route(
             "/approval-delegations",

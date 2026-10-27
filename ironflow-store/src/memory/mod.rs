@@ -39,11 +39,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::entities::User;
 
+mod agent_role_store;
 mod api_key_store;
 mod approval_delegation_store;
 mod artifact_store;
@@ -89,6 +91,18 @@ pub(super) struct State {
     pub(super) refresh_tokens: HashMap<String, StoredRefreshToken>,
     /// Paused workflows, keyed by workflow name.
     pub(super) workflow_pauses: HashMap<String, crate::entities::WorkflowPause>,
+    /// Cost counters of agent roles, keyed by name. `reserved_usd` is stored as
+    /// zero and computed from `agent_role_reservations` on read.
+    pub(super) agent_roles: HashMap<String, crate::entities::AgentRoleRecord>,
+    /// Room held by running agent steps, keyed by reservation ID.
+    pub(super) agent_role_reservations: HashMap<Uuid, AgentRoleReservation>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct AgentRoleReservation {
+    pub(super) role: String,
+    pub(super) amount_usd: Decimal,
+    pub(super) expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]

@@ -9,6 +9,9 @@
 //!   the run *before* the step is launched, so no spend happens.
 //! - **Monthly quota** -- checked when a new run is created. Crossing it
 //!   refuses the creation; runs already in flight are untouched.
+//! - **Per-role cap** -- an `AgentRole` with a name and a cost cap is bounded
+//!   over a calendar period across every run of every workflow: see
+//!   [`crate::role_cost`].
 //!
 //! # Examples
 //!
@@ -26,7 +29,8 @@
 use std::env;
 use std::str::FromStr;
 
-use chrono::{DateTime, Datelike, TimeZone, Utc};
+use chrono::{DateTime, Utc};
+use ironflow_core::agent_role::CostPeriod;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use tracing::warn;
@@ -209,7 +213,8 @@ pub fn step_budget_usd(max_budget_usd: Option<f64>) -> Decimal {
 
 /// Start of the current calendar month, at 00:00:00 UTC.
 ///
-/// Used as the lower bound of the monthly quota window.
+/// Used as the lower bound of the monthly quota window. Same window as a
+/// per-month agent role cap ([`CostPeriod::Month`]), so both reset together.
 ///
 /// # Examples
 ///
@@ -229,14 +234,12 @@ pub fn step_budget_usd(max_budget_usd: Option<f64>) -> Decimal {
 /// Never panics for a valid [`DateTime<Utc>`]: day 1 at midnight always exists
 /// for any year/month pair reachable from an existing timestamp.
 pub fn month_start(now: DateTime<Utc>) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
-        .single()
-        .expect("first day of month at midnight UTC is always unambiguous")
+    CostPeriod::Month.start(now)
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::Timelike;
+    use chrono::{Datelike, TimeZone, Timelike};
 
     use super::*;
 

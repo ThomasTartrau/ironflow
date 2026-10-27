@@ -145,6 +145,10 @@ pub enum ApiError {
     #[error("provider account not found: {0}")]
     ProviderAccountNotFound(String),
 
+    /// Agent role never seen by the store (404).
+    #[error("agent role '{0}' not found")]
+    AgentRoleNotFound(String),
+
     /// The account credential was rejected, by format or by the provider (422).
     #[error("{0}")]
     AccountCredentialRejected(String),
@@ -185,6 +189,7 @@ impl From<StoreError> for ApiError {
             StoreError::ProviderAccountNotFound(id) => {
                 ApiError::ProviderAccountNotFound(id.to_string())
             }
+            StoreError::AgentRoleNotFound(name) => ApiError::AgentRoleNotFound(name),
             StoreError::DuplicateProviderAccount(name) => {
                 ApiError::Conflict(format!("provider account '{name}' already exists"))
             }
@@ -227,6 +232,7 @@ impl ApiError {
             ApiError::ScheduleNotFound(_) => "SCHEDULE_NOT_FOUND",
             ApiError::DelegationNotFound(_) => "DELEGATION_NOT_FOUND",
             ApiError::ProviderAccountNotFound(_) => "PROVIDER_ACCOUNT_NOT_FOUND",
+            ApiError::AgentRoleNotFound(_) => "AGENT_ROLE_NOT_FOUND",
             ApiError::AccountCredentialRejected(_) => "ACCOUNT_CREDENTIAL_REJECTED",
             ApiError::Store(StoreError::Crypto(_)) => "SECRET_STORE_UNAVAILABLE",
             ApiError::Store(StoreError::DuplicateArtifact { .. }) => "DUPLICATE_ARTIFACT",
@@ -268,6 +274,7 @@ impl ApiError {
             ApiError::ScheduleNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::DelegationNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::ProviderAccountNotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::AgentRoleNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::AccountCredentialRejected(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ApiError::Store(StoreError::Crypto(_)) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Store(StoreError::DuplicateArtifact { .. }) => StatusCode::CONFLICT,
@@ -481,6 +488,14 @@ mod tests {
         assert_eq!(err.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(err.code(), "ACCOUNT_CREDENTIAL_REJECTED");
         assert_eq!(err.to_string(), "token rejected");
+    }
+
+    #[test]
+    fn agent_role_not_found_maps_to_404() {
+        let err = ApiError::from(StoreError::AgentRoleNotFound("reviewer".to_string()));
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert_eq!(err.code(), "AGENT_ROLE_NOT_FOUND");
+        assert_eq!(err.to_string(), "agent role 'reviewer' not found");
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! Each entity lives in its own file. All types are re-exported here
 //! for convenient `use ironflow_store::entities::*` access.
 
+mod agent_role;
 pub mod api_key;
 pub mod api_key_scope;
 mod approval_delegation;
@@ -32,6 +33,10 @@ mod user;
 mod worker_routing;
 mod workflow_pause;
 
+pub use agent_role::{
+    AgentRoleRecord, RoleCostAdmission, RoleCostReservationRequest, RoleCostSettlement,
+    effective_cap,
+};
 pub use api_key::{ApiKey, ApiKeyUpdate, NewApiKey};
 pub use api_key_scope::ApiKeyScope;
 pub use approval_delegation::{

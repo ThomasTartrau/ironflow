@@ -27,6 +27,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rust_decimal = "1"
 metrics = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.18", optional = true, default-features = false, features = ["http-listener"] }
 
@@ -40,7 +41,6 @@ heartbeat = []
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 async-trait = "0.1"
-rust_decimal = "1"
 ironflow-api = { version = "2.52.19", path = "../ironflow-api", features = ["prometheus"] }
 ironflow-auth = { version = "2.4.84", path = "../ironflow-auth" }
 ironflow-store = { version = "2.47.11", path = "../ironflow-store", features = ["store-memory"] }

@@ -290,6 +290,12 @@ fn rows(run_id: Uuid, step_id: Uuid, user_id: Uuid, schedule_id: Uuid) -> Vec<Ro
         // stats_read
         row("GET", "/api/v1/stats", ApiKeyScope::StatsRead),
         row("GET", "/api/v1/stats/history", ApiKeyScope::StatsRead),
+        row("GET", "/api/v1/agent-roles", ApiKeyScope::StatsRead),
+        row(
+            "GET",
+            "/api/v1/agent-roles/reviewer",
+            ApiKeyScope::StatsRead,
+        ),
         // admin
         row("GET", "/api/v1/secrets", ApiKeyScope::Admin),
         row_with_body(
@@ -312,6 +318,12 @@ fn rows(run_id: Uuid, step_id: Uuid, user_id: Uuid, schedule_id: Uuid) -> Vec<Ro
             ApiKeyScope::Admin,
         ),
         row("GET", "/api/v1/secrets/key-versions", ApiKeyScope::Admin),
+        row_with_body(
+            "PUT",
+            "/api/v1/agent-roles/reviewer/cost-cap",
+            json!({"operator_cap_usd": 1.0}),
+            ApiKeyScope::Admin,
+        ),
         row("GET", "/api/v1/users", ApiKeyScope::Admin),
         row_with_body(
             "POST",

@@ -397,10 +397,19 @@ and per-call settings (`working_dir`, `allow_failure`, `retry_policy`, ..) can b
 overridden on the task. An override changes the step config, so it also changes the
 record/replay fixture hash.
 
+A role with a `name` may declare a `cost_cap` over a calendar UTC period (`per_day`,
+`per_month`), shared by every run of every workflow calling the role. Once the cost spent
+plus the room held by running steps reaches the cap, the step fails with
+`AgentError::RoleCostCapReached` before the provider is called, and is not retried. Give
+capped steps a `max_budget_usd`: a running step holds its budget, and one without a budget
+holds all the room left. A `cost_cap` without `name` panics. An operator can lower the cap
+(`ironflow agent-role set-cap`), never raise it.
+
 ```rust,no_run
-use ironflow_engine::config::{AgentRole, Prompt, Tool};
+use ironflow_engine::config::{AgentRole, Prompt, RoleCostCap, Tool};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
+use rust_decimal::Decimal;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -433,6 +442,14 @@ impl AgentRole for Reviewer {
 
     fn max_turns(&self) -> Option<u32> {
         Some(6)
+    }
+
+    fn name(&self) -> Option<&str> {
+        Some("rust-reviewer")
+    }
+
+    fn cost_cap(&self) -> Option<RoleCostCap> {
+        Some(RoleCostCap::per_month(Decimal::new(50, 0)))
     }
 }
 

@@ -75,6 +75,7 @@ pub mod pause;
 pub mod plan;
 pub mod replay_policy;
 pub mod retry_policy;
+pub mod role_cost;
 pub mod run_creator;
 pub mod schedule;
 pub mod signal;
@@ -86,9 +87,9 @@ pub mod prelude {
     pub use crate::artifact::{ArtifactSink, ArtifactUpload, DirectArtifactSink};
     pub use crate::budget::BudgetConfig;
     pub use crate::config::{
-        AgentRole, AgentStepConfig, AgentTask, ApprovalConfig, Approvers, DelayConfig,
-        EscalationPolicy, HttpConfig, HumanInputConfig, NotificationTarget, Prompt, ShellConfig,
-        StepConfig,
+        AgentRole, AgentStepConfig, AgentTask, ApprovalConfig, Approvers, CostPeriod, DelayConfig,
+        EscalationPolicy, HttpConfig, HumanInputConfig, NotificationTarget, Prompt, RoleCostCap,
+        ShellConfig, StepConfig,
     };
     pub use crate::context::WorkflowContext;
     pub use crate::engine::{Engine, EnqueueOptions, ExecutionMode, WorkflowResult};

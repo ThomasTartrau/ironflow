@@ -33,6 +33,8 @@ pub(super) fn is_step_retryable(err: &EngineError) -> bool {
         EngineError::Operation(op) => match op {
             OperationError::Agent(AgentError::PromptTooLarge { .. }) => false,
             OperationError::Agent(AgentError::BudgetExceeded { .. }) => false,
+            // The counter of the role only goes down when its period ends.
+            OperationError::Agent(AgentError::RoleCostCapReached { .. }) => false,
             OperationError::Agent(
                 AgentError::UnknownToolProfile { .. } | AgentError::ToolProfileUnsupported { .. },
             ) => false,
@@ -161,6 +163,7 @@ mod tests {
     use std::time::Duration;
 
     use chrono::Utc;
+    use ironflow_core::agent_role::CostPeriod;
 
     use super::*;
 
@@ -201,6 +204,27 @@ mod tests {
         assert!(!is_step_retryable(&agent_error(
             AgentError::AccountNotFound {
                 name: "team-a".to_string(),
+            }
+        )));
+    }
+
+    #[test]
+    fn role_cost_cap_reached_is_not_step_retryable() {
+        assert!(!is_step_retryable(&agent_error(
+            AgentError::RoleCostCapReached {
+                role: "reviewer".to_string(),
+                cap_usd: Decimal::ONE,
+                spent_usd: Decimal::ONE,
+                reserved_usd: Decimal::ZERO,
+                period: CostPeriod::Month,
+                resets_at: Utc::now(),
+            }
+        )));
+        // A store failure is transient: the next try reserves again.
+        assert!(is_step_retryable(&agent_error(
+            AgentError::RoleCostUnavailable {
+                role: "reviewer".to_string(),
+                message: "connection refused".to_string(),
             }
         )));
     }

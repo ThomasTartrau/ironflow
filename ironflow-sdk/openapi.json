@@ -166,6 +166,78 @@
         ],
         "type": "string"
       },
+      "AgentRoleResponse": {
+        "description": "Cost consumed by an agent role over its current period, and its cap.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_api::entities::AgentRoleResponse;\nuse ironflow_store::entities::AgentRoleRecord;\nuse rust_decimal::Decimal;\nuse uuid::Uuid;\n\n# fn example() -> Result<(), ironflow_api::error::ApiError> {\nlet now = Utc::now();\nlet record = AgentRoleRecord {\n    id: Uuid::now_v7(),\n    name: \"reviewer\".to_string(),\n    code_cap_usd: Some(Decimal::TEN),\n    operator_cap_usd: None,\n    period: \"month\".to_string(),\n    period_start: now,\n    spent_usd: Decimal::TWO,\n    reserved_usd: Decimal::ONE,\n    created_at: now,\n    updated_at: now,\n};\nlet response = AgentRoleResponse::from_record(record, now)?;\nassert_eq!(response.remaining_usd, Some(Decimal::new(7, 0)));\n# Ok(())\n# }\n```",
+        "properties": {
+          "cap_usd": {
+            "description": "Cap enforced: the lower of the code and operator caps.",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "code_cap_usd": {
+            "description": "Cap declared in code, as last seen by a step of the role.",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "name": {
+            "description": "Name of the role, as declared by `AgentRole::name`.",
+            "type": "string"
+          },
+          "operator_cap_usd": {
+            "description": "Cap set by an operator; it can only lower the code cap.",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "period": {
+            "description": "Period of the counter: `day` or `month` (calendar, UTC).",
+            "type": "string"
+          },
+          "period_start": {
+            "description": "Start of the current period.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "remaining_usd": {
+            "description": "Room left under the cap, never negative. `null` without a cap.",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "reserved_usd": {
+            "description": "Cost held by the steps of the role running now.",
+            "format": "double",
+            "type": "number"
+          },
+          "resets_at": {
+            "description": "When the counter resets.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "spent_usd": {
+            "description": "Cost settled in the current period.",
+            "format": "double",
+            "type": "number"
+          },
+          "updated_at": {
+            "description": "Last change of the counter or of a cap.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "period",
+          "period_start",
+          "resets_at",
+          "spent_usd",
+          "reserved_usd",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "ApiKeyResponse": {
         "description": "API key summary (never includes the hash or raw key).",
         "properties": {
@@ -1631,7 +1703,8 @@
           "signal_received",
           "schedule_occurrences_missed",
           "workflow_paused",
-          "workflow_resumed"
+          "workflow_resumed",
+          "agent_role.cost_cap_updated"
         ],
         "type": "string"
       },
@@ -1777,6 +1850,26 @@
           "missing",
           "retirable"
         ],
+        "type": "object"
+      },
+      "ListAgentRolesQuery": {
+        "description": "Query parameters for listing agent roles.",
+        "properties": {
+          "page": {
+            "description": "Page number (1-based, defaults to 1).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "per_page": {
+            "description": "Items per page (defaults to 50, max 100).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
         "type": "object"
       },
       "ListApprovalDelegationsQuery": {
@@ -4411,6 +4504,22 @@
           }
         ]
       },
+      "UpdateAgentRoleCostCapRequest": {
+        "additionalProperties": false,
+        "description": "Set or clear the operator cap of an agent role.\n\nThe field is required and unknown fields are refused: only an explicit\n`null` clears the cap, so `{}` or a misspelled key cannot raise the\nenforced cap back to the code cap.",
+        "properties": {
+          "operator_cap_usd": {
+            "description": "Cap in USD over the role's period, at least 0; `null` clears it. It can\nonly lower the cap declared in code.",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          }
+        },
+        "required": [
+          "operator_cap_usd"
+        ],
+        "type": "object"
+      },
       "UpdateProviderAccountRequest": {
         "additionalProperties": false,
         "description": "Request body to update a Provider Account. All fields optional; `name`\nand `kind` are immutable.",
@@ -5279,6 +5388,180 @@
   },
   "openapi": "3.0.3",
   "paths": {
+    "/api/v1/agent-roles": {
+      "get": {
+        "description": "An API key needs the `stats_read` scope.\n\n# Errors\n\n- 401 if not authenticated\n- 403 if the API key lacks `stats_read`",
+        "operationId": "list_agent_roles",
+        "parameters": [
+          {
+            "description": "Page number (1-based, defaults to 1).",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page (defaults to 50, max 100).",
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentRoleResponse"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Paginated list of agent roles"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Insufficient scope"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "List the agent roles seen by the platform, ordered by name, with the cost\nspent and reserved over their current period and the room left.",
+        "tags": [
+          "agent-roles"
+        ]
+      }
+    },
+    "/api/v1/agent-roles/{name}": {
+      "get": {
+        "description": "An API key needs the `stats_read` scope.\n\n# Errors\n\n- 400 if the name is not a valid role name\n- 401 if not authenticated\n- 403 if the API key lacks `stats_read`\n- 404 if no step of the role ever ran",
+        "operationId": "get_agent_role",
+        "parameters": [
+          {
+            "description": "Agent role name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRoleResponse"
+                }
+              }
+            },
+            "description": "Agent role"
+          },
+          "400": {
+            "description": "Invalid role name"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Insufficient scope"
+          },
+          "404": {
+            "description": "Agent role not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Get the cost spent and reserved by an agent role over its current period,\nits cap and the room left.",
+        "tags": [
+          "agent-roles"
+        ]
+      }
+    },
+    "/api/v1/agent-roles/{name}/cost-cap": {
+      "put": {
+        "description": "The cap enforced is the lower of the cap declared in code and the operator\ncap: an operator can lower the cap of a role, never raise it.\n\n# Errors\n\n- 400 if the name is not a valid role name or the cap is negative\n- 401 if not authenticated\n- 403 if the caller is not an admin\n- 404 if no step of the role ever ran\n- 422 if the body lacks `operator_cap_usd` or has unknown fields",
+        "operationId": "update_agent_role_cost_cap",
+        "parameters": [
+          {
+            "description": "Agent role name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAgentRoleCostCapRequest"
+              }
+            }
+          },
+          "description": "Operator cap, null to clear it",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRoleResponse"
+                }
+              }
+            },
+            "description": "Agent role updated"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Agent role not found"
+          },
+          "422": {
+            "description": "Body without operator_cap_usd or with unknown fields"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Set (`operator_cap_usd` a number) or clear (`null`) the operator cap of an\nagent role. Admin only; audited.",
+        "tags": [
+          "agent-roles"
+        ]
+      }
+    },
     "/api/v1/api-keys": {
       "get": {
         "operationId": "list_api_keys",
@@ -8846,6 +9129,10 @@
     {
       "description": "Signals: external messages that resume waiting runs",
       "name": "signals"
+    },
+    {
+      "description": "Agent roles: cost consumed and cost cap per period",
+      "name": "agent-roles"
     }
   ]
 }

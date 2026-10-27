@@ -6,6 +6,7 @@
 //! can deserialize them as `Run`, `Step`, etc. without losing fields like
 //! `FsmState<RunStatus>` or `payload`.
 
+pub mod agent_roles;
 pub mod count_pending_runs;
 pub mod create_run;
 pub mod create_step;

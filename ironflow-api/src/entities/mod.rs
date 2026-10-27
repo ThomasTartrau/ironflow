@@ -3,6 +3,7 @@
 //! These types form the public API contract. They map from internal store
 //! models and are never exposed directly.
 
+mod agent_role;
 mod approval_delegation;
 mod artifact;
 mod auth;
@@ -20,6 +21,7 @@ mod user;
 mod worker_capabilities;
 mod workflow_pause;
 
+pub use agent_role::{AgentRoleResponse, ListAgentRolesQuery, UpdateAgentRoleCostCapRequest};
 pub use approval_delegation::{
     ApprovalDelegationResponse, CreateApprovalDelegationRequest, ListApprovalDelegationsQuery,
 };
