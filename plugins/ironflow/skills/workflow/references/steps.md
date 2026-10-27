@@ -469,8 +469,6 @@ async fn example(ctx: &mut WorkflowContext, diff: &str) -> Result<(), EngineErro
 }
 ```
 
-A role that delegates to other roles is a supervisor: `ctx.supervise`, see `supervisor.md`.
-
 ## Approval
 
 ```rust,no_run

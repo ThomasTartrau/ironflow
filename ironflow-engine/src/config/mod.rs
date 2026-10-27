@@ -15,7 +15,6 @@ mod escalation;
 mod http;
 mod human_input;
 mod shell;
-mod supervisor;
 mod workflow;
 
 pub use agent::{
@@ -38,9 +37,6 @@ pub use ironflow_core::agent_role::{CostPeriod, MAX_ROLE_NAME_LEN, RoleCostCap};
 // requirements without depending on `ironflow-store` directly.
 pub use ironflow_store::entities::{ApprovalRequirement, Assignee};
 pub use shell::ShellConfig;
-pub use supervisor::{
-    Assignment, DELEGATION_REFUSED, MAX_SUPERVISOR_NAME_LEN, SupervisionLimits, Team, Turn,
-};
 pub use workflow::{WorkflowOptions, WorkflowStepConfig};
 
 use ironflow_core::retry::RetryPolicy;

@@ -275,8 +275,6 @@ async fn delegate_tour(
 - The workflow guard counts each child as one invocation and refuses a wave that would
   cross `max_fan_out` before anything is created.
 - `ctx.workflow_with` is unchanged: one child, sequential.
-- When an agent picks the children (a supervisor handing tasks to other roles), do not
-  write that loop around a wave: use `ctx.supervise`, see `supervisor.md`.
 
 ## Suspension
 

@@ -66,10 +66,6 @@ for outcome in ctx.workflows_with(&Delegate, wave).await? {
   parent suspends with it. On resume, finished children are replayed and suspended ones
   re-entered: no child run is created twice
 
-When the children are agent roles picked by another agent, use `ctx.supervise` instead of
-writing the loop: see
-[A supervisor delegating to its team](../concepts/steps.md#a-supervisor-delegating-to-its-team).
-
 ## Conditional branching
 
 Since workflows are Rust code, conditional logic is just `if`/`else`:
