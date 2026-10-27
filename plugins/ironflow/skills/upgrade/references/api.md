@@ -496,6 +496,24 @@ changes, so its record/replay fixture no longer matches: record it again. Sectio
 + ctx.shell("publish", ShellConfig::exec("./publish.sh", &[notes.raw()])).await?;
 ```
 
+## untrusted-content
+- kind: breaking
+- since: ironflow-core after 4.21.0, ironflow-engine after 2.57.0 (#235)
+- compiler: `the trait bound ... UntrustedContent is not satisfied`
+
+`Prompt::untrusted` takes an `impl UntrustedContent` (`&str`, `String`, `AgentText` and
+references to them), not a `&str`, so the argument no longer coerces through `Deref`: a
+`&Cow<str>` (`&String::from_utf8_lossy(..)`), a `&Box<str>` or a `&Arc<str>` stops
+compiling. Reborrow it as a `&str` with `&*`. The rendered prompt is the same, so the
+fixtures do not change. Section: Agent.
+
+```diff
+- let prompt = Prompt::new().text("Explain this log:").untrusted(&String::from_utf8_lossy(&bytes));
++ let prompt = Prompt::new().text("Explain this log:").untrusted(&*String::from_utf8_lossy(&bytes));
+- let prompt = Prompt::new().untrusted(&shared_log);
++ let prompt = Prompt::new().untrusted(&*shared_log);
+```
+
 ## agent-answer
 - kind: breaking
 - since: ironflow-core after 4.21.0, ironflow-engine after 2.57.0 (#235)

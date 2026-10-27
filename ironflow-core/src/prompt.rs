@@ -326,13 +326,15 @@ mod sealed {
 /// assert!(quote("hello").contains("hello"));
 /// ```
 ///
-/// The bound gives no way to read the content as a `&str`:
+/// The bound gives no way to read the content as a `&str`: the token the
+/// method requires can be neither named nor built outside this crate.
 ///
-/// ```compile_fail
+/// ```compile_fail,E0603
 /// use ironflow_core::prompt::UntrustedContent;
+/// use ironflow_core::prompt::sealed::Token;
 ///
 /// fn leak<T: UntrustedContent + ?Sized>(content: &T) -> String {
-///     content.untrusted_str().to_string()
+///     content.untrusted_str(Token(())).to_string()
 /// }
 /// ```
 pub trait UntrustedContent: sealed::Sealed {}
