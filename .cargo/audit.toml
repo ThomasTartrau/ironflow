@@ -20,8 +20,7 @@ ignore = [
     "RUSTSEC-2026-0235",
 
     # crypto-bigint 0.5.5 (via elliptic-curve 0.13 / aws-sigv4) -- timing variability
-    # The fix is only in >=0.7.6, no 0.5.x backport; 0.7.5 is pulled by RustCrypto
-    # release candidates and should be bumped with `cargo update -p crypto-bigint`
-    # once the dependents allow it. Remove this entry then.
+    # The fix is only in >=0.7.6, no 0.5.x backport. Remove this entry once
+    # aws-sigv4 moves off elliptic-curve 0.13.
     "RUSTSEC-2026-0387",
 ]
