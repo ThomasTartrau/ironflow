@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [5.0.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v5.0.0...ironflow-core-v5.0.1) - 2026-10-27
+
+### Fixed
+
+- #238 gate short_token_id re-export behind transport-k8s
+
+- #238 revoke a K8s step's proxy tokens when the step is dropped
+
 ## [5.0.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.21.0...ironflow-core-v5.0.0) - 2026-10-27
 
 ### Added
