@@ -11,17 +11,18 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, TimeDelta, Utc};
 use tokio::spawn;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use ironflow_store::error::StoreError;
-use ironflow_store::models::{Run, RunStatus, RunUpdate, StepKind, StepStatus};
+use ironflow_store::models::{Run, RunFilter, RunStatus, RunUpdate, StepKind, StepStatus};
 
 use crate::context::recorded_child_run_id;
 use crate::engine::{Engine, ExecutionMode, chain_parent, chain_root};
 use crate::error::EngineError;
+use crate::guard::WorkflowRejection;
 use crate::notify::{Event, RunStatusChangedEvent};
 
 /// Error recorded on the steps left open by a cancelled run.
@@ -223,6 +224,127 @@ impl Engine {
             );
         }
         Ok(cancelled)
+    }
+
+    /// Cancel the root runs left `Sleeping` or `AwaitingApproval` past the
+    /// [`run_deadline`](crate::guard::WorkflowGuardConfig::run_deadline) of
+    /// their workflow, at most `limit` of them.
+    ///
+    /// A running run is stopped in process by the guard at its deadline; a
+    /// run that sleeps (waiting for an approval, a signal, a human input or
+    /// a timer) executes nothing, so this sweep stops it instead. Each run
+    /// moves to `Cancelled` with a `run deadline reached` error, its open
+    /// gate or signal step is closed and its descendants are cancelled.
+    /// Child runs are never stopped on their own: cancelling their root
+    /// cancels them.
+    ///
+    /// A failure on one run is logged and skipped. Returns the ids of the
+    /// runs stopped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Store`] when the candidate runs cannot be
+    /// listed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// # async fn example(engine: &Engine) -> Result<(), EngineError> {
+    /// let stopped = engine.cancel_runs_past_deadline(50).await?;
+    /// println!("{} runs stopped at their deadline", stopped.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn cancel_runs_past_deadline(&self, limit: u32) -> Result<Vec<Uuid>, EngineError> {
+        let mut stopped = Vec::new();
+        let now = Utc::now();
+        for name in self.handler_names() {
+            let Some(handler) = self.get_handler(name) else {
+                continue;
+            };
+            let Some(config) = self.effective_guard_config(handler.as_ref()) else {
+                continue;
+            };
+            let Some(deadline) = config.run_deadline else {
+                continue;
+            };
+            // A deadline too far to subtract from now cannot be reached yet.
+            let delta = TimeDelta::from_std(deadline).ok();
+            let Some(cutoff) = delta.and_then(|d| now.checked_sub_signed(d)) else {
+                continue;
+            };
+
+            for status in [RunStatus::Sleeping, RunStatus::AwaitingApproval] {
+                if stopped.len() >= limit as usize {
+                    return Ok(stopped);
+                }
+                // Every run is read before any is stopped: a stopped run
+                // leaves the filter. Child runs are skipped, they are
+                // stopped through their root.
+                let wanted = limit as usize - stopped.len();
+                let filter = RunFilter {
+                    workflow_name: Some(name.to_string()),
+                    status: Some(status),
+                    created_before: Some(cutoff),
+                    ..RunFilter::default()
+                };
+                let mut due = Vec::new();
+                for run in self.list_all_runs(filter).await? {
+                    if chain_root(&run).is_some() {
+                        continue;
+                    }
+                    let deadline_at = config.deadline_for(run.created_at);
+                    if let Some(deadline_at) = deadline_at.filter(|at| *at <= now) {
+                        due.push((run, deadline_at));
+                    }
+                }
+                due.truncate(wanted);
+
+                for (run, deadline_at) in due {
+                    match self.stop_run_at_deadline(&run, deadline_at).await {
+                        Ok(()) => stopped.push(run.id),
+                        Err(err) => {
+                            error!(
+                                run_id = %run.id,
+                                error = %err,
+                                "failed to stop a run at its deadline"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(stopped)
+    }
+
+    /// Cancel `run`, which reached its deadline at `deadline_at`, with its
+    /// open steps and its descendants.
+    async fn stop_run_at_deadline(
+        &self,
+        run: &Run,
+        deadline_at: DateTime<Utc>,
+    ) -> Result<(), EngineError> {
+        let rejection = WorkflowRejection::RunDeadlineReached { deadline_at };
+        let error = EngineError::from(rejection).to_string();
+        self.store()
+            .update_run(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Cancelled),
+                    error: Some(error.clone()),
+                    completed_at: Some(Utc::now()),
+                    ..RunUpdate::default()
+                },
+            )
+            .await?;
+        self.publish_cancelled(run, Some(&error));
+        self.fail_orphaned_steps(run.id, &error).await?;
+        self.cancel_descendants(run.id, &error).await?;
+        info!(run_id = %run.id, deadline_at = %deadline_at, "run stopped at its deadline");
+        Ok(())
     }
 
     /// Close the descendants of a run whose attempt just ended, logging any
