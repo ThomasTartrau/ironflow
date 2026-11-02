@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [4.1.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v4.0.0...ironflow-engine-v4.1.0) - 2026-11-02
+
+### Added
+
+- #243 send a signal from a workflow without an API key
+
 ## [4.0.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v3.0.2...ironflow-engine-v4.0.0) - 2026-11-02
 
 ### Fixed
