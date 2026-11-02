@@ -111,6 +111,7 @@ fn kind_label(kind: &StepKind) -> String {
         StepKind::Decision => "decision".to_string(),
         StepKind::HumanInput => "human_input".to_string(),
         StepKind::Signal => "signal".to_string(),
+        StepKind::SignalSend => "signal_send".to_string(),
         StepKind::Custom(name) => name.clone(),
     }
 }

@@ -424,9 +424,38 @@ pub enum EngineError {
     },
 
     /// A signal could not be delivered because it is malformed (empty name or
-    /// key).
+    /// key, or a field longer than
+    /// [`MAX_SIGNAL_FIELD_LEN`](crate::signal::MAX_SIGNAL_FIELD_LEN)).
     #[error("invalid signal: {0}")]
     InvalidSignal(String),
+
+    /// A workflow tried to send a signal its handler does not declare in
+    /// [`sent_signals`](crate::handler::WorkflowHandler::sent_signals).
+    ///
+    /// Raised by
+    /// [`WorkflowContext::send_signal`](crate::context::WorkflowContext::send_signal)
+    /// before anything is delivered.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// let err = EngineError::SignalNotAllowed {
+    ///     workflow: "router".to_string(),
+    ///     signal: "deploy.done".to_string(),
+    /// };
+    /// assert!(err.to_string().contains("deploy.done"));
+    /// ```
+    #[error(
+        "workflow {workflow:?} may not send signal {signal:?}: declare it in WorkflowHandler::sent_signals"
+    )]
+    SignalNotAllowed {
+        /// The sending workflow.
+        workflow: String,
+        /// The refused signal name.
+        signal: String,
+    },
 
     /// A workflow invocation was rejected by the [workflow guard](crate::guard).
     ///

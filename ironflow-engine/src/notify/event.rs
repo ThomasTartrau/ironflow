@@ -760,6 +760,8 @@ pub struct SignalAwaitedEvent {
 ///     name: "ci.pipeline_finished".to_string(),
 ///     key: "4f2a9c1".to_string(),
 ///     resumed_runs: vec![Uuid::now_v7()],
+///     sender_run_id: None,
+///     sender_step_id: None,
 ///     at: Utc::now(),
 /// };
 /// assert_eq!(payload.resumed_runs.len(), 1);
@@ -775,6 +777,13 @@ pub struct SignalReceivedEvent {
     pub key: String,
     /// Runs whose waiting step the signal resolved.
     pub resumed_runs: Vec<Uuid>,
+    /// The run that sent the signal with `ctx.send_signal`. `None` for a
+    /// signal sent through the API or the engine directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_run_id: Option<Uuid>,
+    /// The send step of the sending run. `None` when `sender_run_id` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_step_id: Option<Uuid>,
     /// When the signal was received.
     pub at: DateTime<Utc>,
 }
@@ -1160,7 +1169,8 @@ impl Event {
     /// Auth events ([`UserSignedIn`](Event::UserSignedIn),
     /// [`UserSignedUp`](Event::UserSignedUp),
     /// [`UserSignedOut`](Event::UserSignedOut)) are not tied to a run and
-    /// return `None`.
+    /// return `None`. [`SignalReceived`](Event::SignalReceived) returns the
+    /// run that sent it, `None` when it came from outside a workflow.
     ///
     /// # Examples
     ///
@@ -1193,12 +1203,12 @@ impl Event {
             Event::ApprovalEscalated(e) => Some(e.run_id),
             Event::LogLine(e) => Some(e.run_id),
             Event::SignalAwaited(e) => Some(e.run_id),
+            Event::SignalReceived(e) => e.sender_run_id,
             Event::UserSignedIn(_)
             | Event::UserSignedUp(_)
             | Event::UserSignedOut(_)
             | Event::ProviderAccountUpdated(_)
             | Event::ProviderAccountUsageUpdated(_)
-            | Event::SignalReceived(_)
             | Event::ScheduleOccurrencesMissed(_)
             | Event::WorkflowPaused(_)
             | Event::WorkflowResumed(_) => None,
@@ -1213,7 +1223,8 @@ impl Event {
     /// [`ApprovalEscalated`](Event::ApprovalEscalated) always carry a step
     /// identifier; [`ApprovalGranted`](Event::ApprovalGranted) and
     /// [`ApprovalRejected`](Event::ApprovalRejected) carry one when it was
-    /// recorded; every other variant returns `None`.
+    /// recorded, [`SignalReceived`](Event::SignalReceived) the step that sent
+    /// it; every other variant returns `None`.
     ///
     /// # Examples
     ///
@@ -1244,6 +1255,7 @@ impl Event {
             Event::ApprovalGranted(e) => e.step_id,
             Event::ApprovalRejected(e) => e.step_id,
             Event::SignalAwaited(e) => Some(e.step_id),
+            Event::SignalReceived(e) => e.sender_step_id,
             Event::RunCreated(_)
             | Event::RunStatusChanged(_)
             | Event::RunFailed(_)
@@ -1255,7 +1267,6 @@ impl Event {
             | Event::UserSignedOut(_)
             | Event::ProviderAccountUpdated(_)
             | Event::ProviderAccountUsageUpdated(_)
-            | Event::SignalReceived(_)
             | Event::ScheduleOccurrencesMissed(_)
             | Event::WorkflowPaused(_)
             | Event::WorkflowResumed(_) => None,
@@ -1320,6 +1331,8 @@ impl Event {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{from_value, json};
+
     use super::*;
 
     #[test]
@@ -2172,6 +2185,8 @@ mod tests {
                     name: "ci.done".to_string(),
                     key: "abc".to_string(),
                     resumed_runs: vec![id],
+                    sender_run_id: None,
+                    sender_step_id: None,
                     at: now,
                 }),
                 "signal_received",
@@ -2300,6 +2315,8 @@ mod tests {
             name: "ci.done".to_string(),
             key: "abc".to_string(),
             resumed_runs: vec![resumed],
+            sender_run_id: None,
+            sender_step_id: None,
             at: Utc::now(),
         });
 
@@ -2313,6 +2330,20 @@ mod tests {
         assert_eq!(back.run_id(), None);
         assert_eq!(back.step_id(), None);
         assert_eq!(back.user_id(), None);
+        assert!(!json.contains("sender_run_id"), "got {json}");
+    }
+
+    #[test]
+    fn signal_received_from_a_workflow_belongs_to_the_sender() {
+        let (run_id, step_id) = (Uuid::now_v7(), Uuid::now_v7());
+        let json = json!({
+            "type": "signal_received", "signal_id": Uuid::now_v7(), "name": "ci.done",
+            "key": "abc", "resumed_runs": [], "at": Utc::now(),
+            "sender_run_id": run_id, "sender_step_id": step_id,
+        });
+        let event: Event = from_value(json).expect("deserialize");
+        assert_eq!(event.run_id(), Some(run_id));
+        assert_eq!(event.step_id(), Some(step_id));
     }
 
     #[test]

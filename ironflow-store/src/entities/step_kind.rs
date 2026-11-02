@@ -43,6 +43,8 @@ pub enum StepKind {
     HumanInput,
     /// A step waiting for an external Signal.
     Signal,
+    /// A step sending a Signal to the runs waiting for it.
+    SignalSend,
     /// A user-defined operation (e.g. `"gitlab"`, `"gmail"`, `"slack"`).
     Custom(String),
 }
@@ -58,6 +60,7 @@ impl Serialize for StepKind {
             StepKind::Decision => "decision",
             StepKind::HumanInput => "human_input",
             StepKind::Signal => "signal",
+            StepKind::SignalSend => "signal_send",
             StepKind::Custom(name) => name.as_str(),
         };
         serializer.serialize_str(s)
@@ -76,6 +79,7 @@ impl<'de> Deserialize<'de> for StepKind {
             "decision" => StepKind::Decision,
             "human_input" => StepKind::HumanInput,
             "signal" => StepKind::Signal,
+            "signal_send" => StepKind::SignalSend,
             _ => StepKind::Custom(s),
         })
     }
@@ -92,6 +96,7 @@ impl std::fmt::Display for StepKind {
             StepKind::Decision => f.write_str("Decision"),
             StepKind::HumanInput => f.write_str("HumanInput"),
             StepKind::Signal => f.write_str("Signal"),
+            StepKind::SignalSend => f.write_str("SignalSend"),
             StepKind::Custom(name) => write!(f, "Custom({name})"),
         }
     }
@@ -140,6 +145,16 @@ mod tests {
         let back: StepKind = serde_json::from_str(&json).unwrap();
         assert_eq!(back, StepKind::Signal);
         assert_eq!(kind.to_string(), "Signal");
+    }
+
+    #[test]
+    fn serde_roundtrip_signal_send() {
+        let kind = StepKind::SignalSend;
+        let json = serde_json::to_string(&kind).unwrap();
+        assert_eq!(json, "\"signal_send\"");
+        let back: StepKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, StepKind::SignalSend);
+        assert_eq!(kind.to_string(), "SignalSend");
     }
 
     #[test]

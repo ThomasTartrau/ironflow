@@ -59,6 +59,7 @@ use crate::error::EngineError;
 use crate::guard::WorkflowGuardConfig;
 use crate::run_creator::{CreateRunOpts, RunCreator, RunCreatorFuture};
 use crate::schedule::CronSchedule;
+use crate::signal::SentSignals;
 
 mod typed;
 
@@ -739,6 +740,32 @@ pub trait WorkflowHandler: Send + Sync {
         Vec::new()
     }
 
+    /// Signals this workflow may send with
+    /// [`WorkflowContext::send_signal`](crate::context::WorkflowContext::send_signal).
+    /// Any other fails the step with [`EngineError::SignalNotAllowed`]. The
+    /// default is empty. Build it with [`SentSignals::allow`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::signal::SentSignals;
+    /// struct Quiet;
+    ///
+    /// impl WorkflowHandler for Quiet {
+    ///     fn name(&self) -> &str { "quiet" }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(Quiet.sent_signals(), SentSignals::new());
+    /// ```
+    fn sent_signals(&self) -> SentSignals {
+        SentSignals::new()
+    }
+
     /// Check whether a run carrying `run_version` can be replayed by this
     /// handler without `force`.
     ///
@@ -965,6 +992,10 @@ impl<T: WorkflowHandler + ?Sized> WorkflowHandler for Box<T> {
         (**self).required_worker_tags()
     }
 
+    fn sent_signals(&self) -> SentSignals {
+        (**self).sent_signals()
+    }
+
     fn is_version_compatible(&self, run_version: Option<&str>) -> bool {
         (**self).is_version_compatible(run_version)
     }
@@ -990,6 +1021,8 @@ impl<T: WorkflowHandler + ?Sized> WorkflowHandler for Box<T> {
 mod tests {
     use super::*;
     use serde::{Deserialize, Serialize};
+
+    use crate::signal::Signal;
 
     #[derive(Debug, Serialize, Deserialize, JsonSchema)]
     struct TestInput {
@@ -1461,9 +1494,17 @@ mod tests {
             Some(WorkflowGuardConfig::new().with_max_depth(4))
         }
 
+        fn sent_signals(&self) -> SentSignals {
+            SentSignals::new().allow::<TestInput>()
+        }
+
         fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
             Box::pin(async { Ok(()) })
         }
+    }
+
+    impl Signal for TestInput {
+        const NAME: &'static str = "tests.documented";
     }
 
     #[test]
@@ -1549,6 +1590,7 @@ mod tests {
         assert_eq!(boxed.default_max_cost_usd(), Some(Decimal::new(250, 2)));
         assert_eq!(boxed.priority(), -15);
         assert_eq!(boxed.guard_config().map(|g| g.max_depth), Some(4));
+        assert_eq!(boxed.sent_signals().names(), ["tests.documented"]);
         assert!(boxed.is_version_compatible(Some("3.0.0")));
         assert!(!boxed.is_version_compatible(Some("0.1.0")));
         assert_eq!(boxed.describe().description, "A documented handler");

@@ -244,6 +244,9 @@ let child_steps = store.list_steps(child.run_id()).await?;
 * `ctx.wait_for_signal(...)` is resolved with `with_mock_signal(|step, name, key| ..)`,
   returning `SignalOutcome::Received(json!(..))` or `SignalOutcome::TimedOut`.
   Without it, the run ends in `RunStatus::Sleeping` until a signal is delivered.
+* `ctx.send_signal(...)` is not intercepted: it really delivers into the
+  `InMemoryStore`. Check what was sent with `store.list_signals(..)`, or the
+  delivery the step returned.
 * `ctx.decision(...)` needs a real `DecisionProvider`, wired with
   `with_decision_provider`.
 

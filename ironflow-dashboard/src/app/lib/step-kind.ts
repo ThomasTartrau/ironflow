@@ -23,6 +23,7 @@ import {
 	SkipForward,
 	MessageSquare,
 	Radio,
+	Send,
 	Split,
 	type LucideIcon,
 } from "lucide-react";
@@ -67,6 +68,8 @@ export function getKindMeta(kind: string): KindMeta {
 			return { icon: MessageSquare, color: "blue", label: "input" };
 		case "signal":
 			return { icon: Radio, color: "indigo", label: "signal" };
+		case "signal_send":
+			return { icon: Send, color: "indigo", label: "send signal" };
 		case "skip":
 			return { icon: SkipForward, color: "slate", label: "skipped" };
 		default:

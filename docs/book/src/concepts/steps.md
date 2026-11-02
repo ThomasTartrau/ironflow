@@ -12,6 +12,7 @@ A Step is an atomic unit of work within a Run. Each step is persisted in the dat
 | Approval | `ctx.approval()` | Pause for human approval |
 | HumanInput | `ctx.human_input()` | Pause until a human submits a typed answer ([Human Input](human-input.md)) |
 | Signal | `ctx.wait_for_signal()` | Pause until an external signal arrives or a timeout elapses ([Signals](signals.md)) |
+| SignalSend | `ctx.send_signal()` | Send a declared signal to the runs waiting for it ([Signals](signals.md#sending-from-a-workflow)) |
 | Decision | `ctx.decision()` | Make a typed machine decision ([System One / Jev](decision.md)) |
 | Workflow | `ctx.workflow()` | Start a sub-workflow |
 | Custom | `ctx.operation()` | Run a custom [Operation](operations.md) |

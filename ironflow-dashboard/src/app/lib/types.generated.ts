@@ -4184,6 +4184,8 @@ export interface components {
 		 *         name: "ci.pipeline_finished".to_string(),
 		 *         key: "4f2a9c1".to_string(),
 		 *         resumed_runs: vec![Uuid::now_v7()],
+		 *         sender_run_id: None,
+		 *         sender_step_id: None,
 		 *         at: Utc::now(),
 		 *     };
 		 *     assert_eq!(payload.resumed_runs.len(), 1);
@@ -4201,6 +4203,17 @@ export interface components {
 			name: string;
 			/** @description Runs whose waiting step the signal resolved. */
 			resumed_runs: string[];
+			/**
+			 * Format: uuid
+			 * @description The run that sent the signal with `ctx.send_signal`. `None` for a
+			 *     signal sent through the API or the engine directly.
+			 */
+			sender_run_id?: string | null;
+			/**
+			 * Format: uuid
+			 * @description The send step of the sending run. `None` when `sender_run_id` is.
+			 */
+			sender_step_id?: string | null;
 			/**
 			 * Format: uuid
 			 * @description Stored signal identifier.

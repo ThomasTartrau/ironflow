@@ -211,6 +211,46 @@ async fn postgres_signal_list_for_key_and_waiters() {
 
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
+async fn postgres_signal_send_step_keeps_its_kind_and_never_waits() {
+    let _serial = SERIAL.lock().await;
+    let store = get_store().await;
+    let name = unique("demo");
+    let run_id = running_run(&store).await;
+    let step = store
+        .create_step(NewStep {
+            run_id,
+            trace_id: step_trace_id(run_id, "notify", 0),
+            name: "notify".to_string(),
+            kind: StepKind::SignalSend,
+            position: 0,
+            input: Some(json!({"name": name, "key": "k1", "payload": {}})),
+            is_error_handler: false,
+        })
+        .await
+        .expect("create step");
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                status: Some(StepStatus::Running),
+                started_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("to running");
+
+    let read = store.get_step(step.id).await.expect("get").expect("exists");
+    assert_eq!(read.kind, StepKind::SignalSend);
+    let waiters = store
+        .list_signal_waiters(&name, "k1")
+        .await
+        .expect("waiters");
+    assert!(waiters.is_empty(), "a send step is not a wait");
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
 async fn postgres_signal_claim_due_sleeping_runs_is_exclusive() {
     let _serial = SERIAL.lock().await;
     let store = Arc::new(get_store().await);

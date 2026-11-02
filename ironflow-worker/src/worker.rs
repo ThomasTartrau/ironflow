@@ -490,7 +490,8 @@ impl WorkerBuilder {
         validate_worker_tags(&self.tags).map_err(EngineError::InvalidWorkerTag)?;
         let tags = normalize_worker_tags(self.tags);
 
-        let store: Arc<dyn Store> = Arc::new(ApiRunStore::new(&self.api_url, &self.worker_token));
+        let api_store = ApiRunStore::new(&self.api_url, &self.worker_token);
+        let store: Arc<dyn Store> = Arc::new(api_store.clone());
         let strategy = self
             .account_strategy
             .unwrap_or_else(|| Arc::new(LeastUtilized));
@@ -500,7 +501,8 @@ impl WorkerBuilder {
                 .with_max_capacity_wait(self.max_capacity_wait),
         );
 
-        let mut engine = Engine::new(store, provider);
+        // The worker's store cannot deliver a signal: the API does it.
+        let mut engine = Engine::new(store, provider).with_signal_sender(Arc::new(api_store));
         if let Some(decision_provider) = self.decision_provider {
             engine = engine.with_decision_provider(decision_provider);
         }

@@ -159,6 +159,13 @@ no `Value` read by key, no step name copied by hand where a handle or a type exi
 Examples, the mdBook and the plugin follow it too. Full rule, with the exceptions (data
 that stays a string), in `.claude/rules/typed-api.md`.
 
+### Engine on a worker
+
+The worker builds its `Engine` with `Engine::new` over an `ApiRunStore`, without
+`with_execution_mode`: it runs in `ExecutionMode::Local`. Never tell "on a worker" from the
+execution mode; inject what differs (`with_signal_sender`, `set_artifact_sink`). Several
+`ApiRunStore` methods only exist on the API and return an error (caught in review of #243).
+
 ### Error Handling
 
 - No retry logic - a step fails, the workflow fails

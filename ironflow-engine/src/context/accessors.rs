@@ -33,6 +33,7 @@ use crate::notify::WorkflowEventBus;
 use crate::operation::NoopSecretResolver;
 use crate::operation::{OperationContext, SecretResolver};
 use crate::plan::{SharedPlanRecorder, lock_plan};
+use crate::signal::SignalSender;
 
 use super::cost::BudgetReservation;
 use super::{HandlerResolver, WorkflowContext};
@@ -86,6 +87,7 @@ impl WorkflowContext {
             plan: None,
             output: None,
             worker_tags: None,
+            signal_sender: None,
             sibling_suspensions: Vec::new(),
         }
     }
@@ -139,6 +141,7 @@ impl WorkflowContext {
             plan: None,
             output: None,
             worker_tags: None,
+            signal_sender: None,
             sibling_suspensions: Vec::new(),
         }
     }
@@ -242,6 +245,11 @@ impl WorkflowContext {
     /// [`Engine::set_worker_tags`](crate::engine::Engine::set_worker_tags).
     pub(crate) fn set_worker_tags(&mut self, tags: Arc<Vec<String>>) {
         self.worker_tags = Some(tags);
+    }
+
+    /// Set where [`send_signal`](Self::send_signal) delivers.
+    pub(crate) fn set_signal_sender(&mut self, sender: Arc<dyn SignalSender>) {
+        self.signal_sender = Some(sender);
     }
 
     /// The step interceptor attached to this context, if any.

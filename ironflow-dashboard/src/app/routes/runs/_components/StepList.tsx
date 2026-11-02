@@ -272,6 +272,7 @@ function getKindColor(kind: string): string {
 		case "human_input":
 			return "bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-400/15 dark:text-cyan-300 dark:border-cyan-400/30";
 		case "signal":
+		case "signal_send":
 			return "bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-400/15 dark:text-indigo-300 dark:border-indigo-400/30";
 		case "skip":
 			return "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-400/15 dark:text-slate-300 dark:border-slate-400/30";

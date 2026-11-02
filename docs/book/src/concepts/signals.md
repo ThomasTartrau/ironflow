@@ -4,7 +4,8 @@ A **signal** is an external message sent to Ironflow to resume the runs waiting
 for it. It has a **name** (what happened, e.g. `ci.pipeline_finished`) and a
 **key** (which occurrence, e.g. a commit SHA). A run waits with
 `ctx.wait_for_signal`; a producer delivers with `POST /api/v1/signals`, the CLI,
-the MCP server or `Engine::send_signal`.
+the MCP server or `Engine::send_signal`, and another workflow with
+`ctx.send_signal`.
 
 ## Declaring a signal
 
@@ -67,6 +68,47 @@ waker task of the API server (see [Engine and worker](engine-worker.md)).
 | CLI | `ironflow signal list --name ci.pipeline_finished` |
 | MCP | `send_signal`, `list_signals` |
 | Rust | `engine.send_signal(&PipelineFinished { .. }, &sha, Some(&delivery_id))` |
+| Workflow | `ctx.send_signal("notify", &PipelineFinished { .. }, &sha)`, no API key, see below |
+
+## Sending from a workflow
+
+A workflow sends a signal as a step of its own run, without holding any API
+key. A router started by a webhook can wake the run waiting for a human reply:
+
+```rust,ignore
+impl WorkflowHandler for Router {
+    fn name(&self) -> &str { "route-gitlab-note" }
+
+    fn sent_signals(&self) -> SentSignals {
+        SentSignals::new().allow::<HumanReplied>()
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let note: GitlabNote = ctx.input().await?;
+            let reply = HumanReplied { body: note.body };
+            let delivery = ctx.send_signal("wake-agent", &reply, &note.discussion_id).await?;
+            ctx.set_output(&delivery.resumed.len())?;
+            Ok(())
+        })
+    }
+}
+```
+
+- **Declared**: the handler lists the signal types it sends in `sent_signals`.
+  Any other fails the step with `SignalNotAllowed` and sends nothing. The
+  declaration keeps a workflow from sending a signal that is not its own by
+  mistake; it is not a security boundary.
+- **Trusted input**: whoever can start the sending workflow chooses the key and
+  the payload it sends. Check the webhook that starts it.
+- **Timeline and audit**: the step (`signal_send`) records the delivery
+  (`signal_id`, `duplicate`, `resumed`, `rejected`). The `signal_received` audit
+  entry carries the sending run and step (`sender_run_id`, `sender_step_id`).
+- **Sent once**: a completed step is replayed without sending again, and a step
+  interrupted by a lost worker is deduplicated. A retry of the run is a new
+  attempt and sends again.
+- **On a worker**: the worker delivers through the API with its worker token.
+  Upgrade the API before the workers.
 
 ## Example: wait for CI
 

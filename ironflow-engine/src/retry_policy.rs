@@ -134,6 +134,7 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::RunPaused { .. }
         | EngineError::ChildRunNotPausable { .. }
         | EngineError::InvalidSignal(_)
+        | EngineError::SignalNotAllowed { .. }
         // Deterministic: replaying reproduces the same position divergence or
         // the same incompatible handler version.
         | EngineError::ReplayDivergence { .. }

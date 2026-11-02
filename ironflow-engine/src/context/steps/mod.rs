@@ -15,5 +15,6 @@ mod operation;
 mod parallel;
 mod shell;
 mod signal;
+mod signal_send;
 mod skip;
 pub(super) mod sub_workflow;

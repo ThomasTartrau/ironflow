@@ -7,6 +7,7 @@ use tokio::spawn;
 use super::{Event, EventSubscriber};
 
 /// A subscriber paired with its event type filter.
+#[derive(Clone)]
 struct Subscription {
     subscriber: Arc<dyn EventSubscriber>,
     event_types: Vec<&'static str>,
@@ -36,6 +37,7 @@ impl Subscription {
 ///     &[Event::RUN_STATUS_CHANGED, Event::STEP_FAILED],
 /// );
 /// ```
+#[derive(Clone)]
 pub struct EventPublisher {
     subscriptions: Vec<Subscription>,
 }

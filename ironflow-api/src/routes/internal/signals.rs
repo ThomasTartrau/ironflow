@@ -2,6 +2,8 @@
 //!
 //! - `GET /api/v1/internal/signals?name=&key=&since=` lists the signals a
 //!   newly opened wait step may consume.
+//! - `POST /api/v1/internal/signals` delivers a signal sent by a workflow
+//!   step (`ctx.send_signal`).
 //! - `POST /api/v1/internal/steps/:id/signal-resolution` resolves a waiting
 //!   signal step.
 //! - `POST /api/v1/internal/runs/:id/signal-suspension` puts a run to sleep on
@@ -15,6 +17,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
+use ironflow_engine::error::EngineError;
+use ironflow_engine::signal::SignalOrigin;
+use ironflow_store::entities::NewSignal;
 use ironflow_store::error::StoreError;
 
 use crate::error::ApiError;
@@ -46,6 +51,43 @@ pub struct SignalSuspensionBody {
     pub step_id: Uuid,
     /// When the wait times out.
     pub deadline_at: DateTime<Utc>,
+}
+
+/// Body of `POST /internal/signals`.
+#[derive(Debug, Deserialize)]
+pub struct SendSignalBody {
+    /// The signal to deliver.
+    #[serde(flatten)]
+    pub signal: NewSignal,
+    /// The workflow step that sent it.
+    pub origin: SignalOrigin,
+}
+
+/// Deliver a signal sent by a workflow step, like `POST /api/v1/signals`,
+/// recording the sending step on the `signal_received` audit entry.
+///
+/// The worker token is the only credential: which signals a workflow may
+/// send is checked by the engine on the worker, against the handler's
+/// declaration.
+///
+/// # Errors
+///
+/// Returns 400 if the name, key or idempotency ID is empty or too long, 500
+/// on store failure.
+pub async fn send_signal(
+    State(state): State<AppState>,
+    Json(body): Json<SendSignalBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let delivery = state
+        .engine
+        .deliver_signal_from(body.signal, Some(body.origin))
+        .await
+        .map_err(|e| match e {
+            EngineError::InvalidSignal(msg) => ApiError::BadRequest(msg),
+            EngineError::Store(err) => ApiError::from(err),
+            other => ApiError::Internal(other.to_string()),
+        })?;
+    Ok(ok(delivery))
 }
 
 /// Map the store errors of the signal routes to API errors.
@@ -121,6 +163,8 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use std::error::Error;
+
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use chrono::TimeDelta;
@@ -131,8 +175,8 @@ mod tests {
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{
-        NewRun, NewSignal, NewStep, RunStatus, StepKind, StepStatus, StepUpdate, TriggerKind,
-        step_trace_id,
+        NewRun, NewSignal, NewStep, RunStatus, SignalFilter, StepKind, StepStatus, StepUpdate,
+        TriggerKind, step_trace_id,
     };
     use serde_json::{from_slice, json};
     use tokio::sync::broadcast;
@@ -343,5 +387,71 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    type TestResult = Result<(), Box<dyn Error>>;
+
+    const SEND_URI: &str = "/api/v1/internal/signals";
+
+    fn sent_signal(key: &str) -> Value {
+        json!({
+            "name": "demo.done", "key": key, "payload": {"ok": true},
+            "idempotency_id": "run:1:attempt:1:step:0",
+            "origin": {"run_id": Uuid::now_v7(), "step_id": Uuid::now_v7()},
+        })
+    }
+
+    async fn stored_signals(state: &AppState) -> Result<u64, StoreError> {
+        let page = state
+            .store
+            .list_signals(SignalFilter::default(), 1, 20)
+            .await?;
+        Ok(page.total)
+    }
+
+    #[tokio::test]
+    async fn internal_send_signal_resolves_the_waiting_step() -> TestResult {
+        let state = test_state();
+        let (run_id, step_id) = waiting_step(&state).await;
+
+        let (status, body) = call(state.clone(), "POST", SEND_URI, sent_signal("k1")).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["duplicate"], false);
+        assert_eq!(body["data"]["resumed"][0]["run_id"], json!(run_id));
+        assert_eq!(body["data"]["resumed"][0]["step_id"], json!(step_id));
+        let step = state.store.get_step(step_id).await?.ok_or("no step")?;
+        assert_eq!(step.status.state, StepStatus::Completed);
+
+        let (status, body) = call(state, "POST", SEND_URI, sent_signal("k1")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["duplicate"], true, "same idempotency id");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn internal_send_signal_with_an_invalid_key_returns_400() -> TestResult {
+        let state = test_state();
+        for key in ["  ".to_string(), "k".repeat(256)] {
+            let (status, _) = call(state.clone(), "POST", SEND_URI, sent_signal(&key)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "key {key:?}");
+        }
+        assert_eq!(stored_signals(&state).await?, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn internal_send_signal_requires_the_worker_token() -> TestResult {
+        let state = test_state();
+        let app = create_router(state.clone(), RouterConfig::default());
+        let req = Request::builder()
+            .method("POST")
+            .uri(SEND_URI)
+            .header("content-type", "application/json")
+            .body(Body::from(sent_signal("k1").to_string()))?;
+        let resp = app.oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(stored_signals(&state).await?, 0);
+        Ok(())
     }
 }
