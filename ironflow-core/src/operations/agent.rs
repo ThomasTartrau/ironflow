@@ -2215,6 +2215,8 @@ mod tests {
                         expected: "structured_output field".to_string(),
                         got: "null".to_string(),
                         debug_messages: Vec::new(),
+                        partial_usage: Box::default(),
+                        raw_response: None,
                     })
                 } else {
                     Ok(default_output())

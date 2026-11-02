@@ -85,40 +85,54 @@ async fn pods_running_forever(fake: &FakeK8s) {
         .await;
 }
 
+/// Run a step with a 500 ms timeout against a pod that never finishes, with
+/// or without a log sink, and check it fails with that timeout and its pod is
+/// deleted.
+async fn assert_step_timeout_deletes_the_pod(streaming: bool) {
+    let fake = FakeK8s::start().await;
+    pods_running_forever(&fake).await;
+    let provider = provider(&fake);
+    let step_timeout = Duration::from_millis(500);
+    let mut agent = Agent::from_config(AgentConfig::new("triage").timeout(step_timeout));
+    if streaming {
+        agent = agent.log_sink(Arc::new(Discard));
+    }
+
+    let result = agent.run(&provider).await;
+
+    match result {
+        Err(OperationError::Agent(AgentError::Timeout { limit })) => {
+            assert_eq!(limit, step_timeout);
+        }
+        other => panic!("expected an agent timeout, got {other:?}"),
+    }
+    let posted = fake.posted("pods").await;
+    let name = posted[0]["metadata"]["name"]
+        .as_str()
+        .expect("pod name")
+        .to_string();
+    let pod_path = format!("{}/{name}", collection("pods"));
+    wait_for(&fake.server, "the pod deletion", |r| {
+        count(r, "DELETE", &pod_path) > 0
+    })
+    .await;
+}
+
 /// The worker path: it always streams the logs of an agent step.
 #[tokio::test]
 async fn k8s_step_past_its_timeout_fails_with_a_timeout_and_deletes_its_pod() {
-    timeout(TEST_TIMEOUT, async {
-        let fake = FakeK8s::start().await;
-        pods_running_forever(&fake).await;
-        let provider = provider(&fake);
-        let step_timeout = Duration::from_millis(500);
-        let config = AgentConfig::new("triage").timeout(step_timeout);
+    timeout(TEST_TIMEOUT, assert_step_timeout_deletes_the_pod(true))
+        .await
+        .expect("test timed out");
+}
 
-        let result = Agent::from_config(config)
-            .log_sink(Arc::new(Discard))
-            .run(&provider)
-            .await;
-
-        match result {
-            Err(OperationError::Agent(AgentError::Timeout { limit })) => {
-                assert_eq!(limit, step_timeout);
-            }
-            other => panic!("expected an agent timeout, got {other:?}"),
-        }
-        let posted = fake.posted("pods").await;
-        let name = posted[0]["metadata"]["name"]
-            .as_str()
-            .expect("pod name")
-            .to_string();
-        let pod_path = format!("{}/{name}", collection("pods"));
-        wait_for(&fake.server, "the pod deletion", |r| {
-            count(r, "DELETE", &pod_path) > 0
-        })
-        .await;
-    })
-    .await
-    .expect("test timed out");
+/// The library path: without a log sink, `Agent::run` calls `invoke`, which
+/// watches the pod until it completes instead of streaming its logs.
+#[tokio::test]
+async fn k8s_step_past_its_timeout_without_log_sink_deletes_its_pod() {
+    timeout(TEST_TIMEOUT, assert_step_timeout_deletes_the_pod(false))
+        .await
+        .expect("test timed out");
 }
 
 #[tokio::test]
