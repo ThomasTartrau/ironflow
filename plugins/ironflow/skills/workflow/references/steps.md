@@ -1001,6 +1001,6 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 | `priority()` | `0` | Queue priority of its runs, -100 to 100 (clamped): workers pick the highest first, then the oldest. No preemption, no aging |
 | `version()` / `compatible_versions()` | `"1"` / empty | Retry compatibility across handler versions |
 | `sub_workflows()` | empty | `sub_workflow_names(&[&Child])`: the handlers invoked through `ctx.workflow` |
-| `guard_config()` | `None` | Recursion depth, fan-out, token and time guards |
+| `guard_config()` | `None` | Recursion depth, fan-out, token and time guards. Tokens and active time add up over every execution of the run (resume after approval, signal, input, retry); `.with_run_deadline(d)` stops the run `d` after its creation, even while it sleeps (run `Cancelled`, error `run deadline reached`) |
 
 `describe()` assembles all of them. Override it only for metadata the methods cannot express.

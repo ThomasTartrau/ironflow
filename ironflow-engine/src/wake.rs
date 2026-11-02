@@ -13,6 +13,12 @@
 //! once** even with several API instances running a waker. Under
 //! [`ExecutionMode::Workers`] a worker then picks the run up; under
 //! [`ExecutionMode::Local`] the waker resumes it in-process.
+//!
+//! Before claiming, each tick also cancels the root runs left `Sleeping` or
+//! `AwaitingApproval` past their
+//! [`run_deadline`](crate::guard::WorkflowGuardConfig::run_deadline), through
+//! [`Engine::cancel_runs_past_deadline`]: a run past its deadline is stopped
+//! instead of being woken.
 
 use std::sync::Arc;
 
@@ -101,6 +107,12 @@ impl RunWaker {
 
     /// Claim and wake one batch of due `Sleeping` runs.
     ///
+    /// First, it cancels up to one batch of root runs left `Sleeping` or
+    /// `AwaitingApproval` past their
+    /// [`run_deadline`](crate::guard::WorkflowGuardConfig::run_deadline)
+    /// (see [`Engine::cancel_runs_past_deadline`]), so they are stopped
+    /// instead of woken.
+    ///
     /// Every claimed run is `Pending` when this returns. Under
     /// [`ExecutionMode::Local`] each one is then resumed in a background task,
     /// so a long workflow never holds the waker loop; a failed resume is
@@ -110,7 +122,8 @@ impl RunWaker {
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::Store`] if the batch cannot be claimed.
+    /// Returns [`EngineError::Store`] if the runs past their deadline cannot
+    /// be listed or the batch cannot be claimed.
     ///
     /// # Examples
     ///
@@ -126,6 +139,14 @@ impl RunWaker {
     /// # }
     /// ```
     pub async fn tick(&self) -> Result<Vec<Run>, EngineError> {
+        let stopped = self
+            .engine
+            .cancel_runs_past_deadline(self.batch_size)
+            .await?;
+        for run_id in &stopped {
+            info!(run_id = %run_id, "run past its deadline stopped instead of woken");
+        }
+
         let runs = self
             .engine
             .store()
