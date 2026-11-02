@@ -400,6 +400,10 @@ async fn no_redirect_returns_3xx_status() {
 
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
+        // Read the request first: on Linux, closing a socket with unread data sends
+        // a RST, and the client can lose the response before reading it.
+        let mut buf = [0u8; 1024];
+        let _ = socket.read(&mut buf).await.unwrap();
         let response =
             "HTTP/1.1 302 Found\r\nLocation: http://10.0.0.1/evil\r\nContent-Length: 0\r\n\r\n";
         socket.write_all(response.as_bytes()).await.unwrap();
@@ -427,6 +431,9 @@ async fn streaming_body_size_check_aborts_over_limit() {
 
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
+        // Same RST race as in `no_redirect_returns_3xx_status`.
+        let mut buf = [0u8; 1024];
+        let _ = socket.read(&mut buf).await.unwrap();
         let body = "x".repeat(2048);
         let response = format!(
             "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{}\r\n0\r\n\r\n",

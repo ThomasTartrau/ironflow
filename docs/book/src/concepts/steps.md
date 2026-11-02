@@ -64,9 +64,9 @@ same `{"error": ...}` output and the step is not executed again. Files a shell s
 
 ```rust,ignore
 let result = ctx.agent("analyze", AgentStepConfig::new("Analyze this log file")).await?;
-println!("{}", result.text());
+println!("{}", result.text().raw());
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, JsonSchema, AgentAnswer)]
 struct Verdict { approved: bool }
 
 // With `.output::<T>()` the step returns the `T` itself.
@@ -168,51 +168,6 @@ For a role with tools, put the persona in `append_system_prompt`: `system_prompt
 the Claude Code prompt, which carries the tool and skill instructions. A structured output
 needs at least 2 turns.
 
-#### Cost cap of a role
-
-A role can declare a cost cap over a calendar period, counted under its `name()`:
-
-```rust,ignore
-use ironflow_engine::config::RoleCostCap;
-use rust_decimal::Decimal;
-
-impl AgentRole for Reviewer {
-    // ...
-    fn name(&self) -> &str {
-        "reviewer"
-    }
-
-    fn cost_cap(&self) -> Option<RoleCostCap> {
-        Some(RoleCostCap::per_month(Decimal::new(50, 0)))
-    }
-}
-```
-
-- The counter is shared by every run of every workflow that calls the role: steps of
-  roles with the same name share one counter. Renaming a role, or its type when it keeps
-  the default name, starts a new counter. A role without `cost_cap` is still counted over a
-  month, so an operator can cap it later.
-- The period is calendar and UTC: `RoleCostCap::per_day` resets at midnight UTC,
-  `RoleCostCap::per_month` on the 1st at 00:00 UTC (the window of
-  `IRONFLOW_MONTHLY_COST_LIMIT_USD`). A cap of 0 disables the role.
-- Before each agent step of the role, the engine reserves room under the cap. Once the cost
-  spent plus the room held by running steps reaches the cap, the step fails with
-  `AgentError::RoleCostCapReached` (role, cap, spent, reserved and when the counter
-  resets) before the provider is called. That error is never retried.
-- A running step holds its `max_budget_usd`; it may overshoot the cap by what it spends
-  above it. A step without `max_budget_usd` holds all the room left while it runs, so a
-  second step of the role is refused until it ends: declare a budget on capped roles.
-- A step that fails without reporting what it spent (a timeout, a crashed process) or is
-  cancelled is charged the room it held, since the provider may have spent it. A failure
-  raised before the model ran (capacity wait, rate limit, unknown account) costs nothing.
-- The cap fails closed: when the counter cannot be read (store or API unreachable), the
-  step fails with `AgentError::RoleCostUnavailable` without calling the provider.
-- A worker that crashes mid-step frees the room it held after at most 10 minutes.
-- An operator reads the counters with `GET /api/v1/agent-roles` (or
-  `ironflow agent-role list`) and can set or lower a cap with
-  `PUT /api/v1/agent-roles/{name}/cost-cap` (or `ironflow agent-role set-cap reviewer --usd 20`).
-  The cap enforced is the lower of the two: an operator cap never raises the code cap.
-
 ### Untrusted content in a prompt
 
 Text the workflow did not write (an issue, a review comment, a diff, a CI log, a webhook
@@ -243,6 +198,51 @@ works in library mode too (`Agent::new().prompt(&prompt.to_string())`).
 
 `RecordReplayProvider` masks the nonce when it names a fixture: the same prompt finds its
 fixture from one run to the next.
+
+#### Agent output in a prompt
+
+What an agent wrote is untrusted too: it may repeat, word for word, instructions planted in
+a page, an issue or a log it read. `StepOutput::text()` returns an `AgentText`, which
+enters a prompt only through `untrusted(..)`. It has no `Display`, no `AsRef<str>`:
+`AgentStepConfig::new(&out.text())` and `format!("{}", out.text())` do not compile.
+
+```rust,ignore
+use ironflow_engine::config::{AgentAnswer, AgentStepConfig, AgentText, Prompt};
+
+let summary = ctx.agent("summarize", AgentStepConfig::new("Summarize the page")).await?;
+let prompt = Prompt::new()
+    .text("Act on this summary:")
+    .untrusted(&summary.text());
+ctx.agent("act", AgentStepConfig::new(&prompt.to_string())).await?;
+
+// A typed answer derives `AgentAnswer`; its free-text fields are `AgentText`.
+#[derive(Deserialize, JsonSchema, AgentAnswer)]
+struct Findings {
+    title: AgentText,
+    severity: u8,
+}
+
+let findings = ctx
+    .agent("audit", AgentStepConfig::new("Audit the repo").output::<Findings>())
+    .await?;
+let prompt = Prompt::new().text("Fix this finding:").untrusted(&findings.title);
+```
+
+The `T` of `.output::<T>()` and the `Output` of an `AgentRole` implement `AgentAnswer`,
+which `#[derive(AgentAnswer)]` provides when every field does: numbers, `bool`,
+`AgentText`, `Uuid`, `Decimal`, collections and options of them, other derived types. A
+`String` or a `serde_json::Value` field fails to compile. `AgentText` serializes as a plain
+string with the schema of a `String`, so the stored output and the fixtures are the same.
+
+`{:?}` of an `AgentText` prints `AgentText(<N bytes>)`, never the text, and so does the
+`{:?}` of a type deriving `Debug` that holds one: `format!("{:?}", answer)` carries no
+agent text into a prompt.
+
+The raw text stays reachable, explicitly, for what is not a prompt (a log, an artifact, a
+shell argument, a comment): `.raw()`, `into_raw()`, `serde_json::to_string` or `to_value`
+of an `AgentText` or of a typed answer, `StepOutput::json::<String>()`, the public
+`output.output` `Value` (and the `{:?}` of a `StepOutput`, which prints it), and
+`output_schema_raw` with `json::<T>()`. Never put their result in a prompt.
 
 ## Sub-workflow steps
 

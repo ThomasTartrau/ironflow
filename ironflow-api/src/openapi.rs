@@ -16,8 +16,6 @@ use crate::entities::{
     UpdateScheduleRequest, UpdateUserGroupsRequest, UserGroupsResponse, UserResponse,
     WorkerRouting, WorkflowPauseResponse,
 };
-use crate::entities::{AgentRoleResponse, ListAgentRolesQuery, UpdateAgentRoleCostCapRequest};
-use crate::routes::agent_roles;
 use crate::routes::api_keys::available_scopes::ScopeEntry;
 use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
 use crate::routes::api_keys::list::ApiKeyResponse;
@@ -142,9 +140,6 @@ mod with_signup {
             provider_accounts::delete::delete_provider_account,
             provider_accounts::test::test_provider_account,
             provider_accounts::usage::provider_account_usage,
-            agent_roles::list::list_agent_roles,
-            agent_roles::get::get_agent_role,
-            agent_roles::update_cost_cap::update_agent_role_cost_cap,
             audit_logs::list_audit_logs,
             get_run_logs::get_run_logs,
             run_events::run_events,
@@ -276,9 +271,6 @@ mod with_signup {
                 RejectedRunResponse,
                 SignalResponse,
                 ListSignalsQuery,
-                AgentRoleResponse,
-                ListAgentRolesQuery,
-                UpdateAgentRoleCostCapRequest,
                 SignalAwaitedEvent,
                 SignalReceivedEvent,
                 ScheduleOccurrencesMissedEvent,
@@ -301,7 +293,6 @@ mod with_signup {
             (name = "schedules", description = "Schedule management"),
             (name = "approval-delegations", description = "Approval delegation for absent approvers"),
             (name = "signals", description = "Signals: external messages that resume waiting runs"),
-            (name = "agent-roles", description = "Agent roles: cost consumed and cost cap per period"),
         )
     )]
     pub struct ApiDoc;
@@ -372,9 +363,6 @@ mod without_signup {
             provider_accounts::delete::delete_provider_account,
             provider_accounts::test::test_provider_account,
             provider_accounts::usage::provider_account_usage,
-            agent_roles::list::list_agent_roles,
-            agent_roles::get::get_agent_role,
-            agent_roles::update_cost_cap::update_agent_role_cost_cap,
             audit_logs::list_audit_logs,
             get_run_logs::get_run_logs,
             run_events::run_events,
@@ -504,9 +492,6 @@ mod without_signup {
                 RejectedRunResponse,
                 SignalResponse,
                 ListSignalsQuery,
-                AgentRoleResponse,
-                ListAgentRolesQuery,
-                UpdateAgentRoleCostCapRequest,
                 SignalAwaitedEvent,
                 SignalReceivedEvent,
                 ScheduleOccurrencesMissedEvent,
@@ -529,7 +514,6 @@ mod without_signup {
             (name = "schedules", description = "Schedule management"),
             (name = "approval-delegations", description = "Approval delegation for absent approvers"),
             (name = "signals", description = "Signals: external messages that resume waiting runs"),
-            (name = "agent-roles", description = "Agent roles: cost consumed and cost cap per period"),
         )
     )]
     pub struct ApiDoc;

@@ -60,15 +60,15 @@ impl WorkflowContext {
     ///
     /// ```no_run
     /// use ironflow_engine::context::WorkflowContext;
-    /// use ironflow_engine::config::AgentStepConfig;
+    /// use ironflow_engine::config::{AgentAnswer, AgentStepConfig, AgentText};
     /// use ironflow_engine::error::EngineError;
     /// use schemars::JsonSchema;
     /// use serde::Deserialize;
     ///
-    /// #[derive(Deserialize, JsonSchema)]
+    /// #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// struct Review {
     ///     approved: bool,
-    ///     comments: Vec<String>,
+    ///     comments: Vec<AgentText>,
     /// }
     ///
     /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
@@ -111,14 +111,14 @@ impl WorkflowContext {
     ///
     /// ```no_run
     /// use ironflow_engine::context::WorkflowContext;
-    /// use ironflow_engine::config::{AgentStepConfig, Tool};
+    /// use ironflow_engine::config::{AgentAnswer, AgentStepConfig, AgentText, Prompt, Tool};
     /// use ironflow_engine::error::EngineError;
     /// use schemars::JsonSchema;
     /// use serde::Deserialize;
     ///
-    /// #[derive(Deserialize, JsonSchema)]
+    /// #[derive(Deserialize, JsonSchema, AgentAnswer)]
     /// struct Triage {
-    ///     test: String,
+    ///     test: AgentText,
     /// }
     ///
     /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
@@ -131,10 +131,13 @@ impl WorkflowContext {
     ///     )
     ///     .await?;
     /// if let Some(environment) = reply.environment_id.as_deref() {
-    ///     let prompt = format!("Fix the test {} in /workspace", reply.answer.test);
+    ///     // The test name was written by an agent: it enters the prompt as data.
+    ///     let prompt = Prompt::new()
+    ///         .text("Fix this test in /workspace:")
+    ///         .untrusted(&reply.answer.test);
     ///     ctx.agent(
     ///         "fix",
-    ///         AgentStepConfig::new(&prompt)
+    ///         AgentStepConfig::new(&prompt.to_string())
     ///             .allow_tool(Tool::Bash)
     ///             .max_budget_usd(0.50)
     ///             .resume_environment(environment),

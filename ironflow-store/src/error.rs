@@ -104,10 +104,6 @@ pub enum StoreError {
     #[error("provider account already exists: {0}")]
     DuplicateProviderAccount(String),
 
-    /// The requested agent role was never seen by the store.
-    #[error("agent role '{0}' not found")]
-    AgentRoleNotFound(String),
-
     /// A database or I/O error from the backing store.
     #[error("database error: {0}")]
     Database(String),
@@ -130,12 +126,6 @@ mod tests {
         let id = Uuid::nil();
         let err = StoreError::RunNotFound(id);
         assert_eq!(err.to_string(), format!("run not found: {id}"));
-    }
-
-    #[test]
-    fn agent_role_not_found_display() {
-        let err = StoreError::AgentRoleNotFound("reviewer".to_string());
-        assert_eq!(err.to_string(), "agent role 'reviewer' not found");
     }
 
     #[test]

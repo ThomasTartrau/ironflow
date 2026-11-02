@@ -7,10 +7,12 @@
 
 use serde::de::DeserializeOwned;
 
-pub use ironflow_core::prompt::{DEFAULT_UNTRUSTED_INSTRUCTION, Prompt};
+pub use ironflow_core::prompt::UntrustedContent;
+pub use ironflow_core::prompt::{AgentText, DEFAULT_UNTRUSTED_INSTRUCTION, Prompt};
 pub use ironflow_core::provider::{AgentConfig, Tool, ToolProfile};
 use ironflow_core::provider::{NoSchema, NoTools, RawSchema, WithSchema, WithTools};
 
+use super::agent_answer::AgentAnswer;
 use crate::error::EngineError;
 use crate::executor::StepOutput;
 
@@ -45,19 +47,20 @@ pub type AgentStepConfig = AgentConfig;
 ///
 /// A config built with [`output::<T>()`](AgentConfig::output) answers with the
 /// `T` itself, with or without tools; every other config answers with the raw
-/// [`StepOutput`].
+/// [`StepOutput`]. The `T` derives [`AgentAnswer`]: its free-text fields are
+/// [`AgentText`].
 ///
 /// # Examples
 ///
 /// ```
-/// use ironflow_engine::config::{AgentStep, AgentStepConfig};
+/// use ironflow_engine::config::{AgentAnswer, AgentStep, AgentStepConfig};
 /// use ironflow_engine::executor::{StepArtifacts, StepOutput};
 /// use rust_decimal::Decimal;
 /// use schemars::JsonSchema;
 /// use serde::Deserialize;
 /// use serde_json::json;
 ///
-/// #[derive(Deserialize, JsonSchema)]
+/// #[derive(Deserialize, JsonSchema, AgentAnswer)]
 /// struct Verdict {
 ///     approved: bool,
 /// }
@@ -136,7 +139,7 @@ impl AgentStep for AgentConfig<NoTools, RawSchema> {
     }
 }
 
-impl<T: DeserializeOwned> AgentStep for AgentConfig<NoTools, WithSchema<T>> {
+impl<T: DeserializeOwned + AgentAnswer> AgentStep for AgentConfig<NoTools, WithSchema<T>> {
     type Answer = T;
 
     fn into_config(self) -> AgentStepConfig {
@@ -160,7 +163,7 @@ impl AgentStep for AgentConfig<WithTools, RawSchema> {
     }
 }
 
-impl<T: DeserializeOwned> AgentStep for AgentConfig<WithTools, WithSchema<T>> {
+impl<T: DeserializeOwned + AgentAnswer> AgentStep for AgentConfig<WithTools, WithSchema<T>> {
     type Answer = T;
 
     fn into_config(self) -> AgentStepConfig {
@@ -212,7 +215,7 @@ mod tests {
         }
     }
 
-    #[derive(Debug, PartialEq, Deserialize, JsonSchema)]
+    #[derive(Debug, PartialEq, Deserialize, JsonSchema, AgentAnswer)]
     struct Verdict {
         approved: bool,
     }

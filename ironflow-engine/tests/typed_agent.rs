@@ -16,7 +16,7 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 use ironflow_core::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture, Tool};
-use ironflow_engine::config::{AgentStepConfig, HumanInputConfig, ShellConfig};
+use ironflow_engine::config::{AgentAnswer, AgentStepConfig, HumanInputConfig, ShellConfig};
 use ironflow_engine::context::{AgentReply, WorkflowContext};
 use ironflow_engine::engine::{Engine, EnqueueOptions};
 use ironflow_engine::executor::StepOutput;
@@ -30,7 +30,7 @@ use ironflow_store::store::{RunStore, Store};
 type ResumeLog = Vec<(String, Option<String>)>;
 
 /// What the reviewer agent answers.
-#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema, AgentAnswer)]
 struct Verdict {
     approved: bool,
     score: u8,

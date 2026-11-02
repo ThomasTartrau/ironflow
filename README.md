@@ -89,7 +89,8 @@ impl WorkflowHandler for ReleaseNotes {
                 .await?;
 
             // 4. Publish. The agent text is passed as an argument, never parsed by a shell.
-            ctx.shell("publish", ShellConfig::exec("./publish.sh", &[notes.text()]))
+            let notes = notes.text();
+            ctx.shell("publish", ShellConfig::exec("./publish.sh", &[notes.raw()]))
                 .await?;
             Ok(())
         })

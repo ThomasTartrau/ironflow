@@ -149,16 +149,17 @@ limits.
 
 ```rust,no_run
 use ironflow_core::operations::agent::Model;
-use ironflow_engine::config::{AgentStepConfig, Prompt, Tool};
+use ironflow_engine::config::{AgentAnswer, AgentStepConfig, AgentText, Prompt, Tool};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Deserialize, JsonSchema)]
+// Text the agent writes is `AgentText`, and the type derives `AgentAnswer`.
+#[derive(Deserialize, JsonSchema, AgentAnswer)]
 struct Review {
     score: u8,
-    summary: String,
+    summary: AgentText,
 }
 
 async fn example(ctx: &mut WorkflowContext, diff: &str) -> Result<(), EngineError> {
@@ -221,6 +222,46 @@ block with a nonce drawn per prompt, neutralizes any `untrusted` tag inside it, 
 the prompt with `DEFAULT_UNTRUSTED_INSTRUCTION`, or the text given to `.instruction(..)`.
 `.text(..)` adds the workflow's own text. `RecordReplayProvider` masks the nonce when it
 names a fixture, so the step still replays.
+
+What an agent wrote is untrusted too: it may repeat instructions planted in what it read.
+`out.text()` returns an `AgentText`, not a `&str`, and it enters a prompt only through
+`.untrusted(&out.text())`; `AgentStepConfig::new(&out.text())` and `format!("{}", ..)` do
+not compile. A typed answer derives `AgentAnswer` and its text fields are `AgentText`
+(`.untrusted(&answer.field)`): a `String` field fails to compile. `.raw()` gives the text
+for a log, an artifact, a comment or a shell argument, never for a prompt. `{:?}` prints
+`AgentText(<N bytes>)`, not the text.
+
+```rust,no_run
+use ironflow_engine::config::{AgentAnswer, AgentStepConfig, AgentText, Prompt, ShellConfig};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+use schemars::JsonSchema;
+use serde::Deserialize;
+
+#[derive(Deserialize, JsonSchema, AgentAnswer)]
+struct Plan {
+    title: AgentText,
+    steps: u8,
+}
+
+async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    let page = ctx
+        .agent("summarize", AgentStepConfig::new("Summarize https://example.com"))
+        .await?;
+    let prompt = Prompt::new()
+        .text("Plan the work this summary asks for:")
+        .untrusted(&page.text());
+    let plan = ctx
+        .agent("plan", AgentStepConfig::new(&prompt.to_string()).output::<Plan>())
+        .await?;
+    let prompt = Prompt::new()
+        .text(&format!("Carry out this plan in {} steps:", plan.steps))
+        .untrusted(&plan.title);
+    ctx.agent("act", AgentStepConfig::new(&prompt.to_string())).await?;
+    ctx.shell("log", ShellConfig::exec("echo", &[plan.title.raw()])).await?;
+    Ok(())
+}
+```
 
 `.effort(Effort::High)` sets the reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`).
 Claude CLI providers receive `--effort`, the Anthropic API provider `output_config.effort`;
@@ -325,13 +366,13 @@ same ids.
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use ironflow_engine::config::{AgentStepConfig, Prompt, Tool};
+use ironflow_engine::config::{AgentAnswer, AgentStepConfig, AgentText, Prompt, Tool};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, JsonSchema, AgentAnswer)]
 struct Triage {
-    test: String,
+    test: AgentText,
 }
 
 async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
@@ -400,30 +441,20 @@ record/replay fixture hash.
 `name()` is recorded on every step of the role as `agent_role`, to list its steps
 (`GET /api/v1/steps?agent_role=`, `ironflow-cli run steps --role`) and its cost
 (`GET /api/v1/stats/agent-roles`, `ironflow-cli stats roles`) across workflows. It defaults
-to the type name (`Reviewer`); override it so a type rename does not split the statistics
-and the cost counter. The caller of `task` cannot change it.
-
-A role may declare a `cost_cap` over a calendar UTC period (`per_day`, `per_month`), shared
-by every run of every workflow calling a role of that `name`. Once the cost spent plus the
-room held by running steps reaches the cap, the step fails with
-`AgentError::RoleCostCapReached` before the provider is called, and is not retried. Give
-capped steps a `max_budget_usd`: a running step holds its budget, and one without a budget
-holds all the room left. A role without `cost_cap` is still counted over a month. An
-operator can cap any role (`ironflow agent-role set-cap`), and only lower a code cap, never
-raise it.
+to the type name (`Reviewer`); override it so a type rename does not split the statistics.
+The caller of `task` cannot change it.
 
 ```rust,no_run
-use ironflow_engine::config::{AgentRole, Prompt, RoleCostCap, Tool};
+use ironflow_engine::config::{AgentAnswer, AgentRole, AgentText, Prompt, Tool};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
-use rust_decimal::Decimal;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, JsonSchema, AgentAnswer)]
 struct Review {
     score: u8,
-    summary: String,
+    summary: AgentText,
 }
 
 struct Reviewer;
@@ -453,10 +484,6 @@ impl AgentRole for Reviewer {
 
     fn max_turns(&self) -> Option<u32> {
         Some(6)
-    }
-
-    fn cost_cap(&self) -> Option<RoleCostCap> {
-        Some(RoleCostCap::per_month(Decimal::new(50, 0)))
     }
 }
 

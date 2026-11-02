@@ -472,3 +472,67 @@ repository file holding a token-shaped fixture) would store `[REDACTED]`: send i
 - ctx.operation("set-deploy-token", &gitlab.op(endpoint)).await?;
 + ctx.operation("set-deploy-token", &gitlab.op(endpoint).without_masking()).await?;
 ```
+
+## agent-text
+- kind: breaking
+- since: ironflow-core after 4.21.0, ironflow-engine after 2.57.0 (#235)
+- compiler: `expected &str, found AgentText`, `AgentText doesn't implement std::fmt::Display`
+
+`StepOutput::text()` returns an `AgentText`, not a `&str`: what an agent wrote may repeat
+instructions planted in what it read, so it enters the next prompt only through
+`Prompt::untrusted`. A log, an artifact, a comment or a shell argument reads it with
+`.raw()`. `{:?}` of an agent output now prints `AgentText(<N bytes>)`: a log that used
+`{:?}` switches to `.raw()`, a prompt to `.untrusted(..)`. The prompt of the next step
+changes, so its record/replay fixture no longer matches: record it again. Section: Agent.
+
+```diff
+- let fix = AgentStepConfig::new(&format!("Fix:\n{}", plan.text()));
++ let prompt = Prompt::new().text("Fix:").untrusted(&plan.text());
++ let fix = AgentStepConfig::new(&prompt.to_string());
+- println!("{}", out.text());
++ println!("{}", out.text().raw());
+- ctx.shell("publish", ShellConfig::exec("./publish.sh", &[out.text()])).await?;
++ let notes = out.text();
++ ctx.shell("publish", ShellConfig::exec("./publish.sh", &[notes.raw()])).await?;
+```
+
+## untrusted-content
+- kind: breaking
+- since: ironflow-core after 4.21.0, ironflow-engine after 2.57.0 (#235)
+- compiler: `the trait bound ... UntrustedContent is not satisfied`
+
+`Prompt::untrusted` takes an `impl UntrustedContent` (`&str`, `String`, `AgentText` and
+references to them), not a `&str`, so the argument no longer coerces through `Deref`: a
+`&Cow<str>` (`&String::from_utf8_lossy(..)`), a `&Box<str>` or a `&Arc<str>` stops
+compiling. Reborrow it as a `&str` with `&*`. The rendered prompt is the same, so the
+fixtures do not change. Section: Agent.
+
+```diff
+- let prompt = Prompt::new().text("Explain this log:").untrusted(&String::from_utf8_lossy(&bytes));
++ let prompt = Prompt::new().text("Explain this log:").untrusted(&*String::from_utf8_lossy(&bytes));
+- let prompt = Prompt::new().untrusted(&shared_log);
++ let prompt = Prompt::new().untrusted(&*shared_log);
+```
+
+## agent-answer
+- kind: breaking
+- since: ironflow-core after 4.21.0, ironflow-engine after 2.57.0 (#235)
+- compiler: `the trait bound ... AgentAnswer is not satisfied`, `cannot be part of an agent answer`
+
+The `T` of `ctx.agent(.., config.output::<T>())` and the `Output` of an `AgentRole`
+implement `AgentAnswer`: free text from the agent is `AgentText`, never `String`, so a
+field reaches a prompt only through `.untrusted(&answer.field)`. Nested structs and enums
+derive it too; a `serde_json::Value` field becomes a typed struct or an `AgentText`. The
+JSON and the schema are unchanged, so the fixtures do not change. Section: Agent.
+
+```diff
+- use ironflow_engine::config::AgentStepConfig;
++ use ironflow_engine::config::{AgentAnswer, AgentStepConfig, AgentText};
+- #[derive(Deserialize, JsonSchema)]
++ #[derive(Deserialize, JsonSchema, AgentAnswer)]
+  struct Review {
+      score: u8,
+-     summary: String,
++     summary: AgentText,
+  }
+```

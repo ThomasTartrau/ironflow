@@ -34,7 +34,6 @@ const EVENT_KINDS: EventKind[] = [
 	"schedule_occurrences_missed",
 	"workflow_paused",
 	"workflow_resumed",
-	"agent_role.cost_cap_updated",
 ];
 
 interface FilterValues {

@@ -46,7 +46,6 @@
 //! # }
 //! ```
 
-mod agent_role_methods;
 mod artifact_methods;
 mod auth_methods;
 pub mod builder;

@@ -3,7 +3,6 @@
 use std::str::FromStr;
 
 pub mod account;
-pub mod agent_role;
 pub mod api_key;
 pub mod audit_log;
 pub mod dashboard;

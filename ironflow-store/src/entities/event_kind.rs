@@ -83,10 +83,6 @@ pub enum EventKind {
     WorkflowPaused,
     /// A paused workflow was resumed.
     WorkflowResumed,
-    /// An operator set or cleared the cost cap of an agent role.
-    #[serde(rename = "agent_role.cost_cap_updated")]
-    #[strum(serialize = "agent_role.cost_cap_updated")]
-    AgentRoleCostCapUpdated,
 }
 
 impl EventKind {
@@ -115,7 +111,6 @@ impl EventKind {
         Self::ScheduleOccurrencesMissed,
         Self::WorkflowPaused,
         Self::WorkflowResumed,
-        Self::AgentRoleCostCapUpdated,
     ];
 
     /// Returns the wire-format string for this kind.
@@ -148,7 +143,7 @@ mod tests {
 
     #[test]
     fn all_has_correct_count() {
-        assert_eq!(EventKind::ALL.len(), 24);
+        assert_eq!(EventKind::ALL.len(), 23);
     }
 
     #[test]
@@ -198,22 +193,6 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&EventKind::WorkflowResumed).unwrap(),
             "\"workflow_resumed\""
-        );
-    }
-
-    #[test]
-    fn agent_role_cost_cap_updated_is_namespaced() {
-        assert_eq!(
-            EventKind::AgentRoleCostCapUpdated.as_str(),
-            "agent_role.cost_cap_updated"
-        );
-        assert_eq!(
-            "agent_role.cost_cap_updated".parse::<EventKind>().unwrap(),
-            EventKind::AgentRoleCostCapUpdated
-        );
-        assert_eq!(
-            serde_json::to_string(&EventKind::AgentRoleCostCapUpdated).unwrap(),
-            "\"agent_role.cost_cap_updated\""
         );
     }
 
