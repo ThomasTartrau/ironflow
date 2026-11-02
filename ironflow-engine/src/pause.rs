@@ -27,9 +27,6 @@ use crate::engine::{Engine, ExecutionMode, chain_root};
 use crate::error::EngineError;
 use crate::notify::{Event, RunStatusChangedEvent, WorkflowPausedEvent, WorkflowResumedEvent};
 
-/// Page size used to list the runs held while a workflow is paused.
-const HELD_RUNS_PAGE_SIZE: u32 = 100;
-
 /// Outcome of [`Engine::pause_run`].
 ///
 /// # Examples
@@ -442,28 +439,13 @@ impl Engine {
     /// otherwise it is left to the worker that took it.
     async fn start_held_runs(self: &Arc<Self>, workflow_name: &str) -> Result<(), EngineError> {
         // Collect every run before spawning: a spawned run leaves `Pending`
-        // and would shift the pages.
-        let mut held = Vec::new();
-        let mut page = 1;
-        loop {
-            let filter = RunFilter {
-                workflow_name: Some(workflow_name.to_string()),
-                status: Some(RunStatus::Pending),
-                ..RunFilter::default()
-            };
-            let result = self
-                .store()
-                .list_runs(filter, page, HELD_RUNS_PAGE_SIZE)
-                .await?;
-            if result.items.is_empty() {
-                break;
-            }
-            held.extend(result.items);
-            if held.len() as u64 >= result.total {
-                break;
-            }
-            page += 1;
-        }
+        // and would shift the pages (see `list_all_runs`).
+        let filter = RunFilter {
+            workflow_name: Some(workflow_name.to_string()),
+            status: Some(RunStatus::Pending),
+            ..RunFilter::default()
+        };
+        let held = self.list_all_runs(filter).await?;
 
         let now = Utc::now();
         for run in held {

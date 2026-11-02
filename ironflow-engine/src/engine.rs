@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use rust_decimal::Decimal;
@@ -29,8 +29,8 @@ use ironflow_core::provider::{AgentProvider, LABEL_ROOT_RUN_ID};
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
     ConcurrencyLimit, LeaseUpdate, NewRun, NewSignal, ProviderKind, Run, RunActor, RunCreation,
-    RunFilter, RunStatus, RunUpdate, SignalInsert, SignalStepResolution, StepStatus, StepUpdate,
-    TriggerKind, normalize_worker_tags, validate_concurrency_limits, validate_priority,
+    RunFilter, RunStatus, RunUpdate, SignalInsert, SignalStepResolution, StepKind, StepStatus,
+    StepUpdate, TriggerKind, normalize_worker_tags, validate_concurrency_limits, validate_priority,
     validate_worker_tags,
 };
 use ironflow_store::store::Store;
@@ -42,8 +42,8 @@ use crate::budget::{BudgetConfig, month_start};
 use crate::chain::ChainClaim;
 use crate::context::{PARENT_RUN_ID_LABEL, WorkflowContext, interrupt_running_steps};
 use crate::error::EngineError;
-use crate::executor::{StepInterceptor, StepResult};
-use crate::guard::{WorkflowGuardConfig, new_shared_guard_state};
+use crate::executor::{StepInterceptor, StepOutput, StepResult};
+use crate::guard::{WorkflowGuardConfig, WorkflowGuardState};
 use crate::handler::{WorkflowHandler, WorkflowInfo, clamp_priority};
 use crate::log_sender::LogSender;
 use crate::notify::{
@@ -61,6 +61,9 @@ use crate::signal::{
     SignalSender, received_output, validate_signal, validate_step_payload,
 };
 use ironflow_core::decision::DecisionProvider;
+
+/// Page size used by [`Engine::list_all_runs`].
+const LIST_RUNS_PAGE_SIZE: u32 = 100;
 
 /// Result of a workflow execution, carrying the final [`Run`] and per-step
 /// metrics collected during execution.
@@ -814,22 +817,111 @@ impl Engine {
         }
     }
 
+    /// The guard configuration that applies to `handler`: its own
+    /// `guard_config()` if present, otherwise the engine's global one.
+    pub(crate) fn effective_guard_config(
+        &self,
+        handler: &dyn WorkflowHandler,
+    ) -> Option<WorkflowGuardConfig> {
+        handler.guard_config().or_else(|| self.guard_config.clone())
+    }
+
     /// Build a context with the guard attached.
     ///
-    /// Uses the handler's `guard_config()` if present, otherwise falls back
-    /// to the engine's global configuration. Creates a fresh shared state
-    /// for each top-level run.
-    fn build_context_with_guard(
+    /// Uses [`effective_guard_config`](Self::effective_guard_config). The
+    /// shared state carries the tokens and the active time spent by earlier
+    /// executions of the run, plus the run deadline, so a resume, a requeue
+    /// or a retry never starts the limits from zero.
+    ///
+    /// Seeding from `run` is correct because `run` is always the root of its
+    /// chain: `execute_handler_run` and `resume_run` send a child to
+    /// `resume_chain`, which resumes the root, and child contexts share the
+    /// root's state through `execute_child_workflow`. So `run.id` is the
+    /// `LABEL_ROOT_RUN_ID` of the whole tree and `run.created_at` is the
+    /// creation of the root.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Store`] if the steps of the run tree cannot be
+    /// read.
+    async fn build_context_with_guard(
         &self,
         run: &Run,
         handler: &dyn WorkflowHandler,
-    ) -> WorkflowContext {
+    ) -> Result<WorkflowContext, EngineError> {
         let mut ctx = self.build_context(run);
-        let guard_config = handler.guard_config().or_else(|| self.guard_config.clone());
-        if let Some(config) = guard_config {
-            ctx.set_guard(config, new_shared_guard_state());
+        if let Some(config) = self.effective_guard_config(handler) {
+            let mut state = WorkflowGuardState::new()
+                .with_tokens_used(self.tokens_used_by_run_tree(run).await?)
+                .with_elapsed(Duration::from_millis(run.duration_ms));
+            if let Some(at) = config.deadline_for(run.created_at) {
+                state = state.with_deadline_at(at);
+            }
+            ctx.set_guard(config, Arc::new(Mutex::new(state)));
         }
-        ctx
+        Ok(ctx)
+    }
+
+    /// List every run matching `filter`, page after page.
+    ///
+    /// Every page is read before the caller acts on a run: a run that leaves
+    /// the filter would shift the next page.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Store`] if a page cannot be read.
+    pub(crate) async fn list_all_runs(&self, filter: RunFilter) -> Result<Vec<Run>, EngineError> {
+        let mut runs = Vec::new();
+        let mut page = 1;
+        loop {
+            let result = self
+                .store
+                .list_runs(filter.clone(), page, LIST_RUNS_PAGE_SIZE)
+                .await?;
+            if result.items.is_empty() {
+                break;
+            }
+            runs.extend(result.items);
+            if runs.len() as u64 >= result.total {
+                break;
+            }
+            page += 1;
+        }
+        Ok(runs)
+    }
+
+    /// Tokens used by the agent steps of `root` and of every run of its tree
+    /// (all statuses, all attempts).
+    ///
+    /// Steps replayed from an earlier execution never record their tokens
+    /// again, so the persisted rows are the exact total and nothing is
+    /// counted twice. The steps of earlier retry attempts are not replayed:
+    /// their rows count once here, and the steps that run again in the new
+    /// attempt are counted live as new rows.
+    async fn tokens_used_by_run_tree(&self, root: &Run) -> Result<u64, EngineError> {
+        let tree_label = HashMap::from([(LABEL_ROOT_RUN_ID.to_string(), root.id.to_string())]);
+        let filter = RunFilter {
+            labels: Some(tree_label),
+            ..RunFilter::default()
+        };
+        let mut run_ids = vec![root.id];
+        run_ids.extend(
+            self.list_all_runs(filter)
+                .await?
+                .into_iter()
+                .map(|run| run.id),
+        );
+
+        let mut tokens: u64 = 0;
+        for run_id in run_ids {
+            for step in self.store.list_steps(run_id).await? {
+                if step.kind == StepKind::Agent {
+                    let step_tokens = StepOutput::from(&step).total_tokens();
+                    tokens = tokens.saturating_add(step_tokens);
+                }
+            }
+        }
+        Ok(tokens)
     }
 
     /// Reject the creation of a new run when the monthly quota is exhausted.
@@ -1148,6 +1240,13 @@ impl Engine {
             });
         }
 
+        // Built before the run turns `Running`: a store error while seeding the
+        // guard leaves the run `Pending`, not `Running` with no execution and
+        // no finalization behind it.
+        let mut ctx = self
+            .build_context_with_guard(&run, handler.as_ref())
+            .await?;
+
         self.store
             .update_run_status(run_id, RunStatus::Running)
             .await?;
@@ -1156,8 +1255,6 @@ impl Engine {
         gauge!(RUNS_ACTIVE, "workflow" => handler_name.to_string()).increment(1.0);
 
         let run_start = Instant::now();
-        let mut ctx = self.build_context_with_guard(&run, handler.as_ref());
-
         let result = handler.execute(&mut ctx).await;
         self.finalize_run(run_id, handler_name, result, &ctx, run_start, run.labels)
             .await
@@ -1504,7 +1601,9 @@ impl Engine {
         gauge!(RUNS_ACTIVE, "workflow" => run.workflow_name.clone()).increment(1.0);
 
         let run_start = Instant::now();
-        let mut ctx = self.build_context_with_guard(&run, handler.as_ref());
+        let mut ctx = self
+            .build_context_with_guard(&run, handler.as_ref())
+            .await?;
 
         // Replay the steps already persisted for this run: on a retry, an approval
         // a human already granted must not be asked again, and a run requeued to
@@ -1719,7 +1818,9 @@ impl Engine {
         info!(run_id = %run_id, workflow = %run.workflow_name, "resuming run after approval");
 
         let run_start = Instant::now();
-        let mut ctx = self.build_context_with_guard(&run, handler.as_ref());
+        let mut ctx = self
+            .build_context_with_guard(&run, handler.as_ref())
+            .await?;
 
         let result = if handler.is_version_compatible(run.handler_version.as_deref()) {
             ctx.load_replay_steps().await?;

@@ -239,6 +239,7 @@ mod tests {
     use std::process;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use serde_json::json;
 
@@ -423,6 +424,15 @@ mod tests {
         with_role.role = Some("Reviewer".to_string());
         let plain = AgentConfig::new("Review");
         assert_eq!(hash_config(&with_role), hash_config(&plain));
+    }
+
+    #[test]
+    fn hash_config_ignores_timeout() {
+        // The step timeout bounds the call and does not change the answer:
+        // tuning it must not invalidate recorded fixtures.
+        let with_timeout = AgentConfig::new("Review").timeout(Duration::from_secs(60));
+        let plain = AgentConfig::new("Review");
+        assert_eq!(hash_config(&with_timeout), hash_config(&plain));
     }
 
     #[test]

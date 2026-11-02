@@ -7,8 +7,9 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
+use tokio::time::{Instant, sleep};
 use wiremock::matchers::{body_partial_json, method, path, query_param, query_param_is_missing};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use ironflow_core::provider::{LABEL_COMPONENT, LABEL_EXPIRES_AT, LABEL_MANAGED_BY};
 use ironflow_core::providers::claude::K8sClusterConfig;
@@ -31,6 +32,38 @@ pub fn collection(kind: &str) -> String {
         "jobs" => format!("/apis/batch/v1/namespaces/{NS}/jobs"),
         other => format!("/api/v1/namespaces/{NS}/{other}"),
     }
+}
+
+/// Longest wait for a request: generous, the whole workspace suite may run
+/// in parallel.
+pub const WAIT_LIMIT: Duration = Duration::from_secs(10);
+
+/// Wait until the requests `server` received satisfy `done`.
+pub async fn wait_for(server: &MockServer, what: &str, done: impl Fn(&[Request]) -> bool) {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let requests = server.received_requests().await.expect("recorded");
+        if done(&requests) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{what} never happened; requests: {:?}",
+            requests
+                .iter()
+                .map(|r| format!("{} {}", r.method, r.url.path()))
+                .collect::<Vec<_>>()
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Number of `verb` requests to `path` in `requests`.
+pub fn count(requests: &[Request], verb: &str, path: &str) -> usize {
+    requests
+        .iter()
+        .filter(|r| r.method.as_str() == verb && r.url.path() == path)
+        .count()
 }
 
 pub struct FakeK8s {

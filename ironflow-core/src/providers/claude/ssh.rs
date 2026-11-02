@@ -9,6 +9,12 @@
 //! The `claude` binary must be available on the remote host's `$PATH` (or at
 //! the custom path configured via [`SshProvider::claude_path`]).
 //!
+//! A step that sets [`AgentConfig::timeout`] runs `claude` under
+//! `timeout -s KILL`, so the remote host then needs a `timeout` binary
+//! (coreutils or busybox) on its `$PATH`: the host kills `claude` even once
+//! the provider has dropped the connection, which sends no `SIGHUP` without
+//! a pty.
+//!
 //! # Examples
 //!
 //! ```no_run
@@ -290,6 +296,8 @@ impl SshProvider {
     }
 
     /// Override the default timeout (default: 5 minutes).
+    ///
+    /// A step that sets [`AgentConfig::timeout`] uses its own limit instead.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -382,7 +390,10 @@ impl SshProvider {
         common::validate_prompt_size(config)?;
         let built = common::build_command(config)?;
 
-        let claude_cmd = common::build_shell_command(&self.claude_path, &built.args);
+        let claude_cmd = common::with_remote_kill(
+            common::build_shell_command(&self.claude_path, &built.args),
+            config.timeout,
+        );
         let mut env_prefix = common::env_unset_shell_prefix();
         if let Some(ref ctx) = config.trace_context {
             env_prefix = format!(
@@ -413,6 +424,7 @@ impl SshProvider {
         );
 
         let start = Instant::now();
+        let step_timeout = config.effective_timeout(self.timeout);
 
         // Connect
         let ssh_config = Arc::new(russh::client::Config::default());
@@ -494,7 +506,7 @@ impl SshProvider {
         let mut stderr_buf = Vec::new();
         let mut exit_code: Option<u32> = None;
 
-        let collect_result = time::timeout(self.timeout, async {
+        let collect_result = time::timeout(step_timeout, async {
             loop {
                 let msg = channel.wait().await;
                 let Some(msg) = msg else { break };
@@ -524,9 +536,9 @@ impl SshProvider {
             .await;
 
         if collect_result.is_err() {
-            warn!(timeout = ?self.timeout, "SSH command timed out");
+            warn!(timeout = ?step_timeout, "SSH command timed out");
             return Err(AgentError::Timeout {
-                limit: self.timeout,
+                limit: step_timeout,
             });
         }
 

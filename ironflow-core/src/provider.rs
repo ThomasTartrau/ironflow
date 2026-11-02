@@ -387,6 +387,12 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_capacity_wait: Option<Duration>,
 
+    /// Longest this step may run, every attempt of `Agent::run` included.
+    ///
+    /// `None` keeps the provider timeout. Set it with [`AgentConfig::timeout`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<Duration>,
+
     /// Name of the Provider Account the step must run under.
     ///
     /// Never falls back to another account: an unknown name fails with
@@ -474,6 +480,7 @@ impl AgentConfig {
             account: None,
             proxied_secrets: Vec::new(),
             max_capacity_wait: None,
+            timeout: None,
             account_name: None,
             account_pool: None,
             role: None,
@@ -1208,6 +1215,60 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Bound the duration of this step, whatever the provider.
+    ///
+    /// The limit covers the whole `Agent::run`, its automatic retries
+    /// included; each engine step retry gets a new budget. On expiry the step
+    /// fails with [`AgentError::Timeout`] and the environment is stopped: the
+    /// local process is killed, the K8s ephemeral pod is deleted, and the
+    /// Docker / SSH / K8s persistent command is killed on the remote side by
+    /// `timeout -s KILL`, 5 s after the limit (the container or host then
+    /// needs a `timeout` binary on its `PATH`).
+    ///
+    /// Without it the provider timeout applies. It also replaces the provider
+    /// timeout inside the Claude CLI providers, so it may be longer than the
+    /// provider timeout.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `limit` is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("triage").timeout(Duration::from_secs(300));
+    /// assert_eq!(config.timeout, Some(Duration::from_secs(300)));
+    /// ```
+    pub fn timeout(mut self, limit: Duration) -> Self {
+        assert!(
+            !limit.is_zero(),
+            "agent step timeout must be greater than zero"
+        );
+        self.timeout = Some(limit);
+        self
+    }
+
+    /// The limit of one invocation: the step [`timeout`](Self::timeout) when
+    /// set, `provider_default` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let default = Duration::from_secs(300);
+    /// assert_eq!(AgentConfig::new("p").effective_timeout(default), default);
+    /// let config = AgentConfig::new("p").timeout(Duration::from_secs(1800));
+    /// assert_eq!(config.effective_timeout(default), Duration::from_secs(1800));
+    /// ```
+    pub fn effective_timeout(&self, provider_default: Duration) -> Duration {
+        self.timeout.unwrap_or(provider_default)
+    }
+
     /// Fail the step at once when every targeted account is rate limited.
     ///
     /// Explicit form of [`max_capacity_wait`](Self::max_capacity_wait) with
@@ -1367,6 +1428,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             account: self.account,
             proxied_secrets: self.proxied_secrets,
             max_capacity_wait: self.max_capacity_wait,
+            timeout: self.timeout,
             account_name: self.account_name,
             account_pool: self.account_pool,
             role: self.role,
@@ -2012,6 +2074,7 @@ mod tests {
             account: None,
             proxied_secrets: Vec::new(),
             max_capacity_wait: None,
+            timeout: None,
             account_name: None,
             account_pool: None,
             role: None,
@@ -2019,6 +2082,55 @@ mod tests {
             capacity_wait_since: None,
             _marker: PhantomData,
         }
+    }
+
+    #[test]
+    fn timeout_sets_the_step_limit() {
+        let config = AgentConfig::new("p").timeout(Duration::from_secs(300));
+        assert_eq!(config.timeout, Some(Duration::from_secs(300)));
+        assert_eq!(AgentConfig::new("p").timeout, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "agent step timeout must be greater than zero")]
+    fn timeout_of_zero_panics() {
+        let _ = AgentConfig::new("p").timeout(Duration::ZERO);
+    }
+
+    #[test]
+    fn effective_timeout_prefers_the_step_limit() {
+        let provider_default = Duration::from_secs(300);
+        assert_eq!(
+            AgentConfig::new("p").effective_timeout(provider_default),
+            provider_default
+        );
+        let config = AgentConfig::new("p").timeout(Duration::from_secs(1800));
+        assert_eq!(
+            config.effective_timeout(provider_default),
+            Duration::from_secs(1800)
+        );
+        let shorter = AgentConfig::new("p").timeout(Duration::from_secs(10));
+        assert_eq!(
+            shorter.effective_timeout(provider_default),
+            Duration::from_secs(10)
+        );
+    }
+
+    #[test]
+    fn config_without_timeout_deserializes_to_none() {
+        let serialized = to_value(AgentConfig::new("p")).unwrap();
+        assert!(serialized.get("timeout").is_none());
+
+        // A config stored before the field existed.
+        let mut stored = to_value(full_config()).unwrap();
+        stored.as_object_mut().unwrap().remove("timeout");
+        let back: AgentConfig = serde_json::from_value(stored).unwrap();
+        assert_eq!(back.timeout, None);
+
+        let limited = AgentConfig::new("p").timeout(Duration::from_secs(60));
+        let json = to_string(&limited).unwrap();
+        let back: AgentConfig = from_str(&json).unwrap();
+        assert_eq!(back.timeout, Some(Duration::from_secs(60)));
     }
 
     #[test]
@@ -2074,6 +2186,7 @@ mod tests {
             account: None,
             proxied_secrets: Vec::new(),
             max_capacity_wait: None,
+            timeout: None,
             account_name: None,
             account_pool: None,
             role: None,

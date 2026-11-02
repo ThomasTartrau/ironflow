@@ -1,8 +1,11 @@
 //! Workflow guard enforcement for [`WorkflowContext`].
 //!
-//! The guard caps depth, invocation count, token usage and wall-clock time
-//! across a whole run tree. These helpers read the shared state before and
-//! after every step so the limits apply globally, not per workflow.
+//! The guard caps depth, invocation count, token usage and time across a
+//! whole run tree. Tokens and active execution time add up over every
+//! execution of the run (resume, requeue, retry), and the optional run
+//! deadline is absolute, counted from the creation of the run. These helpers
+//! read the shared state before and after every step so the limits apply
+//! globally, not per workflow.
 
 use std::time::Duration;
 
@@ -36,7 +39,8 @@ impl WorkflowContext {
         }
     }
 
-    /// Wrap step execution with the guard's remaining timeout.
+    /// Wrap step execution with the time left before the nearest guard time
+    /// limit (timeout or run deadline).
     ///
     /// When no guard is configured the step runs without a timeout wrapper.
     pub(super) async fn execute_with_guard_timeout(
@@ -44,9 +48,8 @@ impl WorkflowContext {
         config: &StepConfig,
         step_log_sender: Option<StepLogSender>,
     ) -> Result<StepOutput, EngineError> {
-        let remaining = self.guard_remaining_timeout();
-        match remaining {
-            Some(dur) => {
+        match self.guard_time_limit() {
+            Some((dur, rejection)) => {
                 match timeout(
                     dur,
                     execute_step_config_intercepted(
@@ -59,17 +62,7 @@ impl WorkflowContext {
                 .await
                 {
                     Ok(result) => result,
-                    Err(_elapsed) => {
-                        let config_secs = self
-                            .guard_config
-                            .as_ref()
-                            .map_or(0, |c| c.workflow_timeout_secs);
-                        Err(WorkflowRejection::WorkflowTimeout {
-                            elapsed_secs: config_secs,
-                            max: config_secs,
-                        }
-                        .into())
-                    }
+                    Err(_elapsed) => Err(rejection.into()),
                 }
             }
             None => {
@@ -84,34 +77,22 @@ impl WorkflowContext {
         }
     }
 
-    /// Compute the remaining timeout duration from the guard, if any.
-    pub(super) fn guard_remaining_timeout(&self) -> Option<Duration> {
+    /// The time left before the nearest guard time limit, and the rejection
+    /// to raise when it runs out. `None` without a guard.
+    pub(super) fn guard_time_limit(&self) -> Option<(Duration, WorkflowRejection)> {
         let config = self.guard_config.as_ref()?;
         let guard_state = self.guard_state.as_ref()?;
         let state = guard_state.lock().ok()?;
-        let elapsed = state.elapsed_secs();
-        let max = config.workflow_timeout_secs;
-        if elapsed >= max {
-            Some(Duration::ZERO)
-        } else {
-            Some(Duration::from_secs(max - elapsed))
-        }
+        Some(state.time_limit(config))
     }
 
-    /// Check the guard timeout before every step.
+    /// Check the guard timeout and the run deadline before every step.
     pub(super) fn check_guard_timeout(&self) -> Result<(), EngineError> {
         if let (Some(config), Some(guard_state)) = (&self.guard_config, &self.guard_state) {
             let state = guard_state
                 .lock()
                 .map_err(|_| WorkflowRejection::GuardUnavailable)?;
-            let elapsed = state.elapsed_secs();
-            if elapsed >= config.workflow_timeout_secs {
-                return Err(WorkflowRejection::WorkflowTimeout {
-                    elapsed_secs: elapsed,
-                    max: config.workflow_timeout_secs,
-                }
-                .into());
-            }
+            state.check_time(config)?;
         }
         Ok(())
     }

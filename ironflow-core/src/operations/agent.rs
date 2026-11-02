@@ -27,7 +27,10 @@
 
 use std::any;
 use std::sync::Arc;
+use std::time::Duration;
 
+#[cfg(feature = "prometheus")]
+use metrics::counter;
 use schemars::{JsonSchema, schema_for};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -36,7 +39,7 @@ use strum::{Display, IntoStaticStr};
 use tokio::time;
 use tracing::{info, warn};
 
-use crate::error::OperationError;
+use crate::error::{AgentError, OperationError};
 #[cfg(feature = "prometheus")]
 use crate::metric_names;
 use crate::provider::{
@@ -330,6 +333,44 @@ impl Agent {
     pub fn max_turns(mut self, turns: u32) -> Self {
         assert!(turns > 0, "max_turns must be greater than 0");
         self.config.max_turns = Some(turns);
+        self
+    }
+
+    /// Bound the duration of this call, whatever the provider.
+    ///
+    /// The limit covers [`run`](Agent::run) as a whole, its automatic
+    /// retries included. Past it, the invocation is stopped and `run` fails
+    /// with [`AgentError::Timeout`]. Without it the provider timeout applies.
+    /// See [`AgentConfig::timeout`] for how each provider stops its
+    /// environment.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `limit` is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_core::prelude::*;
+    ///
+    /// # async fn example() -> Result<(), OperationError> {
+    /// let provider = ClaudeCodeProvider::new();
+    /// let result = Agent::new()
+    ///     .prompt("Summarize the changelog")
+    ///     .timeout(Duration::from_secs(300))
+    ///     .max_budget_usd(0.10)
+    ///     .run(&provider)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn timeout(mut self, limit: Duration) -> Self {
+        assert!(
+            !limit.is_zero(),
+            "agent step timeout must be greater than zero"
+        );
+        self.config.timeout = Some(limit);
         self
     }
 
@@ -713,7 +754,10 @@ impl Agent {
     /// # Errors
     ///
     /// Returns [`OperationError::Agent`] if the provider reports a failure
-    /// (process crash, timeout, or schema validation error).
+    /// (process crash, timeout, or schema validation error), and
+    /// [`AgentError::Timeout`] when the step [`timeout`](Agent::timeout)
+    /// passes before the invocation and its retries end. The invocation is
+    /// then stopped.
     ///
     /// # Panics
     ///
@@ -739,6 +783,29 @@ impl Agent {
             return Ok(AgentResult { output });
         }
 
+        match self.config.timeout {
+            Some(limit) => match time::timeout(limit, self.run_attempts(provider)).await {
+                Ok(result) => result,
+                Err(_elapsed) => {
+                    // Dropping the attempts future stops the invocation: the
+                    // provider kills its process or deletes its pod.
+                    warn!(limit = ?limit, "agent step exceeded its timeout, invocation stopped");
+                    #[cfg(feature = "prometheus")]
+                    {
+                        counter!(metric_names::AGENT_TOTAL, "model" => self.config.model.to_string(), "status" => metric_names::STATUS_ERROR).increment(1);
+                    }
+                    Err(OperationError::Agent(AgentError::Timeout { limit }))
+                }
+            },
+            None => self.run_attempts(provider).await,
+        }
+    }
+
+    /// Run the invocation and its automatic retries, without the step timeout.
+    async fn run_attempts(
+        &self,
+        provider: &dyn AgentProvider,
+    ) -> Result<AgentResult, OperationError> {
         let result = self.invoke_once(provider).await;
 
         // Replaying a `--resume` of a missing session cannot succeed and each
@@ -2108,5 +2175,190 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].0, "stdout");
         assert_eq!(lines[0].1, "streaming line");
+    }
+
+    // ── Step timeout ──────────────────────────────────────────────
+
+    #[cfg(target_os = "linux")]
+    use std::fs;
+    #[cfg(target_os = "linux")]
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    #[cfg(target_os = "linux")]
+    use tokio::process::Command;
+
+    /// Sleeps for `delay` on every call, then answers or fails the schema.
+    struct SlowProvider {
+        delay: Duration,
+        calls: AtomicU32,
+        schema_error: bool,
+    }
+
+    impl SlowProvider {
+        fn new(delay: Duration) -> Self {
+            Self {
+                delay,
+                calls: AtomicU32::new(0),
+                schema_error: false,
+            }
+        }
+    }
+
+    impl AgentProvider for SlowProvider {
+        fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                time::sleep(self.delay).await;
+                if self.schema_error {
+                    Err(AgentError::SchemaValidation {
+                        expected: "structured_output field".to_string(),
+                        got: "null".to_string(),
+                        debug_messages: Vec::new(),
+                        partial_usage: Box::default(),
+                        raw_response: None,
+                    })
+                } else {
+                    Ok(default_output())
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_past_its_timeout_fails_with_a_timeout_error() {
+        time::timeout(Duration::from_secs(10), async {
+            let provider = SlowProvider::new(Duration::from_secs(30));
+            let config = AgentConfig::new("p").timeout(Duration::from_millis(100));
+            let started = Instant::now();
+
+            let result = Agent::from_config(config).run(&provider).await;
+
+            match result {
+                Err(OperationError::Agent(AgentError::Timeout { limit })) => {
+                    assert_eq!(limit, Duration::from_millis(100));
+                }
+                other => panic!("expected an agent timeout, got {other:?}"),
+            }
+            assert!(started.elapsed() < Duration::from_secs(5));
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn agent_without_timeout_keeps_the_provider_behaviour() {
+        time::timeout(Duration::from_secs(10), async {
+            let provider = SlowProvider::new(Duration::from_millis(50));
+
+            let config = AgentConfig::new("p");
+
+            let result = Agent::from_config(config).run(&provider).await;
+
+            assert!(result.is_ok(), "expected Ok, got {result:?}");
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn agent_timeout_also_bounds_the_automatic_schema_retries() {
+        time::timeout(Duration::from_secs(10), async {
+            let provider = SlowProvider {
+                schema_error: true,
+                ..SlowProvider::new(Duration::from_millis(80))
+            };
+            let config = AgentConfig::new("p")
+                .output_schema_raw("{}")
+                .timeout(Duration::from_millis(150));
+
+            let result = Agent::from_config(config).run(&provider).await;
+
+            match result {
+                Err(OperationError::Agent(AgentError::Timeout { limit })) => {
+                    assert_eq!(limit, Duration::from_millis(150));
+                }
+                other => panic!("expected an agent timeout, got {other:?}"),
+            }
+            assert!(provider.calls.load(Ordering::SeqCst) <= 2);
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    /// Spawns a real `sleep 30` and waits for it, as the Claude CLI provider
+    /// waits for `claude`.
+    #[cfg(target_os = "linux")]
+    struct ProcessProvider {
+        pid: Arc<Mutex<Option<u32>>>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl AgentProvider for ProcessProvider {
+        fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+            Box::pin(async move {
+                let mut child = Command::new("sleep")
+                    .arg("30")
+                    .kill_on_drop(true)
+                    .spawn()
+                    .expect("spawn sleep");
+                *self.pid.lock().unwrap() = child.id();
+                let status = child.wait().await.expect("wait for sleep");
+                Err(AgentError::ProcessFailed {
+                    exit_code: status.code().unwrap_or(-1),
+                    stderr: String::new(),
+                })
+            })
+        }
+    }
+
+    /// Whether the process is gone, or killed and not yet reaped.
+    #[cfg(target_os = "linux")]
+    fn process_stopped(pid: u32) -> bool {
+        match fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Err(_) => true,
+            // The state follows the command name, which is in parentheses.
+            Ok(stat) => stat
+                .rsplit_once(')')
+                .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn agent_timeout_kills_the_process_of_the_invocation() {
+        time::timeout(Duration::from_secs(10), async {
+            let pid = Arc::new(Mutex::new(None));
+            let provider = ProcessProvider { pid: pid.clone() };
+            let config = AgentConfig::new("p").timeout(Duration::from_millis(200));
+
+            let result = Agent::from_config(config).run(&provider).await;
+
+            assert!(
+                matches!(
+                    result,
+                    Err(OperationError::Agent(AgentError::Timeout { .. }))
+                ),
+                "expected an agent timeout, got {result:?}"
+            );
+            let pid = pid.lock().unwrap().expect("the provider spawned sleep");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !process_stopped(pid) {
+                assert!(
+                    Instant::now() < deadline,
+                    "process {pid} still running after the step timeout"
+                );
+                time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[test]
+    #[should_panic(expected = "agent step timeout must be greater than zero")]
+    fn agent_timeout_of_zero_panics() {
+        let _ = Agent::new().prompt("p").timeout(Duration::ZERO);
     }
 }

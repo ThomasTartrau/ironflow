@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [4.0.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v3.0.2...ironflow-engine-v4.0.0) - 2026-11-02
+
+### Fixed
+
+- #241 CI (attempt 1)
+
+- **BREAKING** #241 carry guard tokens and time across run resumes and add an absolute run deadline
+
 ## [3.0.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.57.0...ironflow-engine-v3.0.0) - 2026-10-27
 
 ### Added

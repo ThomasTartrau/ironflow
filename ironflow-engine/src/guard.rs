@@ -4,6 +4,11 @@
 //! fan-out, unlimited token consumption, and infinite execution time.
 //! Checked before every agent step invocation.
 //!
+//! Tokens and active execution time add up over every execution of a run
+//! (resume, requeue, retry): the engine seeds the state of each execution
+//! from what earlier ones stored. An optional absolute deadline
+//! ([`WorkflowGuardConfig::run_deadline`]) also stops a run that sleeps.
+//!
 //! # Examples
 //!
 //! ```
@@ -19,7 +24,9 @@
 use std::fmt;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use chrono::{DateTime, TimeDelta, Utc};
 
 /// Environment variable prefix for guard configuration.
 const ENV_PREFIX: &str = "IRONFLOW_GUARD_";
@@ -49,10 +56,15 @@ pub struct WorkflowGuardConfig {
     pub max_depth: u32,
     /// Maximum total number of workflow invocations (default 20).
     pub max_fan_out: u32,
-    /// Cumulative token budget across all agent steps (default 100,000).
+    /// Cumulative token budget across all agent steps and every execution
+    /// of the run (default 100,000).
     pub max_workflow_tokens: u64,
-    /// Global timeout in seconds (default 120).
+    /// Global timeout in seconds of active execution time, summed over every
+    /// execution of the run, sleeping excluded (default 120).
     pub workflow_timeout_secs: u64,
+    /// Absolute deadline of a run, counted from its creation
+    /// (`Run.created_at`), sleeping time included (default `None`).
+    pub run_deadline: Option<Duration>,
 }
 
 impl Default for WorkflowGuardConfig {
@@ -62,6 +74,7 @@ impl Default for WorkflowGuardConfig {
             max_fan_out: 20,
             max_workflow_tokens: 100_000,
             workflow_timeout_secs: 120,
+            run_deadline: None,
         }
     }
 }
@@ -101,6 +114,7 @@ impl WorkflowGuardConfig {
             max_fan_out: parse_env("MAX_FAN_OUT", 20),
             max_workflow_tokens: parse_env("MAX_WORKFLOW_TOKENS", 100_000),
             workflow_timeout_secs: parse_env("WORKFLOW_TIMEOUT_SECS", 120),
+            run_deadline: None,
         }
     }
 
@@ -163,6 +177,55 @@ impl WorkflowGuardConfig {
         self.workflow_timeout_secs = secs;
         self
     }
+
+    /// Set the absolute deadline of a run, counted from its creation.
+    ///
+    /// Unlike the timeout, the deadline includes the time the run spends
+    /// sleeping (waiting for an approval, a signal or a timer): a run still
+    /// alive `deadline` after its creation is cancelled.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use ironflow_engine::guard::WorkflowGuardConfig;
+    ///
+    /// let week = Duration::from_secs(7 * 24 * 3600);
+    /// let config = WorkflowGuardConfig::new().with_run_deadline(week);
+    /// assert_eq!(config.run_deadline, Some(week));
+    /// ```
+    pub fn with_run_deadline(mut self, deadline: Duration) -> Self {
+        self.run_deadline = Some(deadline);
+        self
+    }
+
+    /// The instant a run created at `created_at` reaches its deadline.
+    ///
+    /// `None` without [`run_deadline`](Self::run_deadline), or when the
+    /// deadline cannot be represented as a date.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use chrono::{TimeDelta, Utc};
+    /// use ironflow_engine::guard::WorkflowGuardConfig;
+    ///
+    /// let created_at = Utc::now();
+    /// let config = WorkflowGuardConfig::new().with_run_deadline(Duration::from_secs(60));
+    /// assert_eq!(
+    ///     config.deadline_for(created_at),
+    ///     Some(created_at + TimeDelta::seconds(60))
+    /// );
+    /// assert_eq!(WorkflowGuardConfig::new().deadline_for(created_at), None);
+    /// ```
+    pub fn deadline_for(&self, created_at: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.run_deadline
+            .and_then(|d| TimeDelta::from_std(d).ok())
+            .and_then(|d| created_at.checked_add_signed(d))
+    }
 }
 
 fn parse_env<T: std::str::FromStr>(suffix: &str, default: T) -> T {
@@ -223,6 +286,12 @@ pub enum WorkflowRejection {
         /// Configured limit.
         max: u64,
     },
+    /// The run reached the absolute deadline set by
+    /// [`WorkflowGuardConfig::run_deadline`].
+    RunDeadlineReached {
+        /// When the deadline was reached.
+        deadline_at: DateTime<Utc>,
+    },
     /// The guard state is unavailable (fail closed).
     GuardUnavailable,
 }
@@ -250,6 +319,9 @@ impl fmt::Display for WorkflowRejection {
             }
             Self::WorkflowTimeout { elapsed_secs, max } => {
                 write!(f, "workflow timeout: {elapsed_secs}s/{max}s")
+            }
+            Self::RunDeadlineReached { deadline_at } => {
+                write!(f, "run deadline reached at {}", deadline_at.to_rfc3339())
             }
             Self::GuardUnavailable => {
                 write!(f, "workflow guard unavailable -- failing closed")
@@ -285,8 +357,12 @@ pub struct WorkflowGuardState {
     call_chain: Vec<String>,
     /// Counters of the whole run tree, shared with every branch.
     totals: Arc<GuardTotals>,
-    /// When the root workflow started.
+    /// When the current execution of the root workflow started.
     started_at: Instant,
+    /// Active time spent by earlier executions of the run.
+    carried_elapsed: Duration,
+    /// Absolute deadline of the run, if any.
+    deadline_at: Option<DateTime<Utc>>,
 }
 
 /// Counters a run tree shares across the branches of its concurrent
@@ -317,7 +393,73 @@ impl WorkflowGuardState {
             call_chain: Vec::new(),
             totals: Arc::new(GuardTotals::default()),
             started_at: Instant::now(),
+            carried_elapsed: Duration::ZERO,
+            deadline_at: None,
         }
+    }
+
+    /// Seed the tokens already used by earlier executions of the run tree.
+    ///
+    /// Call it before the state is shared.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::guard::WorkflowGuardState;
+    ///
+    /// let state = WorkflowGuardState::new().with_tokens_used(700);
+    /// assert_eq!(state.total_tokens_used(), 700);
+    /// ```
+    pub fn with_tokens_used(self, tokens: u64) -> Self {
+        self.totals.tokens_used.store(tokens, Ordering::Relaxed);
+        self
+    }
+
+    /// Seed the active time spent by earlier executions of the run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use ironflow_engine::guard::WorkflowGuardState;
+    ///
+    /// let state = WorkflowGuardState::new().with_elapsed(Duration::from_secs(30));
+    /// assert!(state.elapsed_secs() >= 30);
+    /// ```
+    pub fn with_elapsed(mut self, elapsed: Duration) -> Self {
+        self.carried_elapsed = elapsed;
+        self
+    }
+
+    /// Set the absolute deadline of the run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use ironflow_engine::guard::WorkflowGuardState;
+    ///
+    /// let at = Utc::now();
+    /// let state = WorkflowGuardState::new().with_deadline_at(at);
+    /// assert_eq!(state.deadline_at(), Some(at));
+    /// ```
+    pub fn with_deadline_at(mut self, deadline_at: DateTime<Utc>) -> Self {
+        self.deadline_at = Some(deadline_at);
+        self
+    }
+
+    /// The absolute deadline of the run, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::guard::WorkflowGuardState;
+    ///
+    /// assert_eq!(WorkflowGuardState::new().deadline_at(), None);
+    /// ```
+    pub fn deadline_at(&self) -> Option<DateTime<Utc>> {
+        self.deadline_at
     }
 
     /// The state of a `target_workflow` child running concurrently with its
@@ -336,6 +478,8 @@ impl WorkflowGuardState {
             call_chain,
             totals: self.totals.clone(),
             started_at: self.started_at,
+            carried_elapsed: self.carried_elapsed,
+            deadline_at: self.deadline_at,
         }
     }
 
@@ -359,9 +503,62 @@ impl WorkflowGuardState {
         &self.call_chain
     }
 
-    /// Seconds elapsed since the workflow started.
+    /// Seconds of active execution time across every execution of the run,
+    /// sleeping excluded.
     pub fn elapsed_secs(&self) -> u64 {
-        self.started_at.elapsed().as_secs()
+        self.elapsed().as_secs()
+    }
+
+    fn elapsed(&self) -> Duration {
+        let current = self.started_at.elapsed();
+        self.carried_elapsed.saturating_add(current)
+    }
+
+    /// Check the workflow timeout, then the run deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorkflowRejection::WorkflowTimeout`] once the active time
+    /// reaches the timeout, [`WorkflowRejection::RunDeadlineReached`] once
+    /// the deadline is past.
+    pub(crate) fn check_time(&self, config: &WorkflowGuardConfig) -> Result<(), WorkflowRejection> {
+        let elapsed_secs = self.elapsed_secs();
+        if elapsed_secs >= config.workflow_timeout_secs {
+            return Err(WorkflowRejection::WorkflowTimeout {
+                elapsed_secs,
+                max: config.workflow_timeout_secs,
+            });
+        }
+        if let Some(deadline_at) = self.deadline_at
+            && Utc::now() >= deadline_at
+        {
+            return Err(WorkflowRejection::RunDeadlineReached { deadline_at });
+        }
+        Ok(())
+    }
+
+    /// The time left before the nearest time limit (timeout or deadline),
+    /// and the rejection to raise when it runs out.
+    pub(crate) fn time_limit(&self, config: &WorkflowGuardConfig) -> (Duration, WorkflowRejection) {
+        let max = Duration::from_secs(config.workflow_timeout_secs);
+        let timeout = (
+            max.saturating_sub(self.elapsed()),
+            WorkflowRejection::WorkflowTimeout {
+                elapsed_secs: config.workflow_timeout_secs,
+                max: config.workflow_timeout_secs,
+            },
+        );
+        let Some(deadline_at) = self.deadline_at else {
+            return timeout;
+        };
+        // A negative delta means the deadline is already past.
+        let left = (deadline_at - Utc::now()).to_std();
+        let left = left.unwrap_or(Duration::ZERO);
+        if left < timeout.0 {
+            (left, WorkflowRejection::RunDeadlineReached { deadline_at })
+        } else {
+            timeout
+        }
     }
 
     /// Read-only check: would invoking `target_workflow` violate any limit?
@@ -420,15 +617,7 @@ impl WorkflowGuardState {
             });
         }
 
-        let elapsed = self.started_at.elapsed().as_secs();
-        if elapsed >= config.workflow_timeout_secs {
-            return Err(WorkflowRejection::WorkflowTimeout {
-                elapsed_secs: elapsed,
-                max: config.workflow_timeout_secs,
-            });
-        }
-
-        Ok(())
+        self.check_time(config)
     }
 
     /// [`check`](Self::check) `target_workflow`, then claim its invocation
@@ -605,6 +794,7 @@ mod tests {
         assert_eq!(config.max_fan_out, 20);
         assert_eq!(config.max_workflow_tokens, 100_000);
         assert_eq!(config.workflow_timeout_secs, 120);
+        assert_eq!(config.run_deadline, None);
     }
 
     #[test]
@@ -648,12 +838,143 @@ mod tests {
             .with_max_depth(3)
             .with_max_fan_out(10)
             .with_max_workflow_tokens(50_000)
-            .with_workflow_timeout_secs(60);
+            .with_workflow_timeout_secs(60)
+            .with_run_deadline(Duration::from_secs(3600));
 
         assert_eq!(config.max_depth, 3);
         assert_eq!(config.max_fan_out, 10);
         assert_eq!(config.max_workflow_tokens, 50_000);
         assert_eq!(config.workflow_timeout_secs, 60);
+        assert_eq!(config.run_deadline, Some(Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn with_tokens_used_counts_toward_the_budget() {
+        let config = WorkflowGuardConfig::new().with_max_workflow_tokens(1500);
+        let mut state = WorkflowGuardState::new().with_tokens_used(700);
+
+        assert_eq!(state.record_tokens(&config, 800), Ok(0));
+        assert!(matches!(
+            state.record_tokens(&config, 1),
+            Err(WorkflowRejection::TokenBudgetExhausted {
+                used: 1501,
+                max: 1500
+            })
+        ));
+    }
+
+    #[test]
+    fn check_rejects_timeout_reached_by_earlier_executions() {
+        let config = WorkflowGuardConfig::new().with_workflow_timeout_secs(120);
+        let elapsed = Duration::from_secs(200);
+        let state = WorkflowGuardState::new().with_elapsed(elapsed);
+
+        let err = state.check(&config, "a").unwrap_err();
+        match err {
+            WorkflowRejection::WorkflowTimeout { elapsed_secs, max } => {
+                assert!(elapsed_secs >= 200);
+                assert_eq!(max, 120);
+            }
+            other => panic!("expected WorkflowTimeout, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_rejects_a_past_deadline() {
+        let deadline_at = Utc::now() - TimeDelta::seconds(1);
+        let state = WorkflowGuardState::new().with_deadline_at(deadline_at);
+
+        assert_eq!(
+            state.check(&WorkflowGuardConfig::new(), "a"),
+            Err(WorkflowRejection::RunDeadlineReached { deadline_at })
+        );
+    }
+
+    #[test]
+    fn check_allows_a_future_deadline() {
+        let deadline_at = Utc::now() + TimeDelta::hours(1);
+        let state = WorkflowGuardState::new().with_deadline_at(deadline_at);
+        assert!(state.check(&WorkflowGuardConfig::new(), "a").is_ok());
+    }
+
+    #[test]
+    fn time_limit_picks_the_nearest_limit() {
+        let config = WorkflowGuardConfig::new().with_workflow_timeout_secs(120);
+        let deadline_at = Utc::now() + TimeDelta::seconds(2);
+        let state = WorkflowGuardState::new().with_deadline_at(deadline_at);
+
+        let (left, rejection) = state.time_limit(&config);
+        assert!(left <= Duration::from_secs(2));
+        assert_eq!(
+            rejection,
+            WorkflowRejection::RunDeadlineReached { deadline_at }
+        );
+
+        let (left, rejection) = WorkflowGuardState::new().time_limit(&config);
+        assert!(left <= Duration::from_secs(120));
+        assert!(left > Duration::from_secs(100));
+        assert!(matches!(
+            rejection,
+            WorkflowRejection::WorkflowTimeout { max: 120, .. }
+        ));
+    }
+
+    #[test]
+    fn time_limit_is_zero_past_the_deadline() {
+        let config = WorkflowGuardConfig::new();
+        let deadline_at = Utc::now() - TimeDelta::seconds(5);
+        let state = WorkflowGuardState::new().with_deadline_at(deadline_at);
+
+        assert_eq!(
+            state.time_limit(&config),
+            (
+                Duration::ZERO,
+                WorkflowRejection::RunDeadlineReached { deadline_at }
+            )
+        );
+    }
+
+    #[test]
+    fn branch_shares_carried_time_and_deadline() {
+        let deadline_at = Utc::now() + TimeDelta::hours(1);
+        let root = WorkflowGuardState::new()
+            .with_elapsed(Duration::from_secs(50))
+            .with_deadline_at(deadline_at);
+        let branch = root.branch_into("child");
+
+        assert!(branch.elapsed_secs() >= 50);
+        assert_eq!(branch.deadline_at(), Some(deadline_at));
+    }
+
+    #[test]
+    fn deadline_for_adds_the_deadline_to_creation() {
+        let created_at = Utc::now();
+        let deadline = Duration::from_secs(90);
+        let config = WorkflowGuardConfig::new().with_run_deadline(deadline);
+        assert_eq!(
+            config.deadline_for(created_at),
+            Some(created_at + TimeDelta::seconds(90))
+        );
+    }
+
+    #[test]
+    fn deadline_for_none_without_deadline() {
+        assert_eq!(WorkflowGuardConfig::new().deadline_for(Utc::now()), None);
+    }
+
+    #[test]
+    fn deadline_for_none_on_overflow() {
+        let config = WorkflowGuardConfig::new().with_run_deadline(Duration::MAX);
+        assert_eq!(config.deadline_for(Utc::now()), None);
+    }
+
+    #[test]
+    fn rejection_display_run_deadline() {
+        let deadline_at = Utc::now();
+        let rejection = WorkflowRejection::RunDeadlineReached { deadline_at };
+        let msg = rejection.to_string();
+        assert!(msg.contains("run deadline reached at"));
+        assert!(msg.contains(&deadline_at.to_rfc3339()));
     }
 
     #[test]

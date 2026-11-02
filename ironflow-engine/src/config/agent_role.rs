@@ -10,6 +10,7 @@ use std::any::type_name;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
+use std::time::Duration;
 
 use ironflow_core::operations::agent::{Effort, PermissionMode};
 use ironflow_core::retry::RetryPolicy;
@@ -40,8 +41,8 @@ pub const MAX_ROLE_NAME_LEN: usize = 128;
 /// Only [`prompt`](Self::prompt) is required. The persona, tools, permission
 /// mode, MCP config and output type are locked by the role: the caller of
 /// [`task`](Self::task) cannot change them (a role with more rights is another
-/// role). The model, budget, turn limit, effort and per-call settings are
-/// defaults the caller may override on the [`AgentTask`].
+/// role). The model, budget, turn limit, effort, timeout and per-call settings
+/// are defaults the caller may override on the [`AgentTask`].
 ///
 /// # Examples
 ///
@@ -226,6 +227,13 @@ pub trait AgentRole {
 
     /// Default effort. The caller may override it.
     fn effort(&self) -> Option<Effort> {
+        None
+    }
+
+    /// Default step timeout, see
+    /// [`AgentConfig::timeout`](ironflow_core::provider::AgentConfig::timeout).
+    /// The caller may override it.
+    fn timeout(&self) -> Option<Duration> {
         None
     }
 
@@ -501,6 +509,9 @@ impl<T: JsonSchema> AgentTask<T> {
         if let Some(turns) = role.max_turns() {
             config = config.max_turns(turns);
         }
+        if let Some(limit) = role.timeout() {
+            config = config.timeout(limit);
+        }
         if let Some(effort) = role.effort() {
             config = config.effort(effort);
         }
@@ -618,6 +629,38 @@ impl<T> AgentTask<T> {
     /// ```
     pub fn effort(mut self, effort: Effort) -> Self {
         self.config = self.config.effort(effort);
+        self
+    }
+
+    /// Override the step timeout of the role for this call, see
+    /// [`AgentConfig::timeout`](ironflow_core::provider::AgentConfig::timeout).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `limit` is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::time::Duration;
+    /// # use ironflow_engine::config::{AgentRole, AgentStep};
+    /// # use schemars::JsonSchema;
+    /// # use ironflow_engine::config::AgentAnswer;
+    /// # use serde::Deserialize;
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
+    /// # struct Verdict { approved: bool }
+    /// # struct Reviewer;
+    /// # impl AgentRole for Reviewer {
+    /// #     type Input = String;
+    /// #     type Output = Verdict;
+    /// #     fn prompt(&self, input: String) -> String { input }
+    /// # }
+    /// let task = Reviewer.task("diff".to_string());
+    /// let config = task.timeout(Duration::from_secs(600)).into_config();
+    /// assert_eq!(config.timeout, Some(Duration::from_secs(600)));
+    /// ```
+    pub fn timeout(mut self, limit: Duration) -> Self {
+        self.config = self.config.timeout(limit);
         self
     }
 
@@ -958,6 +1001,10 @@ mod tests {
         fn effort(&self) -> Option<Effort> {
             Some(Effort::Low)
         }
+
+        fn timeout(&self) -> Option<Duration> {
+            Some(Duration::from_secs(300))
+        }
     }
 
     fn step_output(output: Value) -> StepOutput {
@@ -1023,6 +1070,18 @@ mod tests {
         assert_eq!(overridden.max_budget_usd, Some(1.5));
         assert_eq!(overridden.effort, Some(Effort::High));
         assert_eq!(overridden.system_prompt.as_deref(), Some("base prompt"));
+    }
+
+    #[test]
+    fn role_timeout_is_a_default_the_task_overrides() {
+        let config = Full.task("p".to_string()).into_config();
+        assert_eq!(config.timeout, Some(Duration::from_secs(300)));
+        let overridden = Full
+            .task("p".to_string())
+            .timeout(Duration::from_secs(1800))
+            .into_config();
+        assert_eq!(overridden.timeout, Some(Duration::from_secs(1800)));
+        assert_eq!(Bare.task("p".to_string()).into_config().timeout, None);
     }
 
     #[test]

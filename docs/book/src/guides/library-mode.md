@@ -108,6 +108,10 @@ println!("Cost: ${:.4}", result.cost_usd().unwrap_or(0.0));
 # }
 ```
 
+`Agent::timeout(Duration::from_secs(300))` bounds the call independently of the provider,
+automatic retries included: past it `run` fails with `AgentError::Timeout` and the provider
+stops its process or pod. Without it, the provider timeout applies.
+
 Other providers (OpenAI, Gemini, Mistral, remote Claude Code) are listed in
 [Agent Providers](agent-providers.md).
 

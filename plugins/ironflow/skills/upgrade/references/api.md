@@ -572,3 +572,19 @@ JSON and the schema are unchanged, so the fixtures do not change. Section: Agent
 +     summary: AgentText,
   }
 ```
+
+## guard-limits-span-executions
+- kind: behavior
+- since: ironflow-engine after 3.0.2 (#241)
+
+`max_workflow_tokens` and `workflow_timeout_secs` now count every execution of the run
+(resume after an approval, a signal or a human input, requeue, automatic retry), so a run
+that used to resume with fresh limits can now be stopped. `WorkflowGuardConfig` gains the
+public field `run_deadline`, an absolute deadline counted from the creation of the run,
+sleeping included: a struct literal needs `..WorkflowGuardConfig::default()`.
+`WorkflowRejection` gains `RunDeadlineReached`: an exhaustive `match` needs an arm.
+
+```diff
+- WorkflowGuardConfig { max_depth: 3, max_fan_out: 10, max_workflow_tokens: 50_000, workflow_timeout_secs: 60 }
++ WorkflowGuardConfig::new().with_max_depth(3).with_max_fan_out(10).with_max_workflow_tokens(50_000).with_workflow_timeout_secs(60).with_run_deadline(Duration::from_secs(7 * 86_400))
+```

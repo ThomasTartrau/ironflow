@@ -84,6 +84,15 @@ It is passed as `--effort` to the Claude CLI providers and as `output_config.eff
 Anthropic API provider; other HTTP providers ignore it. Without it no flag is sent and the
 model default applies.
 
+`.timeout(Duration::from_secs(300))` bounds the step whatever the provider: past it the step
+fails with `agent timed out after 300s`, and its environment is stopped. The local `claude`
+process is killed, the K8s ephemeral pod is deleted, and with Docker, SSH or a persistent pod
+the remote command is killed by `timeout -s KILL` 5 s after the limit (the container or host
+then needs a `timeout` binary, from coreutils or busybox). Without it, the provider timeout
+applies; the step timeout may be longer than it. It covers the automatic retries of a
+structured-output step, while each `retry_policy` attempt gets a new budget. It is not part
+of the record/replay hash, so changing it keeps the recorded fixtures.
+
 Tools are an enum: `.allow_tool(Tool::Bash)`, `Tool::Custom("mcp__server__tool".into())`
 for anything else. `.available_tools([Tool::Read])` bounds the built-in tools the Claude CLI
 offers (`--tools`), where `allow_tool` only pre-approves. A step can have tools and structured output: with
@@ -147,7 +156,7 @@ let verdict: Verdict = ctx
 Only `prompt` is required. The persona, tools, permission mode, MCP config and output type
 are locked by the role: the task has no setter for them, so a call that widens the rights
 does not compile (a role with more rights is another role). The model, budget, `max_turns`,
-effort and per-call settings (`working_dir`, `allow_failure`, `retry_policy`, pod labels,
+effort, `timeout` and per-call settings (`working_dir`, `allow_failure`, `retry_policy`, pod labels,
 resume settings) are defaults the caller may override.
 
 `name()` names the role. It defaults to the type name without its module path (`Reviewer`);

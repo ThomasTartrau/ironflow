@@ -25,7 +25,6 @@ use crate::error::EngineError;
 use crate::executor::{
     ParallelStepResult, StepArtifacts, StepOutput, StepResult, execute_step_config_intercepted,
 };
-use crate::guard::WorkflowRejection;
 use crate::log_sender::StepLogSender;
 use crate::notify::{WorkflowAgentStepTokensUsedEvent, WorkflowEvent};
 use crate::plan::{lock_plan, planned_output};
@@ -216,7 +215,7 @@ impl WorkflowContext {
 
         let mut join_set = JoinSet::new();
         let mut task_index: HashMap<Id, usize> = HashMap::new();
-        let parallel_timeout = self.guard_remaining_timeout();
+        let parallel_limit = self.guard_time_limit();
         for (idx, (step_id, _trace_id, step_name, config)) in step_records.iter().enumerate() {
             let provider = self.provider.clone();
             // Each task owns its own handle: `intercept` is synchronous, so no
@@ -227,9 +226,10 @@ impl WorkflowContext {
                 .log_sender
                 .as_ref()
                 .map(|s| StepLogSender::new(s.clone(), self.run_id, *step_id, step_name.clone()));
+            let limit = parallel_limit.clone();
             let handle = join_set.spawn(async move {
-                let result = match parallel_timeout {
-                    Some(dur) => {
+                let result = match limit {
+                    Some((dur, rejection)) => {
                         match timeout(
                             dur,
                             execute_step_config_intercepted(
@@ -242,12 +242,7 @@ impl WorkflowContext {
                         .await
                         {
                             Ok(r) => r,
-                            Err(_elapsed) => {
-                                Err(EngineError::from(WorkflowRejection::WorkflowTimeout {
-                                    elapsed_secs: 0,
-                                    max: 0,
-                                }))
-                            }
+                            Err(_elapsed) => Err(EngineError::from(rejection)),
                         }
                     }
                     None => {

@@ -537,6 +537,73 @@ pub fn build_shell_command(claude_path: &str, args: &[String]) -> String {
     parts.join(" ")
 }
 
+/// Extra time the remote `timeout` grants past the step timeout, so the local
+/// bound fires first and the step reports [`AgentError::Timeout`], not exit 137.
+pub const REMOTE_KILL_GRACE: Duration = Duration::from_secs(5);
+
+/// Argv prefix that makes the remote host kill `claude` once the step timeout
+/// (plus [`REMOTE_KILL_GRACE`]) has passed, even after the local side dropped
+/// the connection.
+///
+/// Empty when the step sets no timeout, so the remote command is unchanged and
+/// does not need the `timeout` binary. The limit is rounded up to whole
+/// seconds and saturates, so `Duration::MAX` does not overflow. `-s KILL` is accepted by GNU coreutils and busybox alike.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use ironflow_core::providers::claude::common::remote_kill_args;
+///
+/// assert!(remote_kill_args(None).is_empty());
+/// assert_eq!(
+///     remote_kill_args(Some(Duration::from_secs(300))),
+///     ["timeout", "-s", "KILL", "305"]
+/// );
+/// ```
+pub fn remote_kill_args(step_timeout: Option<Duration>) -> Vec<String> {
+    let Some(limit) = step_timeout else {
+        return Vec::new();
+    };
+    let remote_limit = limit.saturating_add(REMOTE_KILL_GRACE);
+    let mut secs = remote_limit.as_secs();
+    if remote_limit.subsec_nanos() > 0 {
+        secs = secs.saturating_add(1);
+    }
+    vec![
+        "timeout".to_string(),
+        "-s".to_string(),
+        "KILL".to_string(),
+        secs.to_string(),
+    ]
+}
+
+/// `claude_cmd` (from [`build_shell_command`]) prefixed with
+/// [`remote_kill_args`], for transports that run a shell string.
+///
+/// Unchanged when the step sets no timeout.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use ironflow_core::providers::claude::common::with_remote_kill;
+///
+/// assert_eq!(with_remote_kill("'claude'".to_string(), None), "'claude'");
+/// assert_eq!(
+///     with_remote_kill("'claude'".to_string(), Some(Duration::from_secs(60))),
+///     "timeout -s KILL 65 'claude'"
+/// );
+/// ```
+pub fn with_remote_kill(claude_cmd: String, step_timeout: Option<Duration>) -> String {
+    let args = remote_kill_args(step_timeout);
+    if args.is_empty() {
+        return claude_cmd;
+    }
+    // The tokens are fixed words and digits: nothing to escape.
+    format!("{} {claude_cmd}", args.join(" "))
+}
+
 /// Escape a string for safe inclusion in a single-quoted shell argument.
 ///
 /// Wraps the value in single quotes, escaping any embedded single quotes
@@ -1171,6 +1238,14 @@ pub fn handle_nonzero_exit(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::time::Instant;
+
+    #[cfg(unix)]
+    use tokio::process::Command;
+    #[cfg(unix)]
+    use tokio::time;
+
     use super::*;
     use crate::operations::agent::Effort;
     use crate::provider::Tool;
@@ -2619,5 +2694,78 @@ mod tests {
         let err = parse_response(stdout, &config, 0).unwrap_err();
         assert!(matches!(err, AgentError::SchemaValidation { .. }));
         assert!(!is_session_not_found(&err));
+    }
+
+    // ── Remote kill of the step timeout ───────────────────────────
+
+    #[test]
+    fn remote_kill_args_without_step_timeout_is_empty() {
+        assert!(remote_kill_args(None).is_empty());
+    }
+
+    #[test]
+    fn remote_kill_args_adds_the_grace_and_rounds_up() {
+        assert_eq!(
+            remote_kill_args(Some(Duration::from_secs(300))),
+            ["timeout", "-s", "KILL", "305"]
+        );
+        assert_eq!(
+            remote_kill_args(Some(Duration::from_millis(1500))),
+            ["timeout", "-s", "KILL", "7"]
+        );
+        assert_eq!(
+            remote_kill_args(Some(Duration::from_millis(100))),
+            ["timeout", "-s", "KILL", "6"]
+        );
+    }
+
+    #[test]
+    fn remote_kill_args_saturates_on_the_largest_duration() {
+        assert_eq!(
+            remote_kill_args(Some(Duration::MAX)),
+            ["timeout", "-s", "KILL", u64::MAX.to_string().as_str()]
+        );
+    }
+
+    #[test]
+    fn with_remote_kill_leaves_the_command_alone_without_timeout() {
+        let claude_cmd = build_shell_command("claude", &["-p".to_string()]);
+        assert_eq!(with_remote_kill(claude_cmd.clone(), None), claude_cmd);
+    }
+
+    #[test]
+    fn with_remote_kill_prefixes_the_command() {
+        let claude_cmd = build_shell_command("claude", &["-p".to_string()]);
+        assert_eq!(
+            with_remote_kill(claude_cmd, Some(Duration::from_secs(1800))),
+            "timeout -s KILL 1805 'claude' '-p'"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn with_remote_kill_kills_the_command_once_the_step_limit_passes() {
+        time::timeout(Duration::from_secs(20), async {
+            let cmd = with_remote_kill(
+                build_shell_command("sleep", &["30".to_string()]),
+                Some(Duration::from_millis(100)),
+            );
+            let started = Instant::now();
+
+            let status = Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .status()
+                .await
+                .expect("run sh");
+
+            assert!(!status.success(), "{cmd} should have been killed");
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "{cmd} ran past the remote limit"
+            );
+        })
+        .await
+        .expect("test timed out");
     }
 }
