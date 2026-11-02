@@ -18,22 +18,19 @@ use tracing::subscriber::set_default;
 use tracing_subscriber::fmt as tracing_fmt;
 use tracing_subscriber::fmt::MakeWriter;
 use wiremock::matchers::{body_partial_json, method, path, path_regex, query_param};
-use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use ironflow_core::account::{AccountCredential, AccountSession, RateLimitRecorder};
 use ironflow_core::auth_proxy::{ProxiedSecret, SecretInjection};
 use ironflow_core::provider::{AgentConfig, AgentProvider, LogSink};
 use ironflow_core::providers::claude::K8sEphemeralProvider;
 
-use crate::fake_api::{FakeK8s, NS, collection, pod};
+use crate::fake_api::{FakeK8s, NS, collection, count, pod, wait_for};
 
 const ADMIN_KEY: &str = "0123456789abcdef0123456789abcdef";
 const CLAUDE_TOKEN_ID: &str = "claude0123456789";
 const SECRET_TOKEN_ID: &str = "secret0123456789";
 const TEST_TIMEOUT: Duration = Duration::from_secs(30);
-/// Longest wait for a request: generous, the whole workspace suite may run
-/// in parallel.
-const WAIT_LIMIT: Duration = Duration::from_secs(10);
 
 /// A fake auth proxy admin API issuing one token for the Claude credential
 /// and one for the `GITHUB_TOKEN` proxied secret.
@@ -92,34 +89,6 @@ async fn expect_revocation(proxy: &MockServer, id: &str, status: u16, times: u64
         .expect(times)
         .mount(proxy)
         .await;
-}
-
-/// Wait until the requests `server` received satisfy `done`.
-async fn wait_for(server: &MockServer, what: &str, done: impl Fn(&[Request]) -> bool) {
-    let deadline = Instant::now() + WAIT_LIMIT;
-    loop {
-        let requests = server.received_requests().await.expect("recorded");
-        if done(&requests) {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "{what} never happened; requests: {:?}",
-            requests
-                .iter()
-                .map(|r| format!("{} {}", r.method, r.url.path()))
-                .collect::<Vec<_>>()
-        );
-        sleep(Duration::from_millis(20)).await;
-    }
-}
-
-/// Number of `verb` requests to `path` in `requests`.
-fn count(requests: &[Request], verb: &str, path: &str) -> usize {
-    requests
-        .iter()
-        .filter(|r| r.method.as_str() == verb && r.url.path() == path)
-        .count()
 }
 
 /// Wait until the proxy received the revocation of every id in `ids`.

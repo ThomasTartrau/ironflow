@@ -242,14 +242,15 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use ironflow_core::error::AgentError;
+    use ironflow_core::error::{AgentError, OperationError};
     use ironflow_core::operations::agent::PermissionMode;
     use ironflow_core::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture};
     use serde_json::json;
-    use tokio::time::timeout;
+    use tokio::time::{sleep, timeout};
     use uuid::Uuid;
 
     use super::{AgentExecutor, StepExecutor};
+    use crate::error::EngineError;
 
     /// Real provider returning a fixed output, used to exercise usage propagation.
     struct FixedUsageProvider {
@@ -475,6 +476,65 @@ mod tests {
         let mut config = AgentConfig::new("hi");
         config.max_budget_usd = Some(0.10);
         config
+    }
+
+    /// Real provider that answers after `delay`, as a slow agent would.
+    struct SlowProvider {
+        delay: Duration,
+    }
+
+    impl AgentProvider for SlowProvider {
+        fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+            Box::pin(async move {
+                sleep(self.delay).await;
+                Ok(AgentOutput::new(json!("ok")))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_executor_fails_a_step_past_its_timeout() {
+        timeout(Duration::from_secs(10), async {
+            let provider: Arc<dyn AgentProvider> = Arc::new(SlowProvider {
+                delay: Duration::from_secs(30),
+            });
+            let config = budget_config().timeout(Duration::from_millis(100));
+
+            let err = AgentExecutor::new(&config)
+                .execute(&provider)
+                .await
+                .expect_err("the step outlives its timeout");
+
+            assert!(
+                matches!(
+                    err,
+                    EngineError::Operation(OperationError::Agent(AgentError::Timeout { limit }))
+                        if limit == Duration::from_millis(100)
+                ),
+                "expected an agent timeout, got {err:?}"
+            );
+            assert!(err.to_string().contains("timed out"), "{err}");
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn agent_executor_without_timeout_runs_the_step() {
+        timeout(Duration::from_secs(10), async {
+            let provider: Arc<dyn AgentProvider> = Arc::new(SlowProvider {
+                delay: Duration::from_millis(50),
+            });
+
+            let step = AgentExecutor::new(&budget_config())
+                .execute(&provider)
+                .await
+                .expect("agent step succeeds");
+
+            assert_eq!(step.output, json!("ok"));
+        })
+        .await
+        .expect("test timed out");
     }
 
     #[tokio::test]

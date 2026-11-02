@@ -8,6 +8,10 @@
 //!
 //! * A reachable Kubernetes cluster (via kubeconfig or in-cluster config).
 //! * The container image must include the `claude` binary.
+//! * A step that sets [`AgentConfig::timeout`] runs `claude` under
+//!   `timeout -s KILL`, so the image then needs a `timeout` binary (coreutils
+//!   or busybox) on its `PATH`: the pod kills `claude` even once the provider
+//!   has closed the exec, which does not stop the process.
 //!
 //! # Examples
 //!
@@ -241,6 +245,8 @@ impl K8sPersistentProvider {
     }
 
     /// Override the default timeout (default: 5 minutes).
+    ///
+    /// A step that sets [`AgentConfig::timeout`] uses its own limit instead.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -425,7 +431,10 @@ impl K8sPersistentProvider {
         claude_common::validate_prompt_size(config)?;
         let built = claude_common::build_command(config)?;
 
-        let claude_cmd = claude_common::build_shell_command(&self.claude_path, &built.args);
+        let claude_cmd = claude_common::with_remote_kill(
+            claude_common::build_shell_command(&self.claude_path, &built.args),
+            config.timeout,
+        );
         let creds_prefix = build_credentials_prefix(self.oauth_credentials.as_deref());
         let trace_prefix = config
             .trace_context
@@ -452,6 +461,7 @@ impl K8sPersistentProvider {
         );
 
         let start = Instant::now();
+        let step_timeout = config.effective_timeout(self.timeout);
 
         let client = create_client(&self.cluster_config).await?;
 
@@ -504,7 +514,7 @@ impl K8sPersistentProvider {
         let mut stderr_buf = Vec::new();
         let mut exec_status = None;
 
-        let collect_result = time::timeout(self.timeout, async {
+        let collect_result = time::timeout(step_timeout, async {
             let stdout_fut = async {
                 if let Some(reader) = stdout_reader {
                     let mut stream = tokio_util::io::ReaderStream::new(reader);
@@ -533,9 +543,9 @@ impl K8sPersistentProvider {
         .await;
 
         if collect_result.is_err() {
-            warn!(timeout = ?self.timeout, "K8s exec timed out");
+            warn!(timeout = ?step_timeout, "K8s exec timed out");
             return Err(AgentError::Timeout {
-                limit: self.timeout,
+                limit: step_timeout,
             });
         }
 

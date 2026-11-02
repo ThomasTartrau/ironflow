@@ -138,6 +138,8 @@ impl ClaudeCodeProvider {
 
     /// Override the default timeout.
     ///
+    /// A step that sets [`AgentConfig::timeout`] uses its own limit instead.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -186,6 +188,7 @@ impl AgentProvider for ClaudeCodeProvider {
             );
 
             let start = Instant::now();
+            let step_timeout = config.effective_timeout(self.timeout);
 
             let mut cmd = Command::new("claude");
             cmd.args(&built.args)
@@ -231,14 +234,14 @@ impl AgentProvider for ClaudeCodeProvider {
                 };
                 let wait_fut = child.wait_with_output();
                 let (write_result, wait_result) =
-                    match time::timeout(self.timeout, async { tokio::join!(write_fut, wait_fut) })
+                    match time::timeout(step_timeout, async { tokio::join!(write_fut, wait_fut) })
                         .await
                     {
                         Ok(pair) => pair,
                         Err(_) => {
-                            warn!(timeout = ?self.timeout, "claude process timed out");
+                            warn!(timeout = ?step_timeout, "claude process timed out");
                             return Err(AgentError::Timeout {
-                                limit: self.timeout,
+                                limit: step_timeout,
                             });
                         }
                     };
@@ -274,15 +277,15 @@ impl AgentProvider for ClaudeCodeProvider {
                 return common::parse_output(&stdout, config, duration_ms);
             }
 
-            let output = match time::timeout(self.timeout, child.wait_with_output()).await {
+            let output = match time::timeout(step_timeout, child.wait_with_output()).await {
                 Ok(result) => result.map_err(|e| AgentError::ProcessFailed {
                     exit_code: -1,
                     stderr: format!("failed to wait for claude: {e}"),
                 })?,
                 Err(_) => {
-                    warn!(timeout = ?self.timeout, "claude process timed out");
+                    warn!(timeout = ?step_timeout, "claude process timed out");
                     return Err(AgentError::Timeout {
-                        limit: self.timeout,
+                        limit: step_timeout,
                     });
                 }
             };
