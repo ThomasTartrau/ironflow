@@ -742,6 +742,8 @@ receives the signal.
 - While planning, the step is recorded and `S` is built from `{}` when possible, `None` otherwise.
 - In tests: `TestEngine::with_mock_signal(|step, name, key| SignalOutcome::Received(json!(..)))`
   or `SignalOutcome::TimedOut`.
+- Another workflow sends it with `ctx.send_signal`, no API key needed:
+  `references/signal-send.md`.
 
 ## Decision
 

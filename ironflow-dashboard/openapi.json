@@ -7716,7 +7716,7 @@
       },
       "SignalReceivedEvent": {
         "type": "object",
-        "description": "Payload of the `Event::SignalReceived` event.\n\nEmitted once per stored signal; a duplicate (same idempotency ID) emits\nnothing.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::SignalReceivedEvent;\nuse uuid::Uuid;\n\nlet payload = SignalReceivedEvent {\n    signal_id: Uuid::now_v7(),\n    name: \"ci.pipeline_finished\".to_string(),\n    key: \"4f2a9c1\".to_string(),\n    resumed_runs: vec![Uuid::now_v7()],\n    at: Utc::now(),\n};\nassert_eq!(payload.resumed_runs.len(), 1);\n```",
+        "description": "Payload of the `Event::SignalReceived` event.\n\nEmitted once per stored signal; a duplicate (same idempotency ID) emits\nnothing.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::SignalReceivedEvent;\nuse uuid::Uuid;\n\nlet payload = SignalReceivedEvent {\n    signal_id: Uuid::now_v7(),\n    name: \"ci.pipeline_finished\".to_string(),\n    key: \"4f2a9c1\".to_string(),\n    resumed_runs: vec![Uuid::now_v7()],\n    sender_run_id: None,\n    sender_step_id: None,\n    at: Utc::now(),\n};\nassert_eq!(payload.resumed_runs.len(), 1);\n```",
         "required": [
           "signal_id",
           "name",
@@ -7745,6 +7745,22 @@
               "format": "uuid"
             },
             "description": "Runs whose waiting step the signal resolved."
+          },
+          "sender_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The run that sent the signal with `ctx.send_signal`. `None` for a\nsignal sent through the API or the engine directly."
+          },
+          "sender_step_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The send step of the sending run. `None` when `sender_run_id` is."
           },
           "signal_id": {
             "type": "string",

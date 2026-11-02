@@ -9,6 +9,7 @@ import {
 	Split,
 	MessageSquare,
 	Radio,
+	Send,
 	type LucideIcon,
 } from "lucide-react";
 
@@ -116,6 +117,15 @@ const kindMetaMap: Record<string, KindMeta> = {
 		badgeCls:
 			"bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-400/15 dark:text-indigo-300 dark:border-indigo-400/30",
 		label: "signal",
+	},
+	signal_send: {
+		icon: Send,
+		color: "text-indigo-600 dark:text-indigo-400",
+		barBg: "bg-indigo-400/70 dark:bg-indigo-400/50",
+		barBorder: "border-indigo-500/30 dark:border-indigo-400/30",
+		badgeCls:
+			"bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-400/15 dark:text-indigo-300 dark:border-indigo-400/30",
+		label: "send signal",
 	},
 };
 

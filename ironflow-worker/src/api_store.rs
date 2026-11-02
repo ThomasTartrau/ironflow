@@ -1212,6 +1212,8 @@ fn concurrency_conflict(body: &str) -> Option<StoreError> {
     Some(StoreError::ConcurrencyConflict { key, run_id })
 }
 
+mod signal_sender;
+
 /// Error for the signal methods only the API server runs.
 fn signal_method_unavailable(method: &str) -> StoreError {
     StoreError::Database(format!("SignalStore::{method} not available in worker"))

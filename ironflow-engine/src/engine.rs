@@ -57,7 +57,8 @@ use crate::plan::{
 use crate::retry_policy::{backoff_for_retry, is_run_retryable};
 use crate::schedule::CronSchedule;
 use crate::signal::{
-    Signal, SignalDelivery, SignalRejected, SignalResumed, received_output, validate_step_payload,
+    Signal, SignalDelivery, SignalOrigin, SignalRejected, SignalResumed, SignalSendFuture,
+    SignalSender, received_output, validate_signal, validate_step_payload,
 };
 use ironflow_core::decision::DecisionProvider;
 
@@ -234,6 +235,8 @@ pub struct Engine {
     step_interceptor: Option<Arc<dyn StepInterceptor>>,
     execution_mode: ExecutionMode,
     worker_tags: Option<Arc<Vec<String>>>,
+    /// Where `ctx.send_signal` delivers. `None` delivers in this process.
+    signal_sender: Option<Arc<dyn SignalSender>>,
     active_runs: ActiveRuns,
     local_resumes: ActiveRuns,
 }
@@ -287,6 +290,15 @@ fn prune_active_run(runs: &ActiveRuns, run_id: Uuid, entry: &Arc<AsyncMutex<()>>
         && Arc::strong_count(entry) == 2;
     if unused {
         runs.remove(&run_id);
+    }
+}
+
+/// Delivers the signals of `ctx.send_signal` with an engine of this process.
+struct InProcessSignalSender(Arc<Engine>);
+
+impl SignalSender for InProcessSignalSender {
+    fn send(&self, signal: NewSignal, origin: SignalOrigin) -> SignalSendFuture<'_> {
+        Box::pin(self.0.deliver_signal_from(signal, Some(origin)))
     }
 }
 
@@ -397,6 +409,7 @@ impl Engine {
             step_interceptor: None,
             execution_mode: ExecutionMode::default(),
             worker_tags: None,
+            signal_sender: None,
             active_runs: Arc::new(Mutex::new(HashMap::new())),
             local_resumes: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -431,6 +444,29 @@ impl Engine {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         runs.get(&run_id)
             .is_some_and(|entry| entry.try_lock().is_err())
+    }
+
+    /// Deliver the signals of `ctx.send_signal` through `sender` instead of
+    /// this engine's store. A worker, whose store cannot deliver, sends them
+    /// to the API.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::signal::SignalSender;
+    /// # use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// # use ironflow_store::memory::InMemoryStore;
+    ///
+    /// # fn example(sender: Arc<dyn SignalSender>) {
+    /// let engine = Engine::new(Arc::new(InMemoryStore::new()), Arc::new(ClaudeCodeProvider::new()))
+    ///     .with_signal_sender(sender);
+    /// # }
+    /// ```
+    pub fn with_signal_sender(mut self, sender: Arc<dyn SignalSender>) -> Self {
+        self.signal_sender = Some(sender);
+        self
     }
 
     /// Wire a [`DecisionProvider`] backend for `ctx.decision(...)` steps.
@@ -745,7 +781,37 @@ impl Engine {
         if let Some(ref tags) = self.worker_tags {
             ctx.set_worker_tags(tags.clone());
         }
+        // Delivering in this process wakes runs on a background task, which
+        // needs an owned engine: `&self` is all a context build gets.
+        let sender = self
+            .signal_sender
+            .clone()
+            .unwrap_or_else(|| Arc::new(InProcessSignalSender(Arc::new(self.shared_copy()))));
+        ctx.set_signal_sender(sender);
         ctx
+    }
+
+    /// A copy sharing the store, the subscribers and the in-process run locks,
+    /// with the handlers registered so far.
+    fn shared_copy(&self) -> Engine {
+        Engine {
+            store: self.store.clone(),
+            provider: self.provider.clone(),
+            handlers: self.handlers.clone(),
+            event_publisher: self.event_publisher.clone(),
+            log_sender: self.log_sender.clone(),
+            budget: self.budget.clone(),
+            artifact_sink: self.artifact_sink.clone(),
+            guard_config: self.guard_config.clone(),
+            event_bus: self.event_bus.clone(),
+            decision_provider: self.decision_provider.clone(),
+            step_interceptor: self.step_interceptor.clone(),
+            execution_mode: self.execution_mode,
+            worker_tags: self.worker_tags.clone(),
+            signal_sender: self.signal_sender.clone(),
+            active_runs: self.active_runs.clone(),
+            local_resumes: self.local_resumes.clone(),
+        }
     }
 
     /// Build a context with the guard attached.
@@ -1705,7 +1771,9 @@ impl Engine {
     /// # Errors
     ///
     /// Returns [`EngineError::InvalidSignal`] when `name` or `key` is empty,
-    /// and [`EngineError::Store`] when the signal cannot be stored or its
+    /// or when `name`, `key` or `idempotency_id` is longer than
+    /// [`MAX_SIGNAL_FIELD_LEN`](crate::signal::MAX_SIGNAL_FIELD_LEN), and
+    /// [`EngineError::Store`] when the signal cannot be stored or its
     /// waiters cannot be listed.
     ///
     /// # Examples
@@ -1734,16 +1802,44 @@ impl Engine {
         self: &Arc<Self>,
         signal: NewSignal,
     ) -> Result<SignalDelivery, EngineError> {
-        if signal.name.trim().is_empty() {
-            return Err(EngineError::InvalidSignal(
-                "signal name must not be empty".to_string(),
-            ));
-        }
-        if signal.key.trim().is_empty() {
-            return Err(EngineError::InvalidSignal(
-                "signal key must not be empty".to_string(),
-            ));
-        }
+        self.deliver_signal_from(signal, None).await
+    }
+
+    /// [`deliver_signal`](Self::deliver_signal), recording the workflow step
+    /// that sent the signal on [`Event::SignalReceived`]: the audit log entry
+    /// then belongs to that run and step.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`deliver_signal`](Self::deliver_signal).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::error::EngineError;
+    /// use ironflow_engine::signal::SignalOrigin;
+    /// use ironflow_store::entities::NewSignal;
+    /// use serde_json::json;
+    ///
+    /// # async fn example(engine: Arc<Engine>, origin: SignalOrigin) -> Result<(), EngineError> {
+    /// let signal = NewSignal {
+    ///     name: "gitlab.human_replied".to_string(),
+    ///     key: "discussion-7".to_string(),
+    ///     payload: json!({"body": "ship it"}),
+    ///     idempotency_id: None,
+    /// };
+    /// engine.deliver_signal_from(signal, Some(origin)).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn deliver_signal_from(
+        self: &Arc<Self>,
+        signal: NewSignal,
+        origin: Option<SignalOrigin>,
+    ) -> Result<SignalDelivery, EngineError> {
+        validate_signal(&signal)?;
 
         let stored = match self.store.insert_signal(signal).await? {
             SignalInsert::Created(stored) => stored,
@@ -1829,6 +1925,8 @@ impl Engine {
                 name: stored.name.clone(),
                 key: stored.key.clone(),
                 resumed_runs: resumed.iter().map(|r| r.run_id).collect(),
+                sender_run_id: origin.map(|o| o.run_id),
+                sender_step_id: origin.map(|o| o.step_id),
                 at: stored.received_at,
             }));
 

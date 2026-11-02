@@ -665,6 +665,7 @@ pub(crate) fn step_kind_label(kind: &StepKind) -> Cow<'static, str> {
         StepKind::Decision => Cow::Borrowed("decision"),
         StepKind::HumanInput => Cow::Borrowed("human_input"),
         StepKind::Signal => Cow::Borrowed("signal"),
+        StepKind::SignalSend => Cow::Borrowed("signal_send"),
         StepKind::Custom(name) => Cow::Owned(name.clone()),
     }
 }

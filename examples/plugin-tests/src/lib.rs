@@ -35,6 +35,10 @@ pub mod workflow {}
 #[doc = include_str!("../../../plugins/ironflow/skills/workflow/references/steps.md")]
 pub mod workflow_steps {}
 
+/// `skills/workflow/references/signal-send.md`
+#[doc = include_str!("../../../plugins/ironflow/skills/workflow/references/signal-send.md")]
+pub mod workflow_signal_send {}
+
 /// `skills/workflow/references/sub-workflows.md`
 #[doc = include_str!("../../../plugins/ironflow/skills/workflow/references/sub-workflows.md")]
 pub mod workflow_sub_workflows {}

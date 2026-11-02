@@ -66,6 +66,7 @@ use crate::log_sender::LogSender;
 use crate::notify::WorkflowEventBus;
 use crate::operation::OperationContext;
 use crate::plan::SharedPlanRecorder;
+use crate::signal::SignalSender;
 
 use cost::SharedCost;
 
@@ -214,6 +215,9 @@ pub struct WorkflowContext {
     /// engine of a tagged worker. A sub-workflow requiring a tag missing from
     /// this list is refused. `None` outside a worker: no check.
     worker_tags: Option<Arc<Vec<String>>>,
+    /// Where [`send_signal`](Self::send_signal) delivers, set by the engine.
+    /// `None` outside an engine: sending then fails explicitly.
+    signal_sender: Option<Arc<dyn SignalSender>>,
     /// Suspensions of wave children that the error this run returns does not
     /// carry: a wave reports its first suspended child, the engine publishes
     /// the event of every other one from here.

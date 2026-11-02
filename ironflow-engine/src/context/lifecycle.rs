@@ -420,6 +420,7 @@ impl WorkflowContext {
             StepKind::Decision => "decision",
             StepKind::HumanInput => "human_input",
             StepKind::Signal => "signal",
+            StepKind::SignalSend => "signal_send",
             StepKind::Custom(_) => "custom",
         };
         Span::current().record("step.kind", kind_str);

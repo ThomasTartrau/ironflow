@@ -199,7 +199,10 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             post(internal::create_step_dependencies::create_step_dependencies),
         )
         .route("/secrets/{*key}", get(internal::get_secret::get_secret))
-        .route("/signals", get(internal::signals::list_signals_for_key))
+        .route(
+            "/signals",
+            get(internal::signals::list_signals_for_key).post(internal::signals::send_signal),
+        )
         .route(
             "/steps/{id}/signal-resolution",
             post(internal::signals::resolve_signal_step),

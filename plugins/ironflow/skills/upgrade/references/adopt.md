@@ -558,3 +558,20 @@ effort and per-call settings. Section: Agent.
 + }
 + let review = ctx.agent("review", Reviewer.task(diff)).await?;
 ```
+
+## send-signal
+- kind: adopt
+- since: ironflow-engine after 3.0.2 (#243)
+- detect: `api/v1/signals`
+
+A workflow that wakes another run (a router started by a webhook) used to call
+`POST /api/v1/signals` with an admin API key stored as a secret. It sends the signal
+as a step now, with no key, once its handler declares the signal type. Upgrade the API
+before the workers: a worker delivers through a new internal route. Section: Signal.
+
+```diff
+- let auth = format!("Bearer {admin_key}");
+- ctx.http("wake", HttpConfig::post(&signals_url).header("Authorization", &auth).json(body)).await?;
++ // in impl WorkflowHandler: fn sent_signals(&self) -> SentSignals { SentSignals::new().allow::<HumanReplied>() }
++ ctx.send_signal("wake", &HumanReplied { body }, &discussion_id).await?;
+```

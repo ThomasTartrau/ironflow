@@ -3580,7 +3580,7 @@
         "type": "object"
       },
       "SignalReceivedEvent": {
-        "description": "Payload of the `Event::SignalReceived` event.\n\nEmitted once per stored signal; a duplicate (same idempotency ID) emits\nnothing.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::SignalReceivedEvent;\nuse uuid::Uuid;\n\nlet payload = SignalReceivedEvent {\n    signal_id: Uuid::now_v7(),\n    name: \"ci.pipeline_finished\".to_string(),\n    key: \"4f2a9c1\".to_string(),\n    resumed_runs: vec![Uuid::now_v7()],\n    at: Utc::now(),\n};\nassert_eq!(payload.resumed_runs.len(), 1);\n```",
+        "description": "Payload of the `Event::SignalReceived` event.\n\nEmitted once per stored signal; a duplicate (same idempotency ID) emits\nnothing.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::SignalReceivedEvent;\nuse uuid::Uuid;\n\nlet payload = SignalReceivedEvent {\n    signal_id: Uuid::now_v7(),\n    name: \"ci.pipeline_finished\".to_string(),\n    key: \"4f2a9c1\".to_string(),\n    resumed_runs: vec![Uuid::now_v7()],\n    sender_run_id: None,\n    sender_step_id: None,\n    at: Utc::now(),\n};\nassert_eq!(payload.resumed_runs.len(), 1);\n```",
         "properties": {
           "at": {
             "description": "When the signal was received.",
@@ -3602,6 +3602,18 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "sender_run_id": {
+            "description": "The run that sent the signal with `ctx.send_signal`. `None` for a\nsignal sent through the API or the engine directly.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "sender_step_id": {
+            "description": "The send step of the sending run. `None` when `sender_run_id` is.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
           },
           "signal_id": {
             "description": "Stored signal identifier.",

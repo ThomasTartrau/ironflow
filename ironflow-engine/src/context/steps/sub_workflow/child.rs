@@ -338,6 +338,7 @@ impl WorkflowContext {
             plan: None,
             output: None,
             worker_tags: self.worker_tags.clone(),
+            signal_sender: self.signal_sender.clone(),
             sibling_suspensions: Vec::new(),
         };
 

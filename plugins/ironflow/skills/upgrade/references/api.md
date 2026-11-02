@@ -237,6 +237,42 @@ are not allowed. A test serving a stub on `127.0.0.1` needs the same allowance.
 + .await?;
 ```
 
+## signal-received-sender
+- kind: breaking
+- since: ironflow-engine after 3.0.2 (#243)
+- compiler: `missing fields sender_run_id and sender_step_id in initializer of SignalReceivedEvent`
+
+`SignalReceivedEvent` names the workflow step that sent the signal with `ctx.send_signal`.
+A struct literal needs the two new fields, `None` for a signal sent from outside a
+workflow. `Event::run_id()` / `step_id()` return them, so such an event now shows in the
+audit log and SSE stream filtered by the sending run. A `match` on `StepKind` or
+`EngineError` needs an arm for `StepKind::SignalSend` and `EngineError::SignalNotAllowed`.
+
+```diff
+  let event = SignalReceivedEvent {
+      signal_id,
+      name,
+      key,
+      resumed_runs,
++     sender_run_id: None,
++     sender_step_id: None,
+      at,
+  };
+```
+
+## signal-delivery-limits
+- kind: behavior
+- since: ironflow-engine after 3.0.2 (#243)
+
+`Engine::deliver_signal` and `Engine::send_signal` refuse, with `EngineError::InvalidSignal`,
+a name, key or idempotency ID longer than 255 characters, and an empty idempotency ID, as
+`POST /api/v1/signals` already did. Truncate or hash a longer key before sending.
+
+```diff
+- engine.send_signal(&signal, &very_long_key, None).await?;
++ engine.send_signal(&signal, &sha256_hex(&very_long_key), None).await?;
+```
+
 ## sub-workflow-suspension
 - kind: behavior
 - since: ironflow-engine after 2.44.1 (#160)
