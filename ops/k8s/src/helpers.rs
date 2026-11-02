@@ -292,8 +292,8 @@ impl TriggerCronJob {
 
         let job_template = cj
             .spec
-            .as_ref()
-            .and_then(|s| s.job_template.spec.clone())
+            .job_template
+            .spec
             .ok_or_else(|| OperationError::Http {
                 status: None,
                 message: format!("CronJob '{cronjob_name}' has no job template spec"),
