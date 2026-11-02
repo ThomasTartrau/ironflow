@@ -267,6 +267,13 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 Claude CLI providers receive `--effort`, the Anthropic API provider `output_config.effort`;
 other HTTP providers ignore it, and without the call no flag is sent.
 
+`.timeout(Duration::from_secs(300))` bounds the step whatever the provider (automatic
+structured-output retries included) and fails it with `agent timed out after 300s`; the
+local process is killed, the K8s ephemeral pod deleted, and with Docker, SSH or a persistent
+pod the remote command is killed by `timeout -s KILL` (the image or host needs a `timeout`
+binary). Without it the provider timeout applies; it may be longer than the provider one and
+does not change the record/replay hash.
+
 `.available_tools([Tool::Read, Tool::Edit])` sets the built-in tools the Claude CLI session
 offers (`--tools`, empty for none). `.allow_tool` only pre-approves: in `dontAsk`, a read-only
 `Bash` or `Monitor` command outside the allowlist still runs, so a step without a shell sets
@@ -433,10 +440,10 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 
 An agent reused across workflows is an `impl AgentRole`, defined once. Only `prompt` is
 required. The persona, tools, `permission_mode`, MCP config and output type are locked at
-the call (a role with more rights is another role); the model, budget, `max_turns`, effort
-and per-call settings (`working_dir`, `allow_failure`, `retry_policy`, ..) can be
+the call (a role with more rights is another role); the model, budget, `max_turns`, effort,
+`timeout` and per-call settings (`working_dir`, `allow_failure`, `retry_policy`, ..) can be
 overridden on the task. An override changes the step config, so it also changes the
-record/replay fixture hash.
+record/replay fixture hash (except `timeout`, which is not hashed).
 
 `name()` is recorded on every step of the role as `agent_role`, to list its steps
 (`GET /api/v1/steps?agent_role=`, `ironflow-cli run steps --role`) and its cost

@@ -8,6 +8,10 @@
 //!
 //! * A Docker daemon must be reachable (local socket or remote TCP).
 //! * The target container must be running and have the `claude` binary installed.
+//! * A step that sets [`AgentConfig::timeout`] runs `claude` under
+//!   `timeout -s KILL`, so the container then needs a `timeout` binary
+//!   (coreutils or busybox) on its `PATH`: the container kills `claude` even
+//!   once the provider has dropped the exec, which Docker cannot kill.
 //!
 //! # Examples
 //!
@@ -118,6 +122,8 @@ impl DockerProvider {
     }
 
     /// Override the default timeout (default: 5 minutes).
+    ///
+    /// A step that sets [`AgentConfig::timeout`] uses its own limit instead.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -149,7 +155,8 @@ impl DockerProvider {
         common::validate_prompt_size(config)?;
         let built = common::build_command(config)?;
 
-        let mut cmd: Vec<String> = vec![self.claude_path.clone()];
+        let mut cmd: Vec<String> = common::remote_kill_args(config.timeout);
+        cmd.push(self.claude_path.clone());
         cmd.extend(built.args);
 
         let work_dir = config
@@ -166,6 +173,7 @@ impl DockerProvider {
         );
 
         let start = Instant::now();
+        let step_timeout = config.effective_timeout(self.timeout);
 
         let docker = self.connect()?;
 
@@ -218,7 +226,7 @@ impl DockerProvider {
         let mut stdout_buf = Vec::new();
         let mut stderr_buf = Vec::new();
 
-        let collect_result = time::timeout(self.timeout, async {
+        let collect_result = time::timeout(step_timeout, async {
             match start_result {
                 StartExecResults::Attached {
                     mut output,
@@ -272,9 +280,9 @@ impl DockerProvider {
 
         match collect_result {
             Err(_) => {
-                warn!(timeout = ?self.timeout, "docker exec timed out");
+                warn!(timeout = ?step_timeout, "docker exec timed out");
                 return Err(AgentError::Timeout {
-                    limit: self.timeout,
+                    limit: step_timeout,
                 });
             }
             Ok(Err(e)) => return Err(e),

@@ -75,10 +75,12 @@ use super::reaper::{ReapReport, reap_orphans};
 use super::toleration::K8sToleration;
 
 mod owner;
+mod pod_cleanup;
 mod step_tokens;
 
 use owner::OwnerPod;
 pub(super) use owner::has_owner;
+use pod_cleanup::PodCleanup;
 use step_tokens::StepTokens;
 
 /// Environment variable carrying the OAuth credentials JSON read from a Secret.
@@ -1279,8 +1281,9 @@ struct CreatedPod {
     pods: Api<Pod>,
     pod_name: String,
     start: Instant,
-    prompt_configmap: Option<String>,
-    configmaps: Option<Api<ConfigMap>>,
+    /// The pod and its prompt ConfigMap, deleted at the end of the step, or
+    /// when the step is dropped.
+    cleanup: PodCleanup,
     /// Auth proxy tokens issued for the pod (Claude and proxied secrets),
     /// revoked at the end of the step, or when the step is dropped.
     tokens: StepTokens,
@@ -1638,13 +1641,16 @@ impl K8sEphemeralProvider {
     }
 
     /// The `activeDeadlineSeconds` of the pod: the explicit value when set,
-    /// else timeout + margin when sandboxed, else none.
-    fn effective_deadline(&self) -> Option<Duration> {
-        self.active_deadline_seconds.or_else(|| {
-            self.sandbox
-                .as_ref()
-                .map(|s| self.timeout + s.deadline_margin)
-        })
+    /// else `timeout` (the step timeout, or the provider one) + margin when
+    /// sandboxed, else none. The explicit value stays a hard cap set by the
+    /// operator.
+    fn effective_deadline(&self, timeout: Duration) -> Option<Duration> {
+        if self.active_deadline_seconds.is_some() {
+            return self.active_deadline_seconds;
+        }
+        self.sandbox
+            .as_ref()
+            .map(|s| timeout.saturating_add(s.deadline_margin))
     }
 
     /// Delete the pods and prompt ConfigMaps left by a previous attempt of the
@@ -1776,8 +1782,9 @@ impl K8sEphemeralProvider {
         }
 
         // Computed after the cleanup wait so it does not eat into the timeout.
-        let lifetime = self.timeout + self.deadline_margin_or_default();
-        let expires_at = now_unix()? + lifetime.as_secs();
+        let timeout = config.effective_timeout(self.timeout);
+        let lifetime = timeout.saturating_add(self.deadline_margin_or_default());
+        let expires_at = now_unix()?.saturating_add(lifetime.as_secs());
         let mut annotations = BTreeMap::new();
         annotations.insert(LABEL_EXPIRES_AT.to_string(), expires_at.to_string());
 
@@ -1956,7 +1963,7 @@ impl K8sEphemeralProvider {
             Ok(mut pod_spec) => {
                 // Applied after build_pod_spec: the shared PodConfig builder does not
                 // carry these fields, so they are set on the built pod here.
-                apply_active_deadline_seconds(&mut pod_spec, self.effective_deadline());
+                apply_active_deadline_seconds(&mut pod_spec, self.effective_deadline(timeout));
                 apply_runtime_class(&mut pod_spec, merged.runtime_class.as_deref());
                 pod_spec.metadata.owner_references =
                     self.owner.as_ref().map(|o| vec![o.reference()]);
@@ -1979,12 +1986,16 @@ impl K8sEphemeralProvider {
             return Err(e);
         }
 
+        let cleanup = PodCleanup::new(
+            pods.clone(),
+            pod_name.clone(),
+            prompt_configmap_name.map(|name| (configmaps, name)),
+        );
         Ok(CreatedPod {
             pods,
             pod_name,
             start,
-            prompt_configmap: prompt_configmap_name,
-            configmaps: Some(configmaps),
+            cleanup,
             tokens,
             environment_id: environment.map(|claim| claim.name),
         })
@@ -2105,7 +2116,7 @@ impl K8sEphemeralProvider {
             return Ok(None);
         };
         let claim = environment_claim_for(config.resume_environment_id.as_deref())?;
-        let expires_at = now_unix()? + volume.ttl.max(lifetime).as_secs();
+        let expires_at = now_unix()?.saturating_add(volume.ttl.max(lifetime).as_secs());
 
         if claim.created {
             let pvc = build_environment_claim(
@@ -2167,9 +2178,10 @@ impl K8sEphemeralProvider {
         rate_limit_event::record_rate_limits(config, logs);
 
         if timed_out {
-            warn!(timeout = ?self.timeout, pod = %pod_name, "K8s pod timed out");
+            let step_timeout = config.effective_timeout(self.timeout);
+            warn!(timeout = ?step_timeout, pod = %pod_name, "K8s pod timed out");
             return Err(AgentError::Timeout {
-                limit: self.timeout,
+                limit: step_timeout,
             });
         }
 
@@ -2198,21 +2210,21 @@ impl K8sEphemeralProvider {
     async fn run_created(
         &self,
         config: &AgentConfig,
-        created: &CreatedPod,
+        created: &mut CreatedPod,
     ) -> Result<AgentOutput, AgentError> {
         let CreatedPod {
             pods,
             pod_name,
             start,
-            prompt_configmap,
-            configmaps,
+            cleanup,
             environment_id,
             ..
         } = created;
+        let step_timeout = config.effective_timeout(self.timeout);
 
         // Wait for pod to complete
         let wait_result = time::timeout(
-            self.timeout,
+            step_timeout,
             await_condition(pods.clone(), pod_name, is_pod_completed()),
         )
         .await;
@@ -2238,10 +2250,7 @@ impl K8sEphemeralProvider {
             .await
             .unwrap_or_default();
 
-        let _ = pods.delete(pod_name, &DeleteParams::default()).await;
-        if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
-            let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
-        }
+        cleanup.delete().await;
 
         let output = self.finalize_pod(&logs, &pod_phase, timed_out, pod_name, config, *start)?;
         Ok(with_environment(output, environment_id.as_deref()))
@@ -2252,41 +2261,35 @@ impl K8sEphemeralProvider {
     async fn run_created_with_logs(
         &self,
         config: &AgentConfig,
-        created: &CreatedPod,
+        created: &mut CreatedPod,
         log_sink: Arc<dyn LogSink>,
     ) -> Result<AgentOutput, AgentError> {
         let CreatedPod {
             pods,
             pod_name,
             start,
-            prompt_configmap,
-            configmaps,
+            cleanup,
             environment_id,
             ..
         } = created;
+        let step_timeout = config.effective_timeout(self.timeout);
 
         let ready_result = time::timeout(
-            self.timeout,
+            step_timeout,
             await_condition(pods.clone(), pod_name, is_pod_running_or_terminal()),
         )
         .await;
 
         if let Err(_elapsed) = ready_result {
-            let _ = pods.delete(pod_name, &DeleteParams::default()).await;
-            if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
-                let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
-            }
-            warn!(timeout = ?self.timeout, pod = %pod_name, "K8s pod timed out waiting for Running");
+            cleanup.delete().await;
+            warn!(timeout = ?step_timeout, pod = %pod_name, "K8s pod timed out waiting for Running");
             return Err(AgentError::Timeout {
-                limit: self.timeout,
+                limit: step_timeout,
             });
         }
 
         if let Err(e) = ready_result.expect("timeout already handled") {
-            let _ = pods.delete(pod_name, &DeleteParams::default()).await;
-            if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
-                let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
-            }
+            cleanup.delete().await;
             return Err(AgentError::ProcessFailed {
                 exit_code: -1,
                 stderr: format!("failed waiting for pod to start: {e}"),
@@ -2335,7 +2338,7 @@ impl K8sEphemeralProvider {
             };
 
             let stream_result = time::timeout(
-                self.timeout,
+                step_timeout,
                 async {
                     match pods.log_stream(pod_name, &log_params).await {
                         Ok(stream) => {
@@ -2397,7 +2400,7 @@ impl K8sEphemeralProvider {
             if let Ok(Err(e)) = stream_result {
                 warn!(pod = %pod_name, error = %e, "failed to open log stream, falling back to batch read");
                 let _ = time::timeout(
-                    self.timeout,
+                    step_timeout,
                     await_condition(pods.clone(), pod_name, is_pod_completed()),
                 )
                 .await;
@@ -2424,10 +2427,7 @@ impl K8sEphemeralProvider {
             }
         };
 
-        let _ = pods.delete(pod_name, &DeleteParams::default()).await;
-        if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
-            let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
-        }
+        cleanup.delete().await;
 
         let output = self.finalize_pod(
             &accumulated,
@@ -2475,8 +2475,8 @@ impl AgentProvider for K8sEphemeralProvider {
 
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
-            let created = self.create_pod(config).await?;
-            let result = self.run_created(config, &created).await;
+            let mut created = self.create_pod(config).await?;
+            let result = self.run_created(config, &mut created).await;
             created.tokens.revoke().await;
             result
         })
@@ -2497,8 +2497,10 @@ impl AgentProvider for K8sEphemeralProvider {
                 config
             };
 
-            let created = self.create_pod(config).await?;
-            let result = self.run_created_with_logs(config, &created, log_sink).await;
+            let mut created = self.create_pod(config).await?;
+            let result = self
+                .run_created_with_logs(config, &mut created, log_sink)
+                .await;
             created.tokens.revoke().await;
             result
         })
@@ -3175,22 +3177,43 @@ mod tests {
         let provider = K8sEphemeralProvider::sandboxed("img:v1")
             .timeout(Duration::from_secs(600))
             .active_deadline_seconds(Duration::from_secs(30));
-        assert_eq!(provider.effective_deadline(), Some(Duration::from_secs(30)));
+        assert_eq!(
+            provider.effective_deadline(provider.timeout),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            provider.effective_deadline(Duration::from_secs(7200)),
+            Some(Duration::from_secs(30))
+        );
     }
 
     #[test]
     fn effective_deadline_sandboxed_is_timeout_plus_margin() {
         let provider = K8sEphemeralProvider::sandboxed("img:v1").timeout(Duration::from_secs(600));
         assert_eq!(
-            provider.effective_deadline(),
+            provider.effective_deadline(provider.timeout),
             Some(Duration::from_secs(660))
+        );
+        let step = AgentConfig::new("p").timeout(Duration::from_secs(1800));
+        assert_eq!(
+            provider.effective_deadline(step.effective_timeout(provider.timeout)),
+            Some(Duration::from_secs(1860))
+        );
+    }
+
+    #[test]
+    fn effective_deadline_saturates_on_the_largest_step_timeout() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1");
+        assert_eq!(
+            provider.effective_deadline(Duration::MAX),
+            Some(Duration::MAX)
         );
     }
 
     #[test]
     fn effective_deadline_non_sandboxed_defaults_to_none() {
         let provider = K8sEphemeralProvider::new("img:v1").timeout(Duration::from_secs(600));
-        assert_eq!(provider.effective_deadline(), None);
+        assert_eq!(provider.effective_deadline(provider.timeout), None);
     }
 
     #[test]

@@ -24,6 +24,28 @@ step does both now (tested with Claude Code 2.1.296 and 2.1.304).
 
 Raise `max_turns` by one per round of tool calls. Section: Agent.
 
+## agent-step-timeout
+- kind: adopt
+- since: ironflow-core after 5.0.2, ironflow-engine after 3.0.2 (#242)
+
+A long agent step used to need the provider timeout raised for every step, so the longest
+one fit and a stuck short one ran for as long. `.timeout(..)` bounds one step whatever the
+provider, its automatic structured-output retries included, and replaces the provider
+timeout for that step (it may be longer). Past it the step fails with
+`agent timed out after ..` and its environment is stopped. With Docker, SSH or a persistent
+K8s pod, the remote command then runs under `timeout -s KILL`: the image or host needs a
+`timeout` binary (coreutils or busybox). The record/replay hash ignores it.
+
+```diff
+- let provider = ClaudeCodeProvider::new().timeout(Duration::from_secs(1800));
++ let provider = ClaudeCodeProvider::new();
+  // ...
+- ctx.agent("triage", AgentStepConfig::new(&prompt)).await?;
++ ctx.agent("triage", AgentStepConfig::new(&prompt).timeout(Duration::from_secs(300))).await?;
+```
+
+Section: Agent.
+
 ## untrusted-prompt
 - kind: adopt
 - since: ironflow-core after 4.18.1, ironflow-engine after 2.54.3 (#226)

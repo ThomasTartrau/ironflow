@@ -41,6 +41,15 @@ runs each agent in a hardened pod: non-root, read-only root filesystem, secrets
 read from Kubernetes Secrets, managed-settings presets and egress profiles. See
 [Kubernetes Sandbox](k8s-sandbox.md).
 
+## Step timeout
+
+A step with `AgentConfig::timeout` (see [Agent steps](../concepts/steps.md#agent-steps))
+replaces the provider timeout. The ephemeral Kubernetes pod is deleted when the step
+times out. With Docker, SSH or a persistent pod, a step with a timeout runs `claude` under
+`timeout -s KILL`, so the image or host needs a `timeout` binary (coreutils or busybox) on
+its `PATH`: the remote side then kills `claude` 5 s after the limit, even once the
+connection is gone. A step without a timeout runs the command unchanged.
+
 ## Provider Account credentials
 
 The local, Docker and SSH transports inject the credential of the
