@@ -1,26 +1,18 @@
 # Ignored advisories for transitive dependencies with no fix available.
-# These come from `russh` (transport-ssh feature) and have no upstream fix yet.
 
 [advisories]
 ignore = [
-    # libcrux-sha3 0.0.4 (via russh -> libcrux-ml-kem)
-    # No fixed version available
-    "RUSTSEC-2026-0074",
-
-    # rsa 0.10.0-rc.12 (via russh) -- Marvin Attack timing sidechannel
-    # No fixed version available
+    # rsa 0.9 (via jsonwebtoken) and rsa 0.10.0-rc (via russh, transport-ssh)
+    # Marvin Attack timing sidechannel. No fixed version available.
     "RUSTSEC-2023-0071",
-
-    # proc-macro-error2 2.0.1 (via validator_derive) -- unmaintained
-    # validator 0.20 is the latest version, no alternative available
-    "RUSTSEC-2026-0173",
-
-    # rkyv 0.7.46 (optional dep of rust_decimal, never compiled)
-    # rust_decimal's rkyv feature is not enabled; present in lockfile only
-    "RUSTSEC-2026-0235",
 
     # crypto-bigint 0.5.5 (via elliptic-curve 0.13 / aws-sigv4) -- timing variability
     # The fix is only in >=0.7.6, no 0.5.x backport. Remove this entry once
     # aws-sigv4 moves off elliptic-curve 0.13.
     "RUSTSEC-2026-0387",
+
+    # unsafe-libyaml 0.2 (via serde_yaml, via progenitor-macro) -- unmaintained
+    # Build-time proc-macro of ironflow-sdk only, never linked into a binary.
+    # progenitor-macro still depends on serde_yaml in 0.15; remove once it moves off it.
+    "RUSTSEC-2024-0449",
 ]
