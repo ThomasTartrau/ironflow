@@ -309,3 +309,23 @@ must authenticate as such.
 - ironflow-cli api-key create audit-feed --scope runs_read
 + ironflow-cli api-key create audit-feed --scope admin
 ```
+
+## server-execution-mode-workers
+- kind: behavior
+- since: ironflow-api after 3.1.2 (#245)
+- detect: `Engine::new\(.*\)\.with_budget_config\(`
+
+A server that runs separately from its workers must build its engine with
+`ExecutionMode::Workers`. Under the default `Local`, every run woken by a signal, an approval,
+a human input or the Waker is resumed inside the server, which has neither the agent nor the
+tools of the worker: `failed to spawn claude: No such file or directory` at the first agent
+step after a human answer. Projects scaffolded before this change are affected. Not needed
+when one process is both server and worker.
+
+```diff
+- let mut engine = Engine::new(store.clone(), provider).with_budget_config(budget);
++ let mut engine = Engine::new(store.clone(), provider)
++     .with_budget_config(budget)
++     .with_execution_mode(ExecutionMode::Workers);
++ // + use ironflow_engine::engine::ExecutionMode;
+```

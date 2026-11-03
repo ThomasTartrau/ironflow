@@ -41,7 +41,9 @@ docker run -d --name ironflow-pg -e POSTGRES_USER=ironflow -e POSTGRES_PASSWORD=
 ## Agent provider on the worker
 
 The worker owns the provider. The server keeps `ClaudeCodeProvider`; it never runs an
-agent step.
+agent step because its engine is built with `ExecutionMode::Workers` (`build_engine` in
+`server/src/main.rs`). A project that merges server and worker in one process must use
+`ExecutionMode::Local` instead.
 
 ### Anthropic API
 

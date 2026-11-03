@@ -22,7 +22,8 @@ graph TD
 The API owns persistence and never executes a workflow itself (except when it resumes a run
 in [local execution mode](../concepts/engine-worker.md#execution-mode)). Workers poll the API
 for pending runs, execute the workflow handler locally, and stream steps and logs back.
-Scaling out means starting more workers.
+Scaling out means starting more workers. The scaffolded server and the example server run in
+`Workers` mode.
 
 `ironflow-runtime` is a separate, lighter path: a standalone daemon with webhook endpoints
 and trigger sources that calls `ironflow-core` operations directly, without a store or an

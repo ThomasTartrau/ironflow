@@ -1,5 +1,6 @@
 //! API server: owns persistence, serves the REST API and the dashboard,
-//! and never executes a workflow itself. Workers do that.
+//! and never executes a workflow itself: its engine runs in
+//! `ExecutionMode::Workers`, so workers do that.
 //!
 //! ```sh
 //! cargo run -p server
@@ -29,10 +30,11 @@ use ironflow_api::state::AppState;
 use ironflow_artifacts::blob_store::BlobStore;
 use ironflow_artifacts::local::LocalBlobStore;
 use ironflow_auth::jwt::JwtConfig;
+use ironflow_core::provider::AgentProvider;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::artifact::DirectArtifactSink;
 use ironflow_engine::budget::BudgetConfig;
-use ironflow_engine::engine::Engine;
+use ironflow_engine::engine::{Engine, ExecutionMode};
 use ironflow_engine::notify::{AuditLogSubscriber, Event, WebhookSubscriber, WorkflowEventBus};
 use ironflow_store::crypto::{KeyRing, SECRET_KEYS_ENV};
 use ironflow_store::memory::InMemoryStore;
@@ -95,9 +97,13 @@ async fn main() {
     // ---- Engine -----------------------------------------------------------
     // The server never runs agent steps; the provider is only required by
     // the engine constructor. Workers choose the real provider.
+    // `ExecutionMode::Workers` is what guarantees it: the default `Local` would
+    // resume woken runs here, where `claude` is absent (`failed to spawn claude:
+    // No such file or directory`).
     let provider = Arc::new(ClaudeCodeProvider::new());
     let budget = BudgetConfig::from_env();
-    let mut engine = Engine::new(store.clone(), provider).with_budget_config(budget);
+    // Go through `build_engine` so the mode is the one the test pins.
+    let mut engine = build_engine(store.clone(), provider, budget);
     for handler in handlers() {
         engine.register(handler).expect("handler names are unique");
     }
@@ -192,6 +198,19 @@ async fn main() {
         .expect("serve");
 }
 
+/// Builds the server's engine. The server resumes no run itself: a run woken by a
+/// signal, an approval, a human input or the Waker goes back to `Pending` and a
+/// worker, which owns the agent and the tools, finishes it.
+fn build_engine(
+    store: Arc<dyn Store>,
+    provider: Arc<dyn AgentProvider>,
+    budget: BudgetConfig,
+) -> Engine {
+    Engine::new(store, provider)
+        .with_budget_config(budget)
+        .with_execution_mode(ExecutionMode::Workers)
+}
+
 /// CORS: only the configured origins, or same-origin when none is set.
 fn build_cors(config: &ServerConfig) -> CorsLayer {
     let methods = vec![Method::GET, Method::POST, Method::PUT, Method::DELETE];
@@ -220,5 +239,25 @@ fn build_cors(config: &ServerConfig) -> CorsLayer {
         None => CorsLayer::new()
             .allow_methods(methods)
             .allow_headers(headers),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_engine_resumes_woken_runs_on_workers() {
+        let engine = build_engine(
+            Arc::new(InMemoryStore::new()),
+            Arc::new(ClaudeCodeProvider::new()),
+            BudgetConfig::new(),
+        );
+
+        assert_eq!(
+            engine.execution_mode(),
+            ExecutionMode::Workers,
+            "a Local server would resume woken runs itself, without the worker's agent or tools"
+        );
     }
 }
