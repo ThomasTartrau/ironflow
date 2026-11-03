@@ -261,16 +261,25 @@ impl RunStore for ApiRunStore {
         })
     }
 
-    fn list_runs(
-        &self,
-        _filter: RunFilter,
-        _page: u32,
-        _per_page: u32,
-    ) -> StoreFuture<'_, Page<Run>> {
+    fn list_runs(&self, filter: RunFilter, page: u32, per_page: u32) -> StoreFuture<'_, Page<Run>> {
         Box::pin(async move {
-            Err(StoreError::Database(
-                "list_runs not supported via worker API".to_string(),
-            ))
+            // POST: the filter's labels do not fit a query string.
+            let resp = self
+                .client
+                .post(self.internal("/runs/search"))
+                .bearer_auth(&self.token)
+                .json(&json!({ "filter": filter, "page": page, "per_page": per_page }))
+                .send()
+                .await
+                .map_err(Self::err)?;
+
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Self::status_err(&body));
+            }
+
+            let api_resp: ApiResponse<Page<Run>> = resp.json().await.map_err(Self::err)?;
+            Ok(api_resp.data)
         })
     }
 
@@ -1401,21 +1410,6 @@ mod tests {
         match result {
             Err(StoreError::Database(msg)) => assert!(msg.contains("not supported")),
             other => panic!("expected an unsupported-operation error, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn list_runs_not_supported() {
-        let store = ApiRunStore::new("http://localhost:3000", "token");
-        let result = store
-            .list_runs(ironflow_store::entities::RunFilter::default(), 0, 10)
-            .await;
-        assert!(result.is_err());
-        match result {
-            Err(StoreError::Database(msg)) => {
-                assert!(msg.contains("not supported"));
-            }
-            _ => panic!("expected Database error"),
         }
     }
 
