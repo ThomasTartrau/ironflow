@@ -170,6 +170,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
     let internal_routes = Router::new()
         .route("/runs", post(internal::create_run::create_run))
         .route("/runs/next", get(internal::pick_next_run::pick_next_run))
+        .route("/runs/search", post(internal::search_runs::search_runs))
         .route(
             "/runs/pending-count",
             get(internal::count_pending_runs::count_pending_runs),

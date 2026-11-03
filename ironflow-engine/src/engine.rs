@@ -862,6 +862,22 @@ impl Engine {
         Ok(ctx)
     }
 
+    /// Record `err`, raised after the run was claimed but before its handler
+    /// ran, as the run's failure, then hand it back.
+    ///
+    /// Without it the run stays `Running` until its lease expires, and only
+    /// shows "worker lease expired" instead of the real cause.
+    async fn fail_before_execution(&self, run_id: Uuid, err: EngineError) -> EngineError {
+        let retryable = is_run_retryable(&err);
+        if let Err(store_err) = self
+            .fail_or_schedule_retry(run_id, &err.to_string(), retryable, None, None)
+            .await
+        {
+            error!(run_id = %run_id, store_error = %store_err, "failed to persist run failure");
+        }
+        err
+    }
+
     /// List every run matching `filter`, page after page.
     ///
     /// Every page is read before the caller acts on a run: a run that leaves
@@ -1601,9 +1617,10 @@ impl Engine {
         gauge!(RUNS_ACTIVE, "workflow" => run.workflow_name.clone()).increment(1.0);
 
         let run_start = Instant::now();
-        let mut ctx = self
-            .build_context_with_guard(&run, handler.as_ref())
-            .await?;
+        let mut ctx = match self.build_context_with_guard(&run, handler.as_ref()).await {
+            Ok(ctx) => ctx,
+            Err(err) => return Err(self.fail_before_execution(run_id, err).await),
+        };
 
         // Replay the steps already persisted for this run: on a retry, an approval
         // a human already granted must not be asked again, and a run requeued to
@@ -1618,7 +1635,9 @@ impl Engine {
         // (`EngineError::ReplayDivergence`), so no step is replayed at all
         // when the handler changed incompatibly since the run was created.
         let result = if handler.is_version_compatible(run.handler_version.as_deref()) {
-            ctx.load_replay_steps().await?;
+            if let Err(err) = ctx.load_replay_steps().await {
+                return Err(self.fail_before_execution(run_id, err).await);
+            }
             self.release_then_execute(run_id, handler.as_ref(), &mut ctx)
                 .await
         } else {
@@ -1818,12 +1837,15 @@ impl Engine {
         info!(run_id = %run_id, workflow = %run.workflow_name, "resuming run after approval");
 
         let run_start = Instant::now();
-        let mut ctx = self
-            .build_context_with_guard(&run, handler.as_ref())
-            .await?;
+        let mut ctx = match self.build_context_with_guard(&run, handler.as_ref()).await {
+            Ok(ctx) => ctx,
+            Err(err) => return Err(self.fail_before_execution(run_id, err).await),
+        };
 
         let result = if handler.is_version_compatible(run.handler_version.as_deref()) {
-            ctx.load_replay_steps().await?;
+            if let Err(err) = ctx.load_replay_steps().await {
+                return Err(self.fail_before_execution(run_id, err).await);
+            }
             self.release_then_execute(run_id, handler.as_ref(), &mut ctx)
                 .await
         } else {

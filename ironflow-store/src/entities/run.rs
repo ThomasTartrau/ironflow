@@ -734,6 +734,8 @@ pub struct NewRun {
 ///
 /// All fields are optional; `None` means "no filter" for that field.
 ///
+/// Serializable so a worker can send it to the API's internal run search.
+///
 /// # Examples
 ///
 /// ```
@@ -745,7 +747,8 @@ pub struct NewRun {
 ///     ..RunFilter::default()
 /// };
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RunFilter {
     /// Filter by workflow name (exact match).
     pub workflow_name: Option<String>,
