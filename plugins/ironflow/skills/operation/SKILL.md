@@ -97,6 +97,8 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 
 The step is stored with kind `custom:<kind()>`, so keep `kind()` short, lowercase and stable.
 
+An `Err` from `execute` fails the step and the run. When the workflow should carry on, call `ctx.operation_allow_failure(name, &op)` instead: the step is still recorded as Failed, the run ends as `Warning`, and the handler reads the message through `error()` on the returned output.
+
 ## 4. Verify
 
 ```bash
