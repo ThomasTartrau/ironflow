@@ -48,7 +48,8 @@ use super::steps::sub_workflow::recorded_child_run_id;
 /// Whether a failed step may be replayed when the handler tolerates its failure.
 ///
 /// Interrupted and capacity-parked steps are markers for "execute again", and
-/// only shell, HTTP and agent steps carry an `allow_failure` output. A step
+/// only shell, HTTP, agent and operation steps carry an `allow_failure`
+/// output. A step
 /// with declared inputs is not replayed: its failure may come from the input
 /// preparation, which neither fires error handlers nor reaches a wave result,
 /// and the stored step cannot tell the two causes apart.
@@ -58,7 +59,7 @@ fn is_replayable_failure(step: &Step) -> bool {
         && !has_declared_inputs(step)
         && matches!(
             step.kind,
-            StepKind::Shell | StepKind::Http | StepKind::Agent
+            StepKind::Shell | StepKind::Http | StepKind::Agent | StepKind::Custom(_)
         )
         && step
             .error

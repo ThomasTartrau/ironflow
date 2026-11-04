@@ -9,6 +9,7 @@ use tracing::{error, info};
 use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_trace_id};
 
 use crate::context::WorkflowContext;
+use crate::context::failure::allowed_failure_output;
 use crate::error::EngineError;
 use crate::executor::{StepArtifacts, StepOutput};
 use crate::operation::Operation;
@@ -64,6 +65,53 @@ impl WorkflowContext {
         name: &str,
         op: &dyn Operation,
     ) -> Result<StepOutput, EngineError> {
+        self.run_operation(name, op, false).await
+    }
+
+    /// Execute a custom operation step whose failure does not stop the run.
+    ///
+    /// Same as [`operation`](Self::operation), except when
+    /// [`Operation::execute`] fails: the step is recorded as Failed, the run
+    /// ends as `Warning` instead of `Completed`, and the handler receives an
+    /// output whose [`error()`](StepOutput::error) is the failure. On resume,
+    /// the tolerated failure is replayed with that output, not executed again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if the store errors, or
+    /// [`EngineError::ReplayDivergence`] when the step recorded at this
+    /// position has a different name or kind. Never for a failure of the
+    /// operation itself.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
+    /// use ironflow_engine::operation::Operation;
+    ///
+    /// # async fn example(ctx: &mut WorkflowContext, op: &dyn Operation) -> Result<(), EngineError> {
+    /// let result = ctx.operation_allow_failure("regenerate", op).await?;
+    /// if let Some(error) = result.error() {
+    ///     println!("regeneration failed, carrying on: {error}");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn operation_allow_failure(
+        &mut self,
+        name: &str,
+        op: &dyn Operation,
+    ) -> Result<StepOutput, EngineError> {
+        self.run_operation(name, op, true).await
+    }
+
+    async fn run_operation(
+        &mut self,
+        name: &str,
+        op: &dyn Operation,
+        allow_failure: bool,
+    ) -> Result<StepOutput, EngineError> {
         let kind = StepKind::Custom(op.kind().to_string());
 
         // Plan mode: `op.execute` is never called, so no third-party API is
@@ -82,10 +130,10 @@ impl WorkflowContext {
         let position = self.position;
         self.position += 1;
 
-        // Replay: if this step already completed in a prior execution of the
-        // current attempt, return its cached output without calling
-        // `op.execute` or creating a new step.
-        if let Some(mut output) = self.try_replay_step(position, name, &kind, false)? {
+        // Replay: if this step already completed, or failed while tolerated,
+        // in a prior execution of the current attempt, return its recorded
+        // output without calling `op.execute` or creating a new step.
+        if let Some(mut output) = self.try_replay_step(position, name, &kind, allow_failure)? {
             let step_id = self.last_step_ids.last().copied();
             output.artifacts = StepArtifacts::new(name, step_id, &[]);
             return Ok(output);
@@ -177,7 +225,23 @@ impl WorkflowContext {
                     error!(step_id = %step.id, error = %store_err, "failed to persist step failure");
                 }
 
-                Err(engine_err)
+                if !allow_failure {
+                    return Err(engine_err);
+                }
+                self.has_allowed_failure = true;
+                self.last_step_ids = vec![step.id];
+                info!(
+                    run_id = %self.run_id,
+                    step = %name,
+                    kind = op.kind(),
+                    error = %engine_err,
+                    "operation step failed but allow_failure is set, continuing"
+                );
+                let mut output = allowed_failure_output(&engine_err.to_string(), None, None);
+                output.duration_ms = start.elapsed().as_millis() as u64;
+                self.total_duration_ms += output.duration_ms;
+                output.artifacts = StepArtifacts::new(name, Some(step.id), &[]);
+                Ok(output)
             }
         }
     }

@@ -16,19 +16,21 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
-use ironflow_core::error::AgentError;
+use ironflow_core::error::{AgentError, OperationError};
 use ironflow_core::provider::{AgentConfig, AgentProvider, InvokeFuture};
 use ironflow_engine::config::{AgentStepConfig, ShellConfig, StepConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+use ironflow_engine::operation::{Operation, OperationContext};
 use ironflow_engine::signal::Signal;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{RunStatus, StepStatus, TriggerKind};
@@ -98,6 +100,72 @@ impl WorkflowHandler for SequentialWorkflow {
             assert!(review.error().is_some(), "the failure is tolerated");
             self.seen.lock().expect("seen lock").push(review.output);
             wait_for_pipeline(ctx).await?;
+            Ok(())
+        })
+    }
+}
+
+/// A custom operation that always fails, counting its calls.
+struct FailingOp {
+    calls: Arc<AtomicU32>,
+}
+
+#[async_trait]
+impl Operation for FailingOp {
+    fn kind(&self) -> &str {
+        "failing-op"
+    }
+
+    async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(OperationError::External {
+            origin: "test".to_string(),
+            message: "script exited with 1".to_string(),
+        })
+    }
+}
+
+/// A tolerated operation failure, then a signal wait, then the same output read again.
+struct OperationWorkflow {
+    calls: Arc<AtomicU32>,
+    seen: Seen,
+}
+
+impl WorkflowHandler for OperationWorkflow {
+    fn name(&self) -> &str {
+        "tolerated-operation"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let op = FailingOp {
+                calls: self.calls.clone(),
+            };
+            let regenerate = ctx.operation_allow_failure("regenerate", &op).await?;
+            assert!(regenerate.error().is_some(), "the failure is tolerated");
+            self.seen.lock().expect("seen lock").push(regenerate.output);
+            wait_for_pipeline(ctx).await?;
+            Ok(())
+        })
+    }
+}
+
+/// The same failing operation, not tolerated.
+struct StrictOperationWorkflow {
+    calls: Arc<AtomicU32>,
+}
+
+impl WorkflowHandler for StrictOperationWorkflow {
+    fn name(&self) -> &str {
+        "strict-operation"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let op = FailingOp {
+                calls: self.calls.clone(),
+            };
+            ctx.operation("regenerate", &op).await?;
             Ok(())
         })
     }
@@ -237,6 +305,65 @@ async fn replays_a_tolerated_failure_after_a_signal() {
     assert_eq!(seen.len(), 2, "the handler ran before and after the signal");
     assert_eq!(seen[0], seen[1], "the replayed output is the original one");
     assert!(seen[0]["error"].is_string());
+}
+
+#[tokio::test]
+async fn replays_a_tolerated_failure_of_an_operation() {
+    let calls = Arc::new(AtomicU32::new(0));
+    let seen = Seen::default();
+    let (engine, store, _) = setup(OperationWorkflow {
+        calls: calls.clone(),
+        seen: seen.clone(),
+    });
+
+    let run_id = start_waiting(&engine, "tolerated-operation").await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let steps = store.list_steps(run_id).await.expect("list steps");
+    let step = steps
+        .iter()
+        .find(|s| s.name == "regenerate")
+        .expect("regenerate step");
+    assert_eq!(step.status.state, StepStatus::Failed);
+    assert!(
+        step.error
+            .as_deref()
+            .is_some_and(|e| e.contains("script exited with 1")),
+        "the step keeps the operation's error: {:?}",
+        step.error
+    );
+    let step_id = step.id;
+
+    resume_with_signal(&engine, &store, run_id).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the tolerated failure is not executed again"
+    );
+    let steps = store.list_steps(run_id).await.expect("list steps");
+    let regenerations: Vec<_> = steps.iter().filter(|s| s.name == "regenerate").collect();
+    assert_eq!(regenerations.len(), 1, "no second 'regenerate' step");
+    assert_eq!(regenerations[0].id, step_id);
+
+    let seen = seen.lock().expect("seen lock");
+    assert_eq!(seen.len(), 2, "the handler ran before and after the signal");
+    assert_eq!(seen[0], seen[1], "the replayed output is the original one");
+    assert!(seen[0]["error"].is_string());
+}
+
+#[tokio::test]
+async fn an_operation_failure_without_tolerance_fails_the_run() {
+    let calls = Arc::new(AtomicU32::new(0));
+    let (engine, _, _) = setup(StrictOperationWorkflow {
+        calls: calls.clone(),
+    });
+
+    let result = engine
+        .run_handler("strict-operation", TriggerKind::Manual, json!({}))
+        .await;
+
+    assert!(result.is_err(), "the failure reaches the caller");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
