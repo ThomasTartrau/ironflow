@@ -40,6 +40,10 @@
 //! - `IRONFLOW_SEED` (optional: when set to any value, seeds development data
 //!   at startup -- users, runs, steps, API keys)
 //!
+//! The server runs with `ExecutionMode::Workers`: a run woken by a signal, an
+//! approval or a human input goes back to `Pending`. Run `ironflow-example-worker`
+//! (`examples/worker`) alongside, otherwise woken runs wait in `Pending`.
+//!
 //! `GET /api/v1/metrics` serves Prometheus metrics (the `prometheus` feature)
 //! to an admin session or a `stats_read` API key owned by an admin.
 
@@ -63,10 +67,11 @@ use ironflow_api::state::AppState;
 use ironflow_artifacts::blob_store::BlobStore;
 use ironflow_artifacts::local::LocalBlobStore;
 use ironflow_auth::jwt::JwtConfig;
+use ironflow_core::provider::AgentProvider;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::artifact::DirectArtifactSink;
 use ironflow_engine::budget::BudgetConfig;
-use ironflow_engine::engine::Engine;
+use ironflow_engine::engine::{Engine, ExecutionMode};
 use ironflow_engine::notify::{AuditLogSubscriber, Event, WebhookSubscriber, WorkflowEventBus};
 use ironflow_store::crypto::{KeyRing, SECRET_KEYS_ENV};
 use ironflow_store::memory::InMemoryStore;
@@ -161,7 +166,8 @@ async fn main() {
         "cost guardrails loaded"
     );
 
-    let mut engine = Engine::new(store.clone(), provider).with_budget_config(budget);
+    // Go through `build_engine` so the mode is the one the test pins.
+    let mut engine = build_engine(store.clone(), provider, budget);
     ironflow_workflows::register_all(&mut engine).expect("failed to register workflows");
 
     // Artifacts stay off until a storage root is configured. The API and any
@@ -266,6 +272,19 @@ async fn main() {
         .expect("serve");
 }
 
+/// Builds the server's engine. The server resumes no run itself: a run woken by a
+/// signal, an approval, a human input or the Waker goes back to `Pending` and a
+/// worker, which owns the agent and the tools, finishes it.
+fn build_engine(
+    store: Arc<dyn Store>,
+    provider: Arc<dyn AgentProvider>,
+    budget: BudgetConfig,
+) -> Engine {
+    Engine::new(store, provider)
+        .with_budget_config(budget)
+        .with_execution_mode(ExecutionMode::Workers)
+}
+
 /// Build CORS layer from config.
 ///
 /// - If `allowed_origins` is set: only those origins are permitted (comma-separated).
@@ -306,5 +325,25 @@ fn build_cors(config: &ServerConfig) -> CorsLayer {
                 .allow_methods(methods)
                 .allow_headers(headers)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_engine_resumes_woken_runs_on_workers() {
+        let engine = build_engine(
+            Arc::new(InMemoryStore::new()),
+            Arc::new(ClaudeCodeProvider::new()),
+            BudgetConfig::new(),
+        );
+
+        assert_eq!(
+            engine.execution_mode(),
+            ExecutionMode::Workers,
+            "a Local server would resume woken runs itself, without the worker's agent or tools"
+        );
     }
 }
