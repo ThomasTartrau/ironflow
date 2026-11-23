@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [4.3.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v4.2.0...ironflow-engine-v4.3.0) - 2026-11-23
+
+### Added
+
+- #246 reprendre la session d'un step agent dans un autre pod
+
+
+### Fixed
+
+- #246 garder ~/.claude inscriptible quand les sessions y sont montées
+
+- #246 corriger le lint clippy et préciser l'isolement des sessions
+
 ## [4.2.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v4.1.2...ironflow-engine-v4.2.0) - 2026-11-04
 
 ### Added
