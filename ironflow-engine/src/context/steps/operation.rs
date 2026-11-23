@@ -204,6 +204,7 @@ impl WorkflowContext {
                     artifacts: StepArtifacts::new(name, Some(step_id), &[]),
                     account_id: None,
                     environment_id: None,
+                    session_id: None,
                 })
             }
             Err(err) => {

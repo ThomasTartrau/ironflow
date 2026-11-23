@@ -15,6 +15,7 @@ use ironflow_store::store::STEP_INTERRUPTED_ERROR;
 
 use crate::config::{DEFAULT_RESUME_PROMPT, StepConfig};
 use crate::error::EngineError;
+use crate::executor::recorded_session_id;
 use crate::notify::{WorkflowAgentStepResumedEvent, WorkflowEvent};
 
 use super::WorkflowContext;
@@ -28,8 +29,8 @@ impl WorkflowContext {
     /// step resumes it with its resume prompt, [`DEFAULT_RESUME_PROMPT`] when
     /// the author set none. Otherwise the step gets a new session id.
     ///
-    /// Does nothing for a step that is not an agent step, or when the author
-    /// already set a session.
+    /// Does nothing for a step that is not an agent step. When the author
+    /// already set a session, only records it (a UUID) on the step.
     pub(super) async fn assign_agent_session(
         &self,
         config: &mut StepConfig,
@@ -41,6 +42,10 @@ impl WorkflowContext {
             return Ok(());
         };
         if agent_config.resume_session_id.is_some() || agent_config.session_id.is_some() {
+            // Recorded so a replay of the step hands out the same session.
+            if let Some(session_id) = recorded_session_id(agent_config) {
+                self.record_session(step_id, session_id.to_string()).await?;
+            }
             return Ok(());
         }
 
@@ -90,6 +95,11 @@ impl WorkflowContext {
             }
         };
 
+        self.record_session(step_id, session_id).await
+    }
+
+    /// Record on the step the session it runs in.
+    async fn record_session(&self, step_id: Uuid, session_id: String) -> Result<(), EngineError> {
         self.store
             .update_step(
                 step_id,

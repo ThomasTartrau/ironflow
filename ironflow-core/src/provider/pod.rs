@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
+use super::SessionsVolume;
 use crate::auth_proxy::ProxiedSecret;
 
 /// Pod label carrying the id of the run that created the pod.
@@ -607,6 +608,10 @@ pub struct PodSettings {
     /// Drop the provider's `volume` and `pvc_volume` mounts for this step.
     #[serde(default)]
     pub without_provider_volumes: bool,
+    /// Claude Code sessions kept on a claim, one directory per run. Overrides
+    /// the provider's `sessions_volume`. See [`AgentConfig::sessions_pvc`](super::AgentConfig::sessions_pvc).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions: Option<SessionsVolume>,
 }
 
 impl PodSettings {
@@ -630,6 +635,7 @@ impl PodSettings {
             && self.runtime_class.is_none()
             && self.pvc_volumes.is_empty()
             && !self.without_provider_volumes
+            && self.sessions.is_none()
     }
 }
 

@@ -43,7 +43,7 @@ tracing-opentelemetry = { version = "0.33", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"], optional = true }
 
 # Transport: SSH
-russh = { version = "0.62", optional = true }
+russh = { version = "0.65", optional = true }
 
 # Transport: Docker
 bollard = { version = "0.20", optional = true }

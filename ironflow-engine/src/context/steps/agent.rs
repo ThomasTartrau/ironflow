@@ -24,6 +24,7 @@ use crate::error::EngineError;
 ///     answer: 42_u32,
 ///     environment_id: Some("ironflow-env-0a1b2c".to_string()),
 ///     account_id: None,
+///     session_id: Some("0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d".to_string()),
 /// };
 /// assert_eq!(reply.environment_id.as_deref(), Some("ironflow-env-0a1b2c"));
 /// ```
@@ -39,6 +40,11 @@ pub struct AgentReply<A> {
     /// Provider Account the step ran on. `None` when the worker environment
     /// was used.
     pub account_id: Option<Uuid>,
+    /// Claude Code session the step ran in, to pass to
+    /// [`AgentStepConfig::resume`](crate::config::AgentStepConfig::resume) so
+    /// a later step of the run continues the conversation. The same id on
+    /// replay. `None` for a session id that is not a UUID.
+    pub session_id: Option<String>,
 }
 
 impl WorkflowContext {
@@ -161,10 +167,12 @@ impl WorkflowContext {
             .await?;
         let environment_id = output.environment_id.clone();
         let account_id = output.account_id;
+        let session_id = output.session_id.clone();
         Ok(AgentReply {
             answer: C::answer(output)?,
             environment_id,
             account_id,
+            session_id,
         })
     }
 }

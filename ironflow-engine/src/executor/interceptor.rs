@@ -159,6 +159,7 @@ pub enum SignalOutcome {
 ///                 artifacts: StepArtifacts::default(),
 ///                 account_id: None,
 ///                 environment_id: None,
+///                 session_id: None,
 ///             })),
 ///             _ => None,
 ///         }

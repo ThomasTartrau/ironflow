@@ -458,7 +458,7 @@ if let Some(environment) = clone.environment_id.as_deref() {
 
 A structured step (`.output::<T>()`) answers with `T`, which hides the id from
 `ctx.agent`. Use `ctx.agent_with_meta`: its `AgentReply` holds the typed `answer`, the
-`environment_id` and the `account_id`. A replayed step returns the same ids.
+`environment_id`, the `account_id` and the `session_id`. A replayed step returns the same ids.
 
 The claim carries the ironflow labels with `app.kubernetes.io/component=environment`,
 the run and step labels of the step that created it, and the
@@ -496,8 +496,43 @@ The claim is yours to create; the provider never creates nor deletes it. Use a
 `ReadWriteMany` claim, or make sure the next pod lands on the same node.
 Claude Code keys its sessions by working directory: keep the same
 `working_dir` across executions. A Claude profile mapped to `projects` (or
-below) and a step volume mounted on `~/.claude/projects` are refused, since
-they would hide the sessions.
+below) and a step volume mounted on `~/.claude/projects` or `~/.claude` are
+refused, since they would hide the sessions. With a sessions mount, `~/.claude`
+is an `emptyDir` of its own (`home_size_limit`), so the credentials and
+profiles can still be written next to the mounted `projects`.
+
+Every pod of the provider mounts the whole claim, so it sees the sessions of
+every run. To keep them per run on a claim the workflow already uses, set the
+sessions on the step instead (the step wins over `sessions_volume`):
+
+```rust,ignore
+let implement = AgentStepConfig::new(&task)
+    .working_dir("/workspace/repo")
+    .pvc_volume("workspace", "/workspace", Some("repos"), false)
+    .sessions_pvc("workspace", "claude-sessions");
+```
+
+The pod mounts `claude-sessions/<run id>` of the claim on `~/.claude/projects`,
+so a later step of the same run that resumes the session finds it in a new pod
+(see [Continuing the session of an earlier step](transports.md#continuing-the-session-of-an-earlier-step)),
+and its pod never sees the sessions of another run. No claim is created. A
+step without `sessions_pvc` that mounts the same claim at its root still sees
+every run's sessions: mount that claim by sub-path in every step. A step with
+`sessions_pvc` fails before the pod is created when:
+
+- the provider is not sandboxed, or the pod has no run id label (a provider
+  called outside the engine);
+- the same claim is also mounted at its root, or on `claude-sessions` or a
+  parent of it: that mount would show every run's sessions. Mount the rest of
+  the claim on a sub-path beside it, as `repos` above.
+
+The kubelet creates `claude-sessions/<run id>` as root, with the mode of the
+claim root: the root must be group-writable with the setgid bit for the pod's
+`fsGroup` (what a driver applying `fsGroup` leaves, `2775`), or the agent
+cannot write its session. A root owned by uid `10001` in `0755` is not enough. A session holds
+the whole conversation, tool output included: keep `dir` outside a cloned
+repository, where a `git add` would pick it up. The run directories are never
+deleted by ironflow.
 
 ## The reaper
 

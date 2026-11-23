@@ -42,6 +42,7 @@ impl From<&Step> for StepOutput {
             artifacts: StepArtifacts::default(),
             account_id: step.account_id,
             environment_id: step.environment_id.clone(),
+            session_id: step.session_id.clone(),
         }
     }
 }

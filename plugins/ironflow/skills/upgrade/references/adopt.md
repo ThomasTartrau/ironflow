@@ -597,3 +597,26 @@ before the workers: a worker delivers through a new internal route. Section: Sig
 + // in impl WorkflowHandler: fn sent_signals(&self) -> SentSignals { SentSignals::new().allow::<HumanReplied>() }
 + ctx.send_signal("wake", &HumanReplied { body }, &discussion_id).await?;
 ```
+
+## agent-session-across-steps
+- kind: adopt
+- since: ironflow-core after 6.0.1, ironflow-engine after 4.2.0 (#246)
+
+A step that continues the conversation of an earlier agent step used to pin the session
+id by hand (`Uuid::now_v7()` in the handler, a new id on every replay) and, on a sandboxed
+`K8sEphemeralProvider`, mount `.sessions_volume(claim)`, shared by every run. The reply of
+`ctx.agent_with_meta` carries the `session_id`, the same on replay, and
+`.sessions_pvc(claim, dir)` keeps the sessions in `<dir>/<run id>` of a claim the workflow
+already mounts by sub-path. Section: Agent, Session across steps.
+
+```diff
+- let session = Uuid::now_v7().to_string();
+- ctx.agent("implement", AgentStepConfig::new(&task).session_id(&session)).await?;
+- ctx.agent("fix", AgentStepConfig::new(&comments).resume(&session)).await?;
++ let implement = AgentStepConfig::new(&task).sessions_pvc("workspace", "claude-sessions");
++ let reply = ctx.agent_with_meta("implement", implement).await?;
++ if let Some(session) = reply.session_id.as_deref() {
++     let fix = AgentStepConfig::new(&task).resume(session).resume_prompt(&comments);
++     ctx.agent("fix", fix.sessions_pvc("workspace", "claude-sessions")).await?;
++ }
+```

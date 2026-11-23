@@ -90,12 +90,36 @@ read:
 | Docker | Yes, while the container lives |
 | SSH | Yes, on the same host |
 | Kubernetes persistent | Yes, while the pod lives |
-| Kubernetes ephemeral | Only with `sessions_volume(claim)` on a sandboxed provider, see [Kubernetes Sandbox](k8s-sandbox.md) |
+| Kubernetes ephemeral | Only on a sandboxed provider with `sessions_volume(claim)`, or a step with `sessions_pvc(claim, dir)`, see [Kubernetes Sandbox](k8s-sandbox.md) |
 
 When the session is gone, the step does not fail: it logs
 `session <uuid> not found, restarting the agent from scratch` and runs the
-original prompt again in a session of the same id. A step that sets `resume`
-or `session_id` itself is left alone.
+original prompt again in a session of the same id. The engine pins no session
+for a step that sets `resume` or `session_id` itself: it records that id on
+the step instead.
+
+## Continuing the session of an earlier step
+
+A later step of the run continues the conversation of an earlier agent step
+with `.resume(..)` and the `session_id` of the earlier step's
+`ctx.agent_with_meta` reply, which a replay hands out again. Do not pin the id
+by hand with a UUID generated in the handler: it changes on every replay. The
+step sends its `resume_prompt` into the session, or its prompt when none is
+set; when the session is gone, it runs its prompt in a new session. Keep the
+full task in the prompt and the follow-up in the resume prompt:
+
+```rust,ignore
+let reply = ctx.agent_with_meta("implement", AgentStepConfig::new(&task)).await?;
+if let Some(session) = reply.session_id.as_deref() {
+    let fix = AgentStepConfig::new(&task)
+        .resume(session)
+        .resume_prompt("Fix the review comments in REVIEW.md.");
+    ctx.agent("fix", fix).await?;
+}
+```
+
+Both steps keep the same working directory, on a transport that keeps the
+session (table above).
 
 Each resume writes the system log line
 `agent step resumed from session <uuid>` on the step and publishes an

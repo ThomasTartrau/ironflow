@@ -72,6 +72,7 @@ use super::common::{
 };
 use super::profile::{ClaudeProfile, build_profile_copy_prefix};
 use super::reaper::{ReapReport, reap_orphans};
+use super::sessions::{SessionsMount, resolve_sessions};
 use super::toleration::K8sToleration;
 
 mod owner;
@@ -628,7 +629,10 @@ impl K8sEphemeralProvider {
     /// (`~/.claude/projects`). Use a `ReadWriteMany` claim, or make sure the
     /// next pod lands on the same node. Claude Code keys sessions by working
     /// directory, so the steps must keep the same `cwd`. Claude profiles
-    /// copied into `~/.claude/projects` are refused.
+    /// copied into `~/.claude/projects` are refused. `~/.claude` gets an
+    /// `emptyDir` of its own (`home_size_limit`, on top of HOME's) so the
+    /// credentials and profiles are still written there; another volume at
+    /// `~/.claude` or `~/.claude/projects` is refused.
     ///
     /// # Panics
     ///
@@ -1304,6 +1308,7 @@ struct MergedPodInputs<'a> {
     labels: BTreeMap<String, String>,
     runtime_class: Option<String>,
     proxied_secrets: Vec<ProxiedSecret>,
+    sessions: Option<SessionsMount>,
 }
 
 impl K8sEphemeralProvider {
@@ -1442,6 +1447,12 @@ impl K8sEphemeralProvider {
             labels.insert(LABEL_EGRESS_PROFILE.to_string(), profile.clone());
         }
         labels.extend(config.pod_labels.clone());
+        let sessions = resolve_sessions(
+            self.sessions_claim.as_deref(),
+            self.sandbox.is_some(),
+            config.pod.sessions.as_ref(),
+            &labels,
+        )?;
 
         Ok(MergedPodInputs {
             volumes,
@@ -1453,6 +1464,7 @@ impl K8sEphemeralProvider {
             labels,
             runtime_class,
             proxied_secrets,
+            sessions,
         })
     }
 
@@ -1954,7 +1966,8 @@ impl K8sEphemeralProvider {
                 step_pvc_volumes: &step_pvc_volumes,
                 managed_settings_configmap: merged.managed_settings_configmap.as_deref(),
                 claude_profiles: &self.claude_profiles,
-                sessions_claim: self.sessions_claim.as_deref(),
+                sessions_claim: merged.sessions.as_ref().map(|s| s.claim_name.as_str()),
+                sessions_sub_path: merged.sessions.as_ref().and_then(|s| s.sub_path.as_deref()),
                 annotations: Some(&annotations),
             },
         });
@@ -2826,6 +2839,25 @@ mod tests {
     }
 
     #[test]
+    fn step_sessions_pvc_mounts_the_run_directory_over_the_provider_sessions() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1").sessions_volume("shared");
+        let mut config = AgentConfig::new("hi").sessions_pvc("ws", "sessions");
+        config
+            .pod_labels
+            .insert(LABEL_RUN_ID.to_string(), "run-1".to_string());
+        let sessions = merge(&provider, &config).sessions.unwrap();
+        assert_eq!(sessions.claim_name, "ws");
+        assert_eq!(sessions.sub_path.as_deref(), Some("sessions/run-1"));
+        let shared = merge(&provider, &AgentConfig::new("hi")).sessions.unwrap();
+        assert_eq!(
+            (shared.claim_name.as_str(), shared.sub_path),
+            ("shared", None)
+        );
+        let unsandboxed = K8sEphemeralProvider::new("img:v1");
+        assert!(err_text(unsandboxed.merged_pod_inputs(&config)).contains("sandboxed"));
+    }
+
+    #[test]
     fn sessions_volume_builder_stores_claim_for_session_id() {
         let provider = K8sEphemeralProvider::sandboxed("img:v1").sessions_volume("claude-sessions");
         assert_eq!(provider.sessions_claim.as_deref(), Some("claude-sessions"));
@@ -3275,6 +3307,7 @@ mod tests {
                 managed_settings_configmap: None,
                 claude_profiles: &provider.claude_profiles,
                 sessions_claim: provider.sessions_claim.as_deref(),
+                sessions_sub_path: None,
                 annotations: None,
             },
         })

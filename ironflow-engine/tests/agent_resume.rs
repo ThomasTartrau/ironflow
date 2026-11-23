@@ -495,7 +495,7 @@ async fn agent_resume_is_skipped_when_the_step_failed_and_the_run_is_retried() {
 }
 
 #[tokio::test]
-async fn agent_resume_step_set_by_the_author_is_left_alone() {
+async fn agent_resume_step_set_by_the_author_keeps_its_session() {
     timeout(TEST_TIMEOUT, async {
         let store = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ResumeProvider {
@@ -521,7 +521,9 @@ async fn agent_resume_step_set_by_the_author_is_left_alone() {
 
         let records = steps_named(&store, run_id, "review").await;
         assert_eq!(records.len(), 1, "steps: {records:?}");
-        assert_eq!(records[0].session_id, None);
+        // The engine pins no session of its own, but records the author's so a
+        // replay of the step hands it out again.
+        assert_eq!(records[0].session_id.as_deref(), Some(own));
     })
     .await
     .expect("test timed out");

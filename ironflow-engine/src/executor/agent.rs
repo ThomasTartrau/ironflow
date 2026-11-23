@@ -30,6 +30,18 @@ pub struct AgentExecutor<'a> {
     log_sender: Option<StepLogSender>,
 }
 
+/// Session the agent step runs in: the one it resumes, else the one it
+/// creates. The CLI resumes a session under its own id, and the fallback of
+/// a missing session creates it under that id too. Only a UUID is returned:
+/// the store refuses any other session id.
+pub(crate) fn recorded_session_id(config: &AgentConfig) -> Option<&str> {
+    config
+        .resume_session_id
+        .as_deref()
+        .or(config.session_id.as_deref())
+        .filter(|id| Uuid::parse_str(id).is_ok())
+}
+
 impl<'a> AgentExecutor<'a> {
     /// Create a new agent executor from a config reference.
     pub fn new(config: &'a AgentConfig) -> Self {
@@ -126,11 +138,18 @@ impl StepExecutor for AgentExecutor<'_> {
             );
         }
 
-        let result = match (&self.config.resume_session_id, &self.config.resume_prompt) {
-            (Some(session_id), Some(resume_prompt)) => {
+        // A step resuming another step's session has no resume prompt: it
+        // sends its own prompt, and still restarts from it when the session is gone.
+        let result = match &self.config.resume_session_id {
+            Some(session_id) => {
+                let resume_prompt = self
+                    .config
+                    .resume_prompt
+                    .as_deref()
+                    .unwrap_or(&self.config.prompt);
                 self.resume(provider, session_id, resume_prompt).await?
             }
-            _ => self.run_agent(self.config.clone(), provider).await?,
+            None => self.run_agent(self.config.clone(), provider).await?,
         };
 
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -233,6 +252,7 @@ impl StepExecutor for AgentExecutor<'_> {
             artifacts: StepArtifacts::default(),
             account_id,
             environment_id: result.environment_id().map(String::from),
+            session_id: recorded_session_id(self.config).map(String::from),
         })
     }
 }
@@ -249,7 +269,7 @@ mod tests {
     use tokio::time::{sleep, timeout};
     use uuid::Uuid;
 
-    use super::{AgentExecutor, StepExecutor};
+    use super::{AgentExecutor, StepExecutor, recorded_session_id};
     use crate::error::EngineError;
 
     /// Real provider returning a fixed output, used to exercise usage propagation.
@@ -451,11 +471,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_resume_executor_leaves_user_resume_alone() {
+    async fn agent_resume_without_resume_prompt_restarts_from_prompt_when_session_is_missing() {
+        timeout(Duration::from_secs(10), async {
+            let recorder =
+                SessionProvider::new(Some("No conversation found with session ID: 0192f0c1"));
+            let provider: Arc<dyn AgentProvider> = recorder.clone();
+            let config = budget_config().resume(SID);
+
+            AgentExecutor::new(&config)
+                .execute(&provider)
+                .await
+                .expect("a missing session never fails the step");
+
+            let seen = recorder.seen();
+            assert_eq!(seen.len(), 2);
+            assert_eq!(seen[0].prompt, "hi");
+            assert_eq!(seen[0].resume_session_id.as_deref(), Some(SID));
+            assert_eq!(seen[1].prompt, "hi");
+            assert_eq!(seen[1].resume_session_id, None);
+            assert_eq!(seen[1].session_id.as_deref(), Some(SID));
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[test]
+    fn recorded_session_id_keeps_only_a_uuid() {
+        assert_eq!(recorded_session_id(&budget_config().resume(SID)), Some(SID));
+        assert_eq!(
+            recorded_session_id(&budget_config().session_id(SID)),
+            Some(SID)
+        );
+        assert_eq!(recorded_session_id(&budget_config().resume("sess-1")), None);
+        assert_eq!(recorded_session_id(&budget_config()), None);
+    }
+
+    #[tokio::test]
+    async fn agent_executor_hands_out_no_session_that_is_not_a_uuid() {
+        timeout(Duration::from_secs(10), async {
+            let provider: Arc<dyn AgentProvider> = SessionProvider::new(None);
+            let config = budget_config().session_id("sess-1");
+            let output = AgentExecutor::new(&config)
+                .execute(&provider)
+                .await
+                .unwrap();
+            assert_eq!(output.session_id, None);
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn agent_resume_without_resume_prompt_sends_the_prompt_into_the_session() {
         timeout(Duration::from_secs(10), async {
             let recorder = SessionProvider::new(None);
             let provider: Arc<dyn AgentProvider> = recorder.clone();
-            // A user-set resume without resume prompt keeps the original prompt.
+            // A step resuming another step's session sends its own prompt.
             let config = budget_config().resume(SID);
 
             AgentExecutor::new(&config)
