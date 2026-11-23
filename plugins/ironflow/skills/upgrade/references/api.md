@@ -393,7 +393,9 @@ prompt, so the fresh session still knows what to do.
 - compiler: ``missing field `session_id` in initializer of `StepOutput` ``
 
 `StepOutput` and `AgentReply` have a new `session_id` field. Code that builds them as a
-literal (a `StepInterceptor`, a test) adds it.
+literal (a `StepInterceptor`, a test) adds it. `PodHardening` of the K8s provider gains
+`sessions_sub_path` (ironflow-core after 6.0.1): a literal without `..PodHardening::default()`
+adds `sessions_sub_path: None`.
 
 ```diff
   StepOutput {

@@ -513,8 +513,10 @@ let implement = AgentStepConfig::new(&task)
 The pod mounts `claude-sessions/<run id>` of the claim on `~/.claude/projects`,
 so a later step of the same run that resumes the session finds it in a new pod
 (see [Continuing the session of an earlier step](transports.md#continuing-the-session-of-an-earlier-step)),
-and no pod sees the sessions of another run. No claim is created. The step
-fails before the pod is created when:
+and its pod never sees the sessions of another run. No claim is created. A
+step without `sessions_pvc` that mounts the same claim at its root still sees
+every run's sessions: mount that claim by sub-path in every step. A step with
+`sessions_pvc` fails before the pod is created when:
 
 - the provider is not sandboxed, or the pod has no run id label (a provider
   called outside the engine);
@@ -522,9 +524,10 @@ fails before the pod is created when:
   parent of it: that mount would show every run's sessions. Mount the rest of
   the claim on a sub-path beside it, as `repos` above.
 
-The kubelet creates `claude-sessions/<run id>` with the mode of the claim root:
-the root must be writable by the pod's `fsGroup` (the storage driver applies
-it) or by uid `10001`, or the agent cannot write its session. A session holds
+The kubelet creates `claude-sessions/<run id>` as root, with the mode of the
+claim root: the root must be group-writable with the setgid bit for the pod's
+`fsGroup` (what a driver applying `fsGroup` leaves, `2775`), or the agent
+cannot write its session. A root owned by uid `10001` in `0755` is not enough. A session holds
 the whole conversation, tool output included: keep `dir` outside a cloned
 repository, where a `git add` would pick it up. The run directories are never
 deleted by ironflow.

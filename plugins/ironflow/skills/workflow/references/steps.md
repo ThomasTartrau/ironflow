@@ -444,8 +444,9 @@ A later step continues the conversation of an earlier one with `.resume(&session
 `resume_prompt` into the session, and runs its prompt in a new session when the session is
 gone: keep the full task in the prompt. Both steps keep the same working directory. On a
 sandboxed `K8sEphemeralProvider`, `.sessions_pvc(claim, dir)` keeps the sessions in
-`<dir>/<run id>` of a claim, so the next pod finds them and no other run sees them. Mount
-the rest of that claim by sub-path outside `dir`: a mount of its root is refused.
+`<dir>/<run id>` of a claim, so the next pod finds them and never sees another run's. Mount
+the rest of that claim by sub-path outside `dir`, in every step: a mount of its root is
+refused next to `sessions_pvc`, and shows every run's sessions in a step without it.
 
 ```rust,no_run
 use ironflow_engine::config::{AgentStepConfig, Tool};

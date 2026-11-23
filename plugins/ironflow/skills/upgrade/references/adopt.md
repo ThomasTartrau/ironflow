@@ -615,7 +615,8 @@ already mounts by sub-path. Section: Agent, Session across steps.
 - ctx.agent("fix", AgentStepConfig::new(&comments).resume(&session)).await?;
 + let implement = AgentStepConfig::new(&task).sessions_pvc("workspace", "claude-sessions");
 + let reply = ctx.agent_with_meta("implement", implement).await?;
-+ let session = reply.session_id.expect("Claude Code providers pin a session");
-+ let fix = AgentStepConfig::new(&task).resume(&session).resume_prompt(&comments);
-+ ctx.agent("fix", fix.sessions_pvc("workspace", "claude-sessions")).await?;
++ if let Some(session) = reply.session_id.as_deref() {
++     let fix = AgentStepConfig::new(&task).resume(session).resume_prompt(&comments);
++     ctx.agent("fix", fix.sessions_pvc("workspace", "claude-sessions")).await?;
++ }
 ```

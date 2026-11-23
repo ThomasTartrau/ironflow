@@ -508,7 +508,7 @@ fn build_env(config: &PodConfig<'_>) -> Vec<Value> {
     env
 }
 
-fn hardening_error(stderr: String) -> AgentError {
+pub(super) fn hardening_error(stderr: String) -> AgentError {
     AgentError::ProcessFailed {
         exit_code: -1,
         stderr,

@@ -6,7 +6,9 @@ use crate::provider::{LABEL_RUN_ID, PodVolumeSource, PvcVolume, ReadOnlyVolume, 
 use crate::providers::claude::k8s::common::tests::{
     find_by_name, hardened_config, hardening_err, pod_json, ro, sandboxed, step_pvc,
 };
-use crate::providers::claude::k8s::common::{PodHardening, SANDBOX_HOME, SandboxSettings};
+use crate::providers::claude::k8s::common::{
+    PodHardening, SANDBOX_HOME, SandboxSettings, build_pod_spec,
+};
 use crate::providers::claude::k8s::profile::ClaudeProfile;
 
 use super::*;
@@ -274,5 +276,5 @@ fn sessions_path_stays_under_home() {
 }
 
 fn build_pod_spec_ok(config: &PodConfig<'_>) -> bool {
-    super::super::common::build_pod_spec(config).is_ok()
+    build_pod_spec(config).is_ok()
 }

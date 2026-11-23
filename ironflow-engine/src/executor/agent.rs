@@ -252,7 +252,7 @@ impl StepExecutor for AgentExecutor<'_> {
             artifacts: StepArtifacts::default(),
             account_id,
             environment_id: result.environment_id().map(String::from),
-            session_id: recorded_session_id(&self.config).map(String::from),
+            session_id: recorded_session_id(self.config).map(String::from),
         })
     }
 }

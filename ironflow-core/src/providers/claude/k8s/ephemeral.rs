@@ -2836,6 +2836,25 @@ mod tests {
     }
 
     #[test]
+    fn step_sessions_pvc_mounts_the_run_directory_over_the_provider_sessions() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1").sessions_volume("shared");
+        let mut config = AgentConfig::new("hi").sessions_pvc("ws", "sessions");
+        config
+            .pod_labels
+            .insert(LABEL_RUN_ID.to_string(), "run-1".to_string());
+        let sessions = merge(&provider, &config).sessions.unwrap();
+        assert_eq!(sessions.claim_name, "ws");
+        assert_eq!(sessions.sub_path.as_deref(), Some("sessions/run-1"));
+        let shared = merge(&provider, &AgentConfig::new("hi")).sessions.unwrap();
+        assert_eq!(
+            (shared.claim_name.as_str(), shared.sub_path),
+            ("shared", None)
+        );
+        let unsandboxed = K8sEphemeralProvider::new("img:v1");
+        assert!(err_text(unsandboxed.merged_pod_inputs(&config)).contains("sandboxed"));
+    }
+
+    #[test]
     fn sessions_volume_builder_stores_claim_for_session_id() {
         let provider = K8sEphemeralProvider::sandboxed("img:v1").sessions_volume("claude-sessions");
         assert_eq!(provider.sessions_claim.as_deref(), Some("claude-sessions"));

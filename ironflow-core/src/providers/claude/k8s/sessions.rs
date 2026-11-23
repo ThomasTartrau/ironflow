@@ -13,7 +13,9 @@ use serde_json::{Value, json};
 use crate::error::AgentError;
 use crate::provider::{LABEL_RUN_ID, PodVolumeSource, SessionsVolume};
 
-use super::common::{PodConfig, SESSIONS_MOUNT_PATH, mount_json};
+use super::common::{
+    PodConfig, SESSIONS_MOUNT_PATH, hardening_error as sessions_error, mount_json,
+};
 
 /// Name of the pod volume declared for the sessions claim.
 const SESSIONS_VOLUME_NAME: &str = "ironflow-sessions";
@@ -23,13 +25,6 @@ const SESSIONS_VOLUME_NAME: &str = "ironflow-sessions";
 pub(super) struct SessionsMount {
     pub(super) claim_name: String,
     pub(super) sub_path: Option<String>,
-}
-
-fn sessions_error(stderr: String) -> AgentError {
-    AgentError::ProcessFailed {
-        exit_code: -1,
-        stderr,
-    }
 }
 
 /// Pick the sessions mount of a pod: the step's sessions under the run id
