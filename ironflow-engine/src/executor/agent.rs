@@ -269,7 +269,7 @@ mod tests {
     use tokio::time::{sleep, timeout};
     use uuid::Uuid;
 
-    use super::{AgentExecutor, StepExecutor};
+    use super::{AgentExecutor, StepExecutor, recorded_session_id};
     use crate::error::EngineError;
 
     /// Real provider returning a fixed output, used to exercise usage propagation.
@@ -485,9 +485,37 @@ mod tests {
 
             let seen = recorder.seen();
             assert_eq!(seen.len(), 2);
+            assert_eq!(seen[0].prompt, "hi");
+            assert_eq!(seen[0].resume_session_id.as_deref(), Some(SID));
             assert_eq!(seen[1].prompt, "hi");
             assert_eq!(seen[1].resume_session_id, None);
             assert_eq!(seen[1].session_id.as_deref(), Some(SID));
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[test]
+    fn recorded_session_id_keeps_only_a_uuid() {
+        assert_eq!(recorded_session_id(&budget_config().resume(SID)), Some(SID));
+        assert_eq!(
+            recorded_session_id(&budget_config().session_id(SID)),
+            Some(SID)
+        );
+        assert_eq!(recorded_session_id(&budget_config().resume("sess-1")), None);
+        assert_eq!(recorded_session_id(&budget_config()), None);
+    }
+
+    #[tokio::test]
+    async fn agent_executor_hands_out_no_session_that_is_not_a_uuid() {
+        timeout(Duration::from_secs(10), async {
+            let provider: Arc<dyn AgentProvider> = SessionProvider::new(None);
+            let config = budget_config().session_id("sess-1");
+            let output = AgentExecutor::new(&config)
+                .execute(&provider)
+                .await
+                .unwrap();
+            assert_eq!(output.session_id, None);
         })
         .await
         .expect("test timed out");

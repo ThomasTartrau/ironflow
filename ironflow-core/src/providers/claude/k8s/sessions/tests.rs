@@ -270,6 +270,52 @@ fn step_sessions_refuse_a_profile_copied_into_projects() {
     assert!(hardening_err(&config).contains("overlaps the sessions volume"));
 }
 
+/// The runtime creates the parent of a nested mount point as root: without a
+/// volume of its own, `~/.claude` would refuse the credentials and profiles.
+#[test]
+fn sessions_mount_keeps_claude_dir_writable() {
+    let sandbox = SandboxSettings::default();
+    let sub_path = format!("claude-sessions/{RUN_A}");
+    let provider_sessions = PodHardening {
+        sessions_claim: Some("claude-sessions"),
+        ..sandboxed(&sandbox)
+    };
+    for hardening in [step_hardening(&sandbox, &sub_path), provider_sessions] {
+        let pod = pod_json(&hardened_config(hardening));
+        let volume = find_by_name(&pod["spec"]["volumes"], "ironflow-claude-dir").unwrap();
+        assert_eq!(
+            volume["emptyDir"]["sizeLimit"],
+            sandbox.home_size_limit.as_str()
+        );
+        let mounts = mounts(&pod);
+        let position = |name: &str| mounts.iter().position(|m| m["name"] == name).unwrap();
+        let claude_dir = &mounts[position("ironflow-claude-dir")];
+        assert_eq!(claude_dir["mountPath"], format!("{SANDBOX_HOME}/.claude"));
+        assert_eq!(claude_dir["mountPath"], CLAUDE_DIR);
+        assert!(position("ironflow-home") < position("ironflow-claude-dir"));
+        assert!(position("ironflow-claude-dir") < position("ironflow-sessions"));
+    }
+}
+
+#[test]
+fn sessions_mount_reserves_the_claude_dir() {
+    let sandbox = SandboxSettings::default();
+    let sub_path = format!("claude-sessions/{RUN_A}");
+    let other: Vec<PvcVolume> = vec![step_pvc("other", CLAUDE_DIR, None, false)];
+    let config = hardened_config(PodHardening {
+        step_pvc_volumes: &other,
+        ..step_hardening(&sandbox, &sub_path)
+    });
+    assert!(hardening_err(&config).contains("duplicate"));
+}
+
+#[test]
+fn pod_without_sessions_has_no_claude_dir_volume() {
+    let sandbox = SandboxSettings::default();
+    let pod = pod_json(&hardened_config(sandboxed(&sandbox)));
+    assert!(find_by_name(&pod["spec"]["volumes"], "ironflow-claude-dir").is_none());
+}
+
 #[test]
 fn sessions_path_stays_under_home() {
     assert!(SESSIONS_MOUNT_PATH.starts_with(SANDBOX_HOME));

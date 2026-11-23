@@ -176,6 +176,10 @@ execution mode; inject what differs (`with_signal_sender`, `set_artifact_sink`).
 
 Agent and Shell use the builder pattern. Validation happens at build time via `assert!` (panics on invalid input).
 
+`AgentConfig` is generic over its tools and schema typestate: a new builder goes in an
+`impl<Tools, Schema> AgentConfig<Tools, Schema>` block, or it disappears after
+`.allow_tool(..)` or `.output::<T>()` (caught by the plugin doctests on #246).
+
 ### Budget
 
 Claude Code system cache costs ~$0.04. Set `max_budget_usd` to at least `0.10` in examples and tests to avoid budget-exceeded errors.

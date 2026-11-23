@@ -40,6 +40,10 @@ pub const SANDBOX_HOME: &str = "/home/claude";
 /// `<cwd-slug>/`, so a session only resumes from the same `cwd`.
 pub const SESSIONS_MOUNT_PATH: &str = "/home/claude/.claude/projects";
 
+/// `~/.claude` of a sandboxed pod, an `emptyDir` of its own when sessions
+/// are mounted in it, so the agent can still write there.
+pub const CLAUDE_DIR: &str = "/home/claude/.claude";
+
 /// Directory Claude Code reads `managed-settings.json` from on Linux.
 pub const MANAGED_SETTINGS_DIR: &str = "/etc/claude-code";
 
@@ -539,6 +543,7 @@ fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
 
     if config.hardening.sessions_claim.is_some() {
         seen.insert(SESSIONS_MOUNT_PATH);
+        seen.insert(CLAUDE_DIR);
         // The profile copy would write into the persistent sessions volume.
         if let Some(profile) = config
             .hardening
@@ -803,10 +808,14 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
         main_mounts_json.push(json!({ "name": "ironflow-home", "mountPath": SANDBOX_HOME }));
         // Nested in HOME: the mount must follow the HOME mount.
         if let Some(claim_name) = hardening.sessions_claim {
-            let (volume, mount) =
-                sessions_volume_json(claim_name, hardening.sessions_sub_path, &claim_volumes);
-            volumes_json.extend(volume);
-            main_mounts_json.push(mount);
+            let (volumes, mounts) = sessions_volume_json(
+                claim_name,
+                hardening.sessions_sub_path,
+                &claim_volumes,
+                &sandbox.home_size_limit,
+            );
+            volumes_json.extend(volumes);
+            main_mounts_json.extend(mounts);
         }
         volumes_json.push(json!({
             "name": "ironflow-tmp",

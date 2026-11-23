@@ -14,11 +14,14 @@ use crate::error::AgentError;
 use crate::provider::{LABEL_RUN_ID, PodVolumeSource, SessionsVolume};
 
 use super::common::{
-    PodConfig, SESSIONS_MOUNT_PATH, hardening_error as sessions_error, mount_json,
+    CLAUDE_DIR, PodConfig, SESSIONS_MOUNT_PATH, hardening_error as sessions_error, mount_json,
 };
 
 /// Name of the pod volume declared for the sessions claim.
 const SESSIONS_VOLUME_NAME: &str = "ironflow-sessions";
+
+/// Name of the `emptyDir` backing `~/.claude` next to a sessions mount.
+const CLAUDE_DIR_VOLUME_NAME: &str = "ironflow-claude-dir";
 
 /// Claim and optional `subPath` mounted on [`SESSIONS_MOUNT_PATH`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,9 +124,11 @@ pub(super) fn check_sessions_isolation(config: &PodConfig<'_>) -> Result<(), Str
     }
 }
 
-/// Volume (when the pod does not declare the claim yet) and mount JSON of
-/// the sessions claim.
+/// Volumes and mounts of the sessions claim, in mount order.
 ///
+/// `~/.claude` gets an `emptyDir` of its own first (`size_limit`): the
+/// runtime would otherwise create it as root to hold the nested mount point,
+/// and the agent could not write its credentials, profiles or state there.
 /// Without a `subPath` the claim always gets its own volume, as before step
 /// sessions existed. With one, a claim the pod already declares (in
 /// `claim_volumes`) reuses that volume.
@@ -131,22 +136,27 @@ pub(super) fn sessions_volume_json(
     claim: &str,
     sub_path: Option<&str>,
     claim_volumes: &BTreeMap<&str, String>,
-) -> (Option<Value>, Value) {
+    size_limit: &str,
+) -> (Vec<Value>, Vec<Value>) {
+    let mut volumes = vec![json!({
+        "name": CLAUDE_DIR_VOLUME_NAME,
+        "emptyDir": { "sizeLimit": size_limit }
+    })];
+    let mut mounts = vec![mount_json(CLAUDE_DIR_VOLUME_NAME, CLAUDE_DIR, None, false)];
+
     let reused = sub_path.and_then(|_| claim_volumes.get(claim));
-    let (volume, name) = match reused {
-        Some(name) => (None, name.as_str()),
-        None => (
-            Some(json!({
+    let name = match reused {
+        Some(name) => name.as_str(),
+        None => {
+            volumes.push(json!({
                 "name": SESSIONS_VOLUME_NAME,
                 "persistentVolumeClaim": { "claimName": claim }
-            })),
-            SESSIONS_VOLUME_NAME,
-        ),
+            }));
+            SESSIONS_VOLUME_NAME
+        }
     };
-    (
-        volume,
-        mount_json(name, SESSIONS_MOUNT_PATH, sub_path, false),
-    )
+    mounts.push(mount_json(name, SESSIONS_MOUNT_PATH, sub_path, false));
+    (volumes, mounts)
 }
 
 #[cfg(test)]

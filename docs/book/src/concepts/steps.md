@@ -77,7 +77,7 @@ let verdict = ctx
     .await?;
 ```
 
-To read the `environment_id` or `account_id` of a typed step as well, call
+To read the `environment_id`, `account_id` or `session_id` of a typed step as well, call
 `ctx.agent_with_meta(..)`: it returns an `AgentReply` with the typed `answer` next to them.
 
 `.effort(Effort::High)` sets the reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`).

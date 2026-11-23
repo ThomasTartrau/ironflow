@@ -458,7 +458,7 @@ if let Some(environment) = clone.environment_id.as_deref() {
 
 A structured step (`.output::<T>()`) answers with `T`, which hides the id from
 `ctx.agent`. Use `ctx.agent_with_meta`: its `AgentReply` holds the typed `answer`, the
-`environment_id` and the `account_id`. A replayed step returns the same ids.
+`environment_id`, the `account_id` and the `session_id`. A replayed step returns the same ids.
 
 The claim carries the ironflow labels with `app.kubernetes.io/component=environment`,
 the run and step labels of the step that created it, and the
@@ -496,8 +496,10 @@ The claim is yours to create; the provider never creates nor deletes it. Use a
 `ReadWriteMany` claim, or make sure the next pod lands on the same node.
 Claude Code keys its sessions by working directory: keep the same
 `working_dir` across executions. A Claude profile mapped to `projects` (or
-below) and a step volume mounted on `~/.claude/projects` are refused, since
-they would hide the sessions.
+below) and a step volume mounted on `~/.claude/projects` or `~/.claude` are
+refused, since they would hide the sessions. With a sessions mount, `~/.claude`
+is an `emptyDir` of its own (`home_size_limit`), so the credentials and
+profiles can still be written next to the mounted `projects`.
 
 Every pod of the provider mounts the whole claim, so it sees the sessions of
 every run. To keep them per run on a claim the workflow already uses, set the
