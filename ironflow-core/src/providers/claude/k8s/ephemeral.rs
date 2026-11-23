@@ -629,7 +629,10 @@ impl K8sEphemeralProvider {
     /// (`~/.claude/projects`). Use a `ReadWriteMany` claim, or make sure the
     /// next pod lands on the same node. Claude Code keys sessions by working
     /// directory, so the steps must keep the same `cwd`. Claude profiles
-    /// copied into `~/.claude/projects` are refused.
+    /// copied into `~/.claude/projects` are refused. `~/.claude` gets an
+    /// `emptyDir` of its own (`home_size_limit`, on top of HOME's) so the
+    /// credentials and profiles are still written there; another volume at
+    /// `~/.claude` or `~/.claude/projects` is refused.
     ///
     /// # Panics
     ///

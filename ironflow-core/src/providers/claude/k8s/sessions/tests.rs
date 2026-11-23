@@ -310,6 +310,20 @@ fn sessions_mount_reserves_the_claude_dir() {
 }
 
 #[test]
+fn sessions_mount_refuses_a_provider_volume_on_the_claude_dir() {
+    let sandbox = SandboxSettings::default();
+    for path in [CLAUDE_DIR, SESSIONS_MOUNT_PATH] {
+        let pvcs = vec![("other".to_string(), path.to_string())];
+        let mut config = hardened_config(PodHardening {
+            sessions_claim: Some("claude-sessions"),
+            ..sandboxed(&sandbox)
+        });
+        config.pvc_volumes = &pvcs;
+        assert!(hardening_err(&config).contains("duplicate"), "{path}");
+    }
+}
+
+#[test]
 fn pod_without_sessions_has_no_claude_dir_volume() {
     let sandbox = SandboxSettings::default();
     let pod = pod_json(&hardened_config(sandboxed(&sandbox)));

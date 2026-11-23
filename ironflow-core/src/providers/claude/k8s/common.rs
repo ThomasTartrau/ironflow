@@ -542,8 +542,14 @@ fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
         .collect();
 
     if config.hardening.sessions_claim.is_some() {
-        seen.insert(SESSIONS_MOUNT_PATH);
-        seen.insert(CLAUDE_DIR);
+        // A provider volume at the same path would give the pod two mounts there.
+        for path in [CLAUDE_DIR, SESSIONS_MOUNT_PATH] {
+            if !seen.insert(path) {
+                return Err(hardening_error(format!(
+                    "duplicate volume mount path '{path}': the sessions volume mounts it"
+                )));
+            }
+        }
         // The profile copy would write into the persistent sessions volume.
         if let Some(profile) = config
             .hardening
