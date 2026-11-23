@@ -41,7 +41,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use russh::ChannelMsg;
-use russh::keys::{HashAlg, PrivateKeyWithHashAlg, check_known_hosts_path};
+use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate, check_known_hosts_path};
 use tokio::time;
 use tracing::{debug, warn};
 
@@ -149,8 +149,11 @@ impl russh::client::Handler for SshHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh::keys::PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        // A certificate host key is checked on the key it certifies: the policies pin keys,
+        // and the key exchange signature was already verified against that key.
+        let server_public_key = &server_public_key.public_key();
         match &self.policy {
             HostKeyPolicy::AcceptAll => {
                 warn!("accepting SSH server key without verification (HostKeyPolicy::AcceptAll)");
@@ -722,7 +725,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), async {
             let mut handler = make_handler(HostKeyPolicy::AcceptAll);
             let key = test_public_key();
-            let result = handler.check_server_key(&key).await;
+            let result = handler.check_server_key(&key.into()).await;
             assert!(result.unwrap());
         })
         .await
@@ -734,7 +737,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), async {
             let mut handler = make_handler(HostKeyPolicy::RejectAll);
             let key = test_public_key();
-            let result = handler.check_server_key(&key).await;
+            let result = handler.check_server_key(&key.into()).await;
             assert!(!result.unwrap());
         })
         .await
@@ -747,7 +750,7 @@ mod tests {
             let key = test_public_key();
             let expected = key.fingerprint(HashAlg::Sha256).to_string();
             let mut handler = make_handler(HostKeyPolicy::Fingerprint(expected));
-            let result = handler.check_server_key(&key).await;
+            let result = handler.check_server_key(&key.into()).await;
             assert!(result.unwrap());
         })
         .await
@@ -761,7 +764,7 @@ mod tests {
             let mut handler = make_handler(HostKeyPolicy::Fingerprint(
                 "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
             ));
-            let result = handler.check_server_key(&key).await;
+            let result = handler.check_server_key(&key.into()).await;
             assert!(!result.unwrap());
         })
         .await
@@ -777,7 +780,7 @@ mod tests {
 
             let mut handler =
                 make_handler(HostKeyPolicy::KnownHostsFile(file.path().to_path_buf()));
-            let result = handler.check_server_key(&key).await;
+            let result = handler.check_server_key(&key.into()).await;
             assert!(result.unwrap());
         })
         .await
@@ -793,7 +796,7 @@ mod tests {
 
             let mut handler =
                 make_handler(HostKeyPolicy::KnownHostsFile(file.path().to_path_buf()));
-            let result = handler.check_server_key(&key).await;
+            let result = handler.check_server_key(&key.into()).await;
             assert!(!result.unwrap());
         })
         .await
@@ -807,7 +810,7 @@ mod tests {
             let mut handler = make_handler(HostKeyPolicy::KnownHostsFile(PathBuf::from(
                 "/nonexistent/path/known_hosts",
             )));
-            let result = handler.check_server_key(&key).await;
+            let result = handler.check_server_key(&key.into()).await;
             assert!(!result.unwrap());
         })
         .await

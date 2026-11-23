@@ -15,4 +15,10 @@ ignore = [
     # Build-time proc-macro of ironflow-sdk only, never linked into a binary.
     # progenitor-macro still depends on serde_yaml in 0.15; remove once it moves off it.
     "RUSTSEC-2024-0449",
+
+    # libsqlite3-sys 0.30 (via sqlx-sqlite) -- bundled C SQLite CVE
+    # Locked only because sqlx 0.8 names sqlx-sqlite in weak features: no crate enables
+    # sqlite, and `cargo tree -i libsqlite3-sys --all-features --target all` is empty.
+    # The fix needs sqlx 0.9; remove this entry with that migration.
+    "RUSTSEC-2026-0459",
 ]
