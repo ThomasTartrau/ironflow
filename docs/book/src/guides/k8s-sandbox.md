@@ -499,6 +499,36 @@ Claude Code keys its sessions by working directory: keep the same
 below) and a step volume mounted on `~/.claude/projects` are refused, since
 they would hide the sessions.
 
+Every pod of the provider mounts the whole claim, so it sees the sessions of
+every run. To keep them per run on a claim the workflow already uses, set the
+sessions on the step instead (the step wins over `sessions_volume`):
+
+```rust,ignore
+let implement = AgentStepConfig::new(&task)
+    .working_dir("/workspace/repo")
+    .pvc_volume("workspace", "/workspace", Some("repos"), false)
+    .sessions_pvc("workspace", "claude-sessions");
+```
+
+The pod mounts `claude-sessions/<run id>` of the claim on `~/.claude/projects`,
+so a later step of the same run that resumes the session finds it in a new pod
+(see [Continuing the session of an earlier step](transports.md#continuing-the-session-of-an-earlier-step)),
+and no pod sees the sessions of another run. No claim is created. The step
+fails before the pod is created when:
+
+- the provider is not sandboxed, or the pod has no run id label (a provider
+  called outside the engine);
+- the same claim is also mounted at its root, or on `claude-sessions` or a
+  parent of it: that mount would show every run's sessions. Mount the rest of
+  the claim on a sub-path beside it, as `repos` above.
+
+The kubelet creates `claude-sessions/<run id>` with the mode of the claim root:
+the root must be writable by the pod's `fsGroup` (the storage driver applies
+it) or by uid `10001`, or the agent cannot write its session. A session holds
+the whole conversation, tool output included: keep `dir` outside a cloned
+repository, where a `git add` would pick it up. The run directories are never
+deleted by ironflow.
+
 ## The reaper
 
 Every object ironflow creates carries `app.kubernetes.io/managed-by=ironflow`,

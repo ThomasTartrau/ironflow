@@ -789,6 +789,35 @@ impl<T> AgentTask<T> {
         self
     }
 
+    /// Keep the sessions of the call in `dir` of `claim`, one directory per
+    /// run. See [`AgentStepConfig::sessions_pvc`](crate::config::AgentStepConfig::sessions_pvc).
+    ///
+    /// # Panics
+    ///
+    /// Panics on an empty `claim` or an invalid `dir`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::config::{AgentAnswer, AgentRole, AgentStep};
+    /// # use schemars::JsonSchema;
+    /// # use serde::Deserialize;
+    /// # #[derive(Deserialize, JsonSchema, AgentAnswer)]
+    /// # struct Verdict { approved: bool }
+    /// # struct Reviewer;
+    /// # impl AgentRole for Reviewer {
+    /// #     type Input = String;
+    /// #     type Output = Verdict;
+    /// #     fn prompt(&self, input: String) -> String { input }
+    /// # }
+    /// let config = Reviewer.task("diff".to_string()).sessions_pvc("ws", "sessions").into_config();
+    /// assert!(config.pod.sessions.is_some());
+    /// ```
+    pub fn sessions_pvc(mut self, claim: &str, dir: &str) -> Self {
+        self.config = self.config.sessions_pvc(claim, dir);
+        self
+    }
+
     /// Set the retry policy of the step.
     ///
     /// # Examples
@@ -1021,6 +1050,7 @@ mod tests {
             artifacts: StepArtifacts::default(),
             account_id: None,
             environment_id: None,
+            session_id: None,
         }
     }
 

@@ -372,6 +372,37 @@ the failed try created, so the agent sees what that try did.
 +     .resume_prompt("You were interrupted. Finish the review where you stopped.");
 ```
 
+## agent-resume-without-resume-prompt
+- kind: behavior
+- since: ironflow-engine after 4.2.0 (#246)
+
+A step set with `.resume(id)` and no `.resume_prompt(..)` failed on "No conversation
+found" when the session was gone. It now runs its prompt in a new session, as an
+interrupted step does. The id set with `.resume(id)` or `.session_id(id)` is recorded on
+the step (a UUID only). Keep the full task in the prompt and the follow-up in the resume
+prompt, so the fresh session still knows what to do.
+
+```diff
+- let fix = AgentStepConfig::new(&comments).resume(&session);
++ let fix = AgentStepConfig::new(&task).resume(&session).resume_prompt(&comments);
+```
+
+## step-output-session-id
+- kind: breaking
+- since: ironflow-engine after 4.2.0 (#246)
+- compiler: ``missing field `session_id` in initializer of `StepOutput` ``
+
+`StepOutput` and `AgentReply` have a new `session_id` field. Code that builds them as a
+literal (a `StepInterceptor`, a test) adds it.
+
+```diff
+  StepOutput {
+      environment_id: None,
++     session_id: None,
+      ..
+  }
+```
+
 ## run-status-paused
 - kind: breaking
 - since: ironflow-store after 2.45.2, ironflow-engine after 2.51.2 (#172)

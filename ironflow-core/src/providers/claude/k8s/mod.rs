@@ -26,6 +26,7 @@ pub mod ephemeral;
 pub mod persistent;
 pub mod profile;
 pub mod reaper;
+mod sessions;
 pub mod toleration;
 
 pub use common::{ImagePullPolicy, K8sClusterConfig, K8sResources, PodHardening, SandboxSettings};

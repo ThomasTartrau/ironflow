@@ -328,9 +328,13 @@ impl WorkflowHandler for Cloner {
 async fn a_typed_agent_step_exposes_its_environment_id() {
     let seen = Arc::new(Mutex::new(None));
     let account = Uuid::now_v7();
+    let session = Arc::new(Mutex::new(None));
+    let pinned = session.clone();
     let result = TestEngine::new()
         .with_handler(Cloner { seen: seen.clone() })
-        .with_mock_agent(move |_cfg| {
+        .with_mock_agent(move |cfg| {
+            // The session the engine pinned, which the reply must hand back.
+            *pinned.lock().expect("lock") = cfg.session_id.clone();
             let mut output = AgentOutput::new(json!({"approved": true, "score": 7}));
             output.environment_id = Some("ironflow-env-0a1b2c".to_string());
             output.account_id = Some(account.to_string());
@@ -341,6 +345,8 @@ async fn a_typed_agent_step_exposes_its_environment_id() {
         .expect("the harness ran the handler");
 
     assert_eq!(result.status(), RunStatus::Completed);
+    let session_id = session.lock().expect("lock").clone();
+    assert!(session_id.is_some(), "the engine pins a session");
     assert_eq!(
         *seen.lock().expect("lock"),
         Some(AgentReply {
@@ -350,6 +356,7 @@ async fn a_typed_agent_step_exposes_its_environment_id() {
             },
             environment_id: Some("ironflow-env-0a1b2c".to_string()),
             account_id: Some(account),
+            session_id,
         })
     );
 }

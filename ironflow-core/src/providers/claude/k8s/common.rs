@@ -16,6 +16,7 @@ use crate::provider::{
 };
 use crate::providers::claude::common::env_vars_to_remove;
 use crate::providers::claude::k8s::profile::{ClaudeProfile, profile_mount_path};
+use crate::providers::claude::k8s::sessions::{check_sessions_isolation, sessions_volume_json};
 use crate::providers::claude::k8s::toleration::K8sToleration;
 
 /// Default image used by the input-fetch initContainer.
@@ -91,6 +92,10 @@ pub struct PodHardening<'a> {
     /// so Claude Code sessions outlive the pod. Only rendered with a sandbox,
     /// after the `HOME` mount it is nested in.
     pub sessions_claim: Option<&'a str>,
+    /// `subPath` of `sessions_claim` to mount, `None` for the whole claim.
+    /// Set from [`AgentConfig::sessions_pvc`](crate::provider::AgentConfig::sessions_pvc)
+    /// to `<dir>/<run id>`; another mount of the claim showing `<dir>` is refused.
+    pub sessions_sub_path: Option<&'a str>,
     /// Annotations written into the pod metadata.
     pub annotations: Option<&'a BTreeMap<String, String>>,
 }
@@ -583,6 +588,8 @@ fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
         }
     }
 
+    check_sessions_isolation(config).map_err(hardening_error)?;
+
     for secret in config.hardening.secret_env {
         if secret.name.is_empty() || secret.secret.is_empty() || secret.key.is_empty() {
             return Err(hardening_error(format!(
@@ -626,7 +633,12 @@ fn read_only_volume_json(name: &str, volume: &ReadOnlyVolume) -> (Value, Value) 
 }
 
 /// Container `volumeMount` JSON, with `subPath` and `readOnly` only when set.
-fn mount_json(name: &str, mount_path: &str, sub_path: Option<&str>, read_only: bool) -> Value {
+pub(super) fn mount_json(
+    name: &str,
+    mount_path: &str,
+    sub_path: Option<&str>,
+    read_only: bool,
+) -> Value {
     let mut mount = json!({ "name": name, "mountPath": mount_path });
     if read_only {
         mount["readOnly"] = json!(true);
@@ -791,14 +803,10 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
         main_mounts_json.push(json!({ "name": "ironflow-home", "mountPath": SANDBOX_HOME }));
         // Nested in HOME: the mount must follow the HOME mount.
         if let Some(claim_name) = hardening.sessions_claim {
-            volumes_json.push(json!({
-                "name": "ironflow-sessions",
-                "persistentVolumeClaim": { "claimName": claim_name }
-            }));
-            main_mounts_json.push(json!({
-                "name": "ironflow-sessions",
-                "mountPath": SESSIONS_MOUNT_PATH
-            }));
+            let (volume, mount) =
+                sessions_volume_json(claim_name, hardening.sessions_sub_path, &claim_volumes);
+            volumes_json.extend(volume);
+            main_mounts_json.push(mount);
         }
         volumes_json.push(json!({
             "name": "ironflow-tmp",
@@ -869,7 +877,7 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use serde_json::to_value;
 
     use crate::provider::LABEL_EXPIRES_AT;
@@ -1601,7 +1609,7 @@ mod tests {
     static EMPTY_MAP: BTreeMap<String, String> = BTreeMap::new();
 
     /// A minimal pod config carrying `hardening`, everything else empty.
-    fn hardened_config(hardening: PodHardening<'_>) -> PodConfig<'_> {
+    pub(crate) fn hardened_config(hardening: PodHardening<'_>) -> PodConfig<'_> {
         PodConfig {
             name: "test-pod",
             image: "img:v1",
@@ -1626,18 +1634,18 @@ mod tests {
         }
     }
 
-    fn pod_json(config: &PodConfig<'_>) -> Value {
+    pub(crate) fn pod_json(config: &PodConfig<'_>) -> Value {
         to_value(build_pod_spec(config).unwrap()).unwrap()
     }
 
-    fn sandboxed(sandbox: &SandboxSettings) -> PodHardening<'_> {
+    pub(crate) fn sandboxed(sandbox: &SandboxSettings) -> PodHardening<'_> {
         PodHardening {
             sandbox: Some(sandbox),
             ..PodHardening::default()
         }
     }
 
-    fn find_by_name<'v>(list: &'v Value, name: &str) -> Option<&'v Value> {
+    pub(crate) fn find_by_name<'v>(list: &'v Value, name: &str) -> Option<&'v Value> {
         list.as_array()?.iter().find(|v| v["name"] == name)
     }
 
@@ -1649,7 +1657,7 @@ mod tests {
         }
     }
 
-    fn ro(source: PodVolumeSource, mount_path: &str) -> ReadOnlyVolume {
+    pub(crate) fn ro(source: PodVolumeSource, mount_path: &str) -> ReadOnlyVolume {
         ReadOnlyVolume {
             source,
             mount_path: mount_path.to_string(),
@@ -2066,7 +2074,7 @@ mod tests {
         );
     }
 
-    fn hardening_err(config: &PodConfig<'_>) -> String {
+    pub(crate) fn hardening_err(config: &PodConfig<'_>) -> String {
         build_pod_spec(config).unwrap_err().to_string()
     }
 
@@ -2129,7 +2137,12 @@ mod tests {
         assert!(hardening_err(&config).contains("duplicate"));
     }
 
-    fn step_pvc(claim: &str, mount: &str, sub_path: Option<&str>, read_only: bool) -> PvcVolume {
+    pub(crate) fn step_pvc(
+        claim: &str,
+        mount: &str,
+        sub_path: Option<&str>,
+        read_only: bool,
+    ) -> PvcVolume {
         PvcVolume {
             claim_name: claim.to_string(),
             mount_path: mount.to_string(),

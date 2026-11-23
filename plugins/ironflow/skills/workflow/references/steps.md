@@ -414,9 +414,9 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 When the worker running an agent step loses its lease, the next execution of the step
 resumes the Claude Code session it was running in instead of starting over. The engine
 sends `DEFAULT_RESUME_PROMPT`, or the step's own `resume_prompt`, in place of the prompt.
-A session that is gone (other machine, ephemeral pod without `sessions_volume`) falls
-back to the original prompt. HTTP providers start over. A step retry (`retry_policy`)
-sends the original prompt into the same session.
+A session that is gone (other machine, ephemeral pod without `sessions_volume` or
+`sessions_pvc`) falls back to the original prompt. HTTP providers start over. A step retry
+(`retry_policy`) sends the original prompt into the same session.
 
 ```rust,no_run
 use ironflow_engine::config::{AgentStepConfig, Tool};
@@ -432,6 +432,43 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
             .resume_prompt("You were interrupted. Finish REVIEW.md where you stopped."),
     )
     .await?;
+    Ok(())
+}
+```
+
+### Session across steps
+
+A later step continues the conversation of an earlier one with `.resume(&session)`, the
+`session_id` of the earlier step's `agent_with_meta` reply: never pin an id by hand, a
+`Uuid::now_v7()` in the handler changes on every replay. The step sends its
+`resume_prompt` into the session, and runs its prompt in a new session when the session is
+gone: keep the full task in the prompt. Both steps keep the same working directory. On a
+sandboxed `K8sEphemeralProvider`, `.sessions_pvc(claim, dir)` keeps the sessions in
+`<dir>/<run id>` of a claim, so the next pod finds them and no other run sees them. Mount
+the rest of that claim by sub-path outside `dir`: a mount of its root is refused.
+
+```rust,no_run
+use ironflow_engine::config::{AgentStepConfig, Tool};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+
+async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    let task = "Implement the feature described in /workspace/repo/ISSUE.md.";
+    let step = |prompt: &str| {
+        AgentStepConfig::new(prompt)
+            .allow_tool(Tool::Edit)
+            .max_budget_usd(2.0)
+            .working_dir("/workspace/repo")
+            .pvc_volume("workspace", "/workspace", Some("repos"), false)
+            .sessions_pvc("workspace", "claude-sessions")
+    };
+    let reply = ctx.agent_with_meta("implement", step(task)).await?;
+    if let Some(session) = reply.session_id.as_deref() {
+        let fix = step(task)
+            .resume(session)
+            .resume_prompt("Fix the review comments in /workspace/repo/REVIEW.md.");
+        ctx.agent("fix", fix).await?;
+    }
     Ok(())
 }
 ```

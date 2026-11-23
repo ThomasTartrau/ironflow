@@ -554,6 +554,7 @@ pub(crate) fn planned_output(config: &StepConfig, estimate: Option<Duration>) ->
         artifacts: StepArtifacts::default(),
         account_id: None,
         environment_id: None,
+        session_id: None,
     }
 }
 
@@ -572,6 +573,7 @@ pub(crate) fn planned_custom_output(estimate: Option<Duration>) -> StepOutput {
         artifacts: StepArtifacts::default(),
         account_id: None,
         environment_id: None,
+        session_id: None,
     }
 }
 

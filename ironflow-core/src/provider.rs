@@ -35,6 +35,7 @@ use crate::retry::RetryPolicy;
 use crate::trace_context::WorkflowTraceContext;
 
 mod pod;
+mod sessions;
 mod system_prompt;
 mod tool;
 mod tool_profile;
@@ -49,6 +50,7 @@ pub use pod::{
     validate_owner_pod, validate_pvc_sub_path,
 };
 pub(crate) use pod::{assert_environment_id_valid, upsert_proxied_secret, upsert_secret_env};
+pub use sessions::SessionsVolume;
 pub use tool::Tool;
 pub use tool_profile::ToolProfile;
 
@@ -750,6 +752,22 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     }
 
     /// Set a session ID to resume a previous conversation.
+    ///
+    /// In a workflow, the engine sends [`resume_prompt`](Self::resume_prompt)
+    /// into the session, or the prompt when none is set. When the session is
+    /// gone, it runs the prompt in a new session instead: keep the full task
+    /// in the prompt and the follow-up in the resume prompt.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("Implement the feature, then fix: ...")
+    ///     .resume("0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d")
+    ///     .resume_prompt("Fix these review comments: ...");
+    /// assert!(config.resume_session_id.is_some());
+    /// ```
     pub fn resume(mut self, session_id: &str) -> Self {
         self.resume_session_id = Some(session_id.to_string());
         self
@@ -774,12 +792,14 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
-    /// Set the prompt sent when the engine resumes an interrupted step.
+    /// Set the prompt sent when the engine resumes a session.
     ///
     /// The engine resumes the Claude Code session of an agent step
     /// interrupted by a lost worker lease and sends this prompt instead of
-    /// the original one. Without it, the engine uses its default resume
-    /// prompt. Providers ignore this field.
+    /// the original one; without it, the engine uses its default resume
+    /// prompt. A step resuming another step's session
+    /// ([`AgentConfig::resume`]) sends it too, and the prompt only when the
+    /// session is gone. Providers ignore this field.
     ///
     /// # Examples
     ///

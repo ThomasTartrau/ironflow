@@ -72,6 +72,7 @@ use super::common::{
 };
 use super::profile::{ClaudeProfile, build_profile_copy_prefix};
 use super::reaper::{ReapReport, reap_orphans};
+use super::sessions::{SessionsMount, resolve_sessions};
 use super::toleration::K8sToleration;
 
 mod owner;
@@ -1304,6 +1305,7 @@ struct MergedPodInputs<'a> {
     labels: BTreeMap<String, String>,
     runtime_class: Option<String>,
     proxied_secrets: Vec<ProxiedSecret>,
+    sessions: Option<SessionsMount>,
 }
 
 impl K8sEphemeralProvider {
@@ -1442,6 +1444,12 @@ impl K8sEphemeralProvider {
             labels.insert(LABEL_EGRESS_PROFILE.to_string(), profile.clone());
         }
         labels.extend(config.pod_labels.clone());
+        let sessions = resolve_sessions(
+            self.sessions_claim.as_deref(),
+            self.sandbox.is_some(),
+            config.pod.sessions.as_ref(),
+            &labels,
+        )?;
 
         Ok(MergedPodInputs {
             volumes,
@@ -1453,6 +1461,7 @@ impl K8sEphemeralProvider {
             labels,
             runtime_class,
             proxied_secrets,
+            sessions,
         })
     }
 
@@ -1954,7 +1963,8 @@ impl K8sEphemeralProvider {
                 step_pvc_volumes: &step_pvc_volumes,
                 managed_settings_configmap: merged.managed_settings_configmap.as_deref(),
                 claude_profiles: &self.claude_profiles,
-                sessions_claim: self.sessions_claim.as_deref(),
+                sessions_claim: merged.sessions.as_ref().map(|s| s.claim_name.as_str()),
+                sessions_sub_path: merged.sessions.as_ref().and_then(|s| s.sub_path.as_deref()),
                 annotations: Some(&annotations),
             },
         });
@@ -3275,6 +3285,7 @@ mod tests {
                 managed_settings_configmap: None,
                 claude_profiles: &provider.claude_profiles,
                 sessions_claim: provider.sessions_claim.as_deref(),
+                sessions_sub_path: None,
                 annotations: None,
             },
         })

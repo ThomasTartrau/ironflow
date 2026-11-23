@@ -36,6 +36,7 @@ use crate::error::EngineError;
 use crate::log_sender::StepLogSender;
 
 pub use agent::AgentExecutor;
+pub(crate) use agent::recorded_session_id;
 pub use decision::{DecisionExecution, execute_decision};
 pub use http::HttpExecutor;
 pub use interceptor::{ApprovalOutcome, HumanInputOutcome, SignalOutcome, StepInterceptor};
@@ -84,6 +85,10 @@ pub struct StepOutput {
     /// [`Agent::resume_environment`](ironflow_core::operations::agent::Agent::resume_environment)),
     /// `None` for other steps and providers without persistent environments.
     pub environment_id: Option<String>,
+    /// Claude Code session the agent step ran in, to pass to
+    /// [`AgentStepConfig::resume`](crate::config::AgentStepConfig::resume) in a
+    /// later step. `None` for other steps and for a session id that is not a UUID.
+    pub session_id: Option<String>,
 }
 
 impl StepOutput {
@@ -110,6 +115,7 @@ impl StepOutput {
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
     ///     environment_id: None,
+    ///     session_id: None,
     /// };
     /// assert_eq!(output.total_tokens(), 5350);
     /// ```
@@ -158,6 +164,7 @@ impl StepOutput {
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
     ///     environment_id: None,
+    ///     session_id: None,
     /// };
     /// assert_eq!(output.exit_code(), Some(0));
     /// ```
@@ -187,6 +194,7 @@ impl StepOutput {
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
     ///     environment_id: None,
+    ///     session_id: None,
     /// };
     /// assert!(output.stdout().contains("42 tests"));
     /// ```
@@ -219,6 +227,7 @@ impl StepOutput {
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
     ///     environment_id: None,
+    ///     session_id: None,
     /// };
     /// assert_eq!(output.stderr(), "warning: unused");
     /// ```
@@ -253,6 +262,7 @@ impl StepOutput {
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
     ///     environment_id: None,
+    ///     session_id: None,
     /// };
     /// assert_eq!(output.status(), Some(204));
     /// ```
@@ -285,6 +295,7 @@ impl StepOutput {
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
     ///     environment_id: None,
+    ///     session_id: None,
     /// };
     /// assert_eq!(output.body(), "{\"ok\":true}");
     /// ```
@@ -325,6 +336,7 @@ impl StepOutput {
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
     ///     environment_id: None,
+    ///     session_id: None,
     /// };
     /// assert_eq!(answer.text(), "Looks good.");
     /// assert_eq!(answer.text().raw(), "Looks good.");
@@ -400,6 +412,7 @@ impl StepOutput {
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
     ///     environment_id: None,
+    ///     session_id: None,
     /// };
     /// assert_eq!(failed.error(), Some("timed out"));
     /// assert!(!failed.is_success());
@@ -455,6 +468,7 @@ impl StepOutput {
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
     ///     environment_id: None,
+    ///     session_id: None,
     /// };
     /// assert!(!shell.is_success());
     ///
@@ -512,6 +526,7 @@ impl StepOutput {
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
     ///     environment_id: None,
+    ///     session_id: None,
     /// };
     /// let review: Review = output.json()?;
     /// assert_eq!(review.score, 8);
@@ -827,6 +842,7 @@ mod tests {
             artifacts: StepArtifacts::default(),
             account_id: None,
             environment_id: None,
+            session_id: None,
         }
     }
 
@@ -873,6 +889,7 @@ mod tests {
             artifacts: StepArtifacts::default(),
             account_id: None,
             environment_id: None,
+            session_id: None,
         };
 
         assert_eq!(output.debug_messages_json(), None);
@@ -893,6 +910,7 @@ mod tests {
             artifacts: StepArtifacts::default(),
             account_id: None,
             environment_id: None,
+            session_id: None,
         };
 
         let json_val = output.debug_messages_json();
@@ -943,6 +961,7 @@ mod tests {
             artifacts: StepArtifacts::default(),
             account_id: None,
             environment_id: None,
+            session_id: None,
         };
 
         let json_val = output.debug_messages_json();
@@ -971,6 +990,7 @@ mod tests {
             artifacts: StepArtifacts::default(),
             account_id: None,
             environment_id: None,
+            session_id: None,
         };
 
         assert_eq!(output.duration_ms, 5000);
@@ -995,6 +1015,7 @@ mod tests {
             artifacts: StepArtifacts::default(),
             account_id: None,
             environment_id: None,
+            session_id: None,
         };
 
         assert!(output.input_tokens.is_none());
@@ -1018,6 +1039,7 @@ mod tests {
             artifacts: StepArtifacts::default(),
             account_id: None,
             environment_id: None,
+            session_id: None,
         };
 
         let result = ParallelStepResult {
@@ -1056,6 +1078,7 @@ mod tests {
             artifacts: StepArtifacts::default(),
             account_id: None,
             environment_id: None,
+            session_id: None,
         };
 
         assert_eq!(output.output, complex_output);
@@ -1080,6 +1103,7 @@ mod tests {
             artifacts: StepArtifacts::default(),
             account_id: None,
             environment_id: None,
+            session_id: None,
         };
 
         let result = StepResult::from_success(trace_id, "build", &output);
@@ -1126,6 +1150,7 @@ mod tests {
             artifacts: StepArtifacts::default(),
             account_id: None,
             environment_id: None,
+            session_id: None,
         };
 
         let result = StepResult::from_success(Uuid::nil(), "test", &output);
@@ -1204,6 +1229,7 @@ mod tests {
                     artifacts: StepArtifacts::default(),
                     account_id: None,
                     environment_id: None,
+                    session_id: None,
                 })),
                 _ => None,
             }
@@ -1282,6 +1308,7 @@ mod output_helper_tests {
             artifacts: StepArtifacts::default(),
             account_id: None,
             environment_id: None,
+            session_id: None,
         }
     }
 

@@ -75,6 +75,7 @@ fn build_output(stdout: &str, stderr: &str, exit_code: i32, duration_ms: u64) ->
         artifacts: StepArtifacts::default(),
         account_id: None,
         environment_id: None,
+        session_id: None,
     }
 }
 
