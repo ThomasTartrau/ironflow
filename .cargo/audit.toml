@@ -21,4 +21,10 @@ ignore = [
     # sqlite, and `cargo tree -i libsqlite3-sys --all-features --target all` is empty.
     # The fix needs sqlx 0.9; remove this entry with that migration.
     "RUSTSEC-2026-0459",
+
+    # kube-client 5.0 -- `openssl-tls` trusts OpenSSL's default CA store
+    # Only the `openssl-tls` feature is affected: ops/k8s enables `rustls-tls`, and
+    # `cargo tree -e features -i kube-client --all-features --target all` has no openssl-tls.
+    # The fix is kube 5.2, which needs rustc 1.95; remove once the CI image moves to it.
+    "RUSTSEC-2026-0600",
 ]
