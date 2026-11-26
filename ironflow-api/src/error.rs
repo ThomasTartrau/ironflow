@@ -8,7 +8,9 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use ironflow_auth::password::PasswordPolicyError;
-use ironflow_engine::error::{CONCURRENCY_CONFLICT_CODE, MONTHLY_BUDGET_EXCEEDED_CODE};
+use ironflow_engine::error::{
+    CONCURRENCY_CONFLICT_CODE, INVALID_TRANSITION_CODE, MONTHLY_BUDGET_EXCEEDED_CODE,
+};
 use ironflow_store::error::StoreError;
 use ironflow_types::ErrorEnvelope;
 use serde_json::{Value, json};
@@ -231,6 +233,7 @@ impl ApiError {
             ApiError::Store(StoreError::Crypto(_)) => "SECRET_STORE_UNAVAILABLE",
             ApiError::Store(StoreError::DuplicateArtifact { .. }) => "DUPLICATE_ARTIFACT",
             ApiError::Store(StoreError::LeaseLost { .. }) => "LEASE_LOST",
+            ApiError::Store(StoreError::InvalidTransition { .. }) => INVALID_TRANSITION_CODE,
             ApiError::Store(_) => "DATABASE_ERROR",
             ApiError::Internal(_) => "INTERNAL_ERROR",
             ApiError::BadGateway(_) => "BAD_GATEWAY",
@@ -272,6 +275,7 @@ impl ApiError {
             ApiError::Store(StoreError::Crypto(_)) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Store(StoreError::DuplicateArtifact { .. }) => StatusCode::CONFLICT,
             ApiError::Store(StoreError::LeaseLost { .. }) => StatusCode::CONFLICT,
+            ApiError::Store(StoreError::InvalidTransition { .. }) => StatusCode::CONFLICT,
             ApiError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::BadGateway(_) => StatusCode::BAD_GATEWAY,
@@ -292,6 +296,9 @@ impl ApiError {
                 Some(json!({ "key": key, "run_id": run_id }))
             }
             ApiError::InvalidInput(errors) => Some(json!({ "errors": errors })),
+            ApiError::Store(StoreError::InvalidTransition { from, to }) => {
+                Some(json!({ "from": from, "to": to }))
+            }
             _ => None,
         }
     }
@@ -310,6 +317,7 @@ impl IntoResponse for ApiError {
             // Carries the caller-facing detail in its own Display impl,
             // unlike the generic "database error" of ApiError::Store.
             ApiError::Store(e @ StoreError::LeaseLost { .. }) => e.to_string(),
+            ApiError::Store(e @ StoreError::InvalidTransition { .. }) => e.to_string(),
             _ => self.to_string(),
         };
 
@@ -318,6 +326,9 @@ impl IntoResponse for ApiError {
             // it must not page anyone.
             ApiError::Store(e @ StoreError::LeaseLost { .. }) => {
                 warn!(error = %e, code = %code, "lease refused")
+            }
+            ApiError::Store(e @ StoreError::InvalidTransition { .. }) => {
+                warn!(error = %e, code = %code, "status transition refused")
             }
             ApiError::Store(e) => error!(error = %e, code = %code, "store error"),
             ApiError::Internal(detail) => {
@@ -338,6 +349,7 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
+    use ironflow_store::entities::RunStatus;
     use ironflow_store::models::ConcurrencyLimitError;
 
     use super::*;
@@ -539,5 +551,19 @@ mod tests {
         let err = ApiError::SseConnectionLimit;
         assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(err.code(), "SSE_CONNECTION_LIMIT");
+    }
+
+    #[test]
+    fn invalid_transition_is_a_conflict_not_a_database_error() {
+        let err = ApiError::from(StoreError::InvalidTransition {
+            from: RunStatus::Completed,
+            to: RunStatus::Running,
+        });
+        assert_eq!(err.status(), StatusCode::CONFLICT);
+        assert_eq!(err.code(), "INVALID_TRANSITION");
+        assert_eq!(
+            err.details(),
+            Some(json!({ "from": "completed", "to": "running" }))
+        );
     }
 }

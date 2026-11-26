@@ -1992,6 +1992,31 @@ async fn pick_next_pending_requires_every_group_under_limit() {
 }
 
 #[tokio::test]
+async fn a_sub_run_just_created_is_not_handed_out_by_the_queue() {
+    let store = InMemoryStore::new();
+    let child = create(
+        &store,
+        NewRun {
+            trigger: TriggerKind::Workflow,
+            ..new_run("child")
+        },
+    )
+    .await;
+
+    assert_eq!(pick_id(&store).await, None);
+    let worker = caps(Some(&["child"]), &[]);
+    assert_eq!(pick_for(&store, Some(worker)).await, None);
+    let waiting = store.get_run(child.id).await.unwrap().unwrap();
+    assert_eq!(waiting.status.state, RunStatus::Pending);
+
+    // Once the parent started it and it suspended, a wake-up makes it
+    // pickable like any run.
+    for status in [RunStatus::Running, RunStatus::Sleeping, RunStatus::Pending] {
+        store.update_run_status(child.id, status).await.unwrap();
+    }
+    assert_eq!(pick_id(&store).await, Some(child.id));
+}
+#[tokio::test]
 async fn pick_next_pending_does_not_count_sub_workflow_runs() {
     let store = InMemoryStore::new();
     let parent = create(&store, new_run_in("parent", &[("g", 2)])).await;
@@ -2005,7 +2030,10 @@ async fn pick_next_pending_does_not_count_sub_workflow_runs() {
         },
     )
     .await;
-    assert_eq!(pick_id(&store).await, Some(child.id));
+    store
+        .update_run_status(child.id, RunStatus::Running)
+        .await
+        .unwrap();
 
     // Only the parent counts in g: one running out of two.
     let second = create(&store, new_run_in("parent", &[("g", 2)])).await;

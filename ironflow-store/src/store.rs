@@ -200,6 +200,11 @@ pub trait RunStore: Send + Sync {
     /// Runs of a workflow paused with [`pause_workflow`](Self::pause_workflow)
     /// are skipped the same way until the workflow is resumed.
     ///
+    /// A sub-workflow run ([`TriggerKind::Workflow`](crate::entities::TriggerKind::Workflow))
+    /// that has never been `Running` is never picked: the `Workflow` step of
+    /// its parent creates it and moves it to `Running` itself. A suspended
+    /// sub-run that is woken (it has a `started_at`) is picked like any run.
+    ///
     /// Returns `None` if no pending runs are available.
     ///
     /// Equivalent to [`pick_next_pending_for`](Self::pick_next_pending_for)

@@ -239,6 +239,12 @@ let worker = WorkerBuilder::new(api_url, token)
     .build()?;
 ```
 
+A sub-workflow child that was just created is never picked from the queue: its
+parent moves it to `Running` on its own worker. A status transition the run
+does not allow (for example `completed` to `running`) is answered `409
+INVALID_TRANSITION` by the API, with `details.from` and `details.to`, and the
+worker does not retry it.
+
 A sub-workflow child that was suspended (human input, signal, delay) is picked
 like any run, but the worker resumes its root run instead. The lease follows:
 the root takes the child's lease when it goes back to `Running`, the child

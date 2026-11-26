@@ -45,6 +45,10 @@ const CONCURRENCY_GROUP_LOCK_PREFIX: &str = "ironflow:concurrency_group:";
 /// sub-workflow runs (`trigger.kind = 'workflow'`) execute inside their
 /// parent's slot. Each candidate is compared against its own limit.
 ///
+/// A sub-workflow run that never started (`trigger.kind = 'workflow'`,
+/// `started_at IS NULL`) belongs to its parent, which moves it to `Running`
+/// itself: it is never selected. A woken one has `started_at` set and is picked.
+///
 /// Worker routing filters run in the same SELECT, before the row lock: a run
 /// the worker cannot take is never selected, so it never blocks younger runs.
 ///
@@ -67,6 +71,7 @@ const PICK_CANDIDATE_SQL: &str = r#"
     JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
     WHERE ast.name IN ('pending', 'retrying')
       AND (r.scheduled_at IS NULL OR r.scheduled_at <= NOW())
+      AND NOT (r.trigger->>'kind' = 'workflow' AND r.started_at IS NULL)
       AND r.id <> ALL($1::uuid[])
       AND ($2::text[] IS NULL OR r.workflow_name = ANY($2::text[]))
       AND ($3::text[] IS NULL OR r.worker_tags <@ $3::text[])

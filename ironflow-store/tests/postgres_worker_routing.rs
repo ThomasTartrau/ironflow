@@ -266,3 +266,34 @@ async fn get_stats_with_eligible_for_counts_only_takeable_runs() {
 
     finish(&store, &[gpu.id, plain.id]).await;
 }
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn a_sub_run_just_created_is_not_handed_out_by_the_queue() {
+    let _serial = SERIAL.lock().await;
+    let store = get_store().await;
+    drain_pending(&store).await;
+    let wf = unique_workflow("child");
+
+    let child = create(
+        &store,
+        NewRun {
+            trigger: TriggerKind::Workflow,
+            ..new_run(&wf, &[])
+        },
+    )
+    .await;
+    assert_eq!(pick_for(&store, Some(caps(&[&wf], &[]))).await, None);
+
+    // Once the parent started it and it suspended, a wake-up makes it
+    // pickable like any run.
+    for status in [RunStatus::Running, RunStatus::Sleeping, RunStatus::Pending] {
+        store.update_run_status(child.id, status).await.unwrap();
+    }
+    assert_eq!(
+        pick_for(&store, Some(caps(&[&wf], &[]))).await,
+        Some(child.id)
+    );
+
+    finish(&store, &[child.id]).await;
+}

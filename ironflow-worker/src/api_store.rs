@@ -10,13 +10,13 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{Client, Error as HttpError, StatusCode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_str, json, to_vec};
 use tokio::time::sleep;
 use tracing::warn;
 use uuid::Uuid;
 
-use ironflow_engine::error::CONCURRENCY_CONFLICT_CODE;
+use ironflow_engine::error::{CONCURRENCY_CONFLICT_CODE, INVALID_TRANSITION_CODE};
 use ironflow_store::MAX_API_BODY_BYTES;
 use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::approval_delegation_store::ApprovalDelegationStore;
@@ -115,7 +115,8 @@ impl ApiRunStore {
     /// cut mid-upload, and neither tells the size. A `413` is reported the
     /// same way. A send failure (refused, cut or timed-out connection) or a
     /// `5xx` is retried after each delay of `retry_backoff`; any other status
-    /// is returned at once.
+    /// is returned at once. A `409` `INVALID_TRANSITION` comes back as
+    /// [`StoreError::InvalidTransition`].
     async fn put_json<B: Serialize>(&self, path: &str, body: &B) -> Result<(), StoreError> {
         let bytes = Bytes::from(to_vec(body).map_err(|e| {
             StoreError::Database(format!("failed to serialize PUT {path} body: {e}"))
@@ -154,7 +155,10 @@ impl ApiRunStore {
                 }
                 Ok(resp) => {
                     let body = resp.text().await.unwrap_or_default();
-                    return Err(Self::status_err(&body));
+                    return Err(match invalid_transition(&body) {
+                        Some(refused) => refused,
+                        None => Self::status_err(&body),
+                    });
                 }
                 Err(e) => error_chain(&e),
             };
@@ -1221,6 +1225,30 @@ fn concurrency_conflict(body: &str) -> Option<StoreError> {
     Some(StoreError::ConcurrencyConflict { key, run_id })
 }
 
+fn invalid_transition(body: &str) -> Option<StoreError> {
+    #[derive(Deserialize)]
+    struct Details {
+        from: RunStatus,
+        to: RunStatus,
+    }
+    #[derive(Deserialize)]
+    struct Error {
+        code: String,
+        details: Details,
+    }
+    #[derive(Deserialize)]
+    struct Envelope {
+        error: Error,
+    }
+
+    let envelope: Envelope = from_str(body).ok()?;
+    if envelope.error.code != INVALID_TRANSITION_CODE {
+        return None;
+    }
+    let Details { from, to } = envelope.error.details;
+    Some(StoreError::InvalidTransition { from, to })
+}
+
 mod signal_sender;
 
 /// Error for the signal methods only the API server runs.
@@ -1360,6 +1388,7 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::spawn;
     use tokio::sync::broadcast;
+    use tokio::time::timeout;
 
     use serde_json::json;
 
@@ -1593,6 +1622,89 @@ mod tests {
         assert!(concurrency_conflict(&other_code).is_none());
         assert!(concurrency_conflict("not json").is_none());
         assert!(concurrency_conflict("").is_none());
+    }
+
+    #[tokio::test]
+    async fn update_run_status_on_an_impossible_transition_is_not_retried() {
+        let store = ApiRunStore::new(&spawn_api().await, "test-worker-token")
+            .with_retry_backoff(vec![Duration::from_secs(5); 3]);
+        let run = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                priority: 0,
+                concurrency_limits: Vec::new(),
+                max_cost_usd: None,
+                worker_tags: Vec::new(),
+            })
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Completed)
+            .await
+            .unwrap();
+
+        let result = timeout(
+            Duration::from_secs(2),
+            store.update_run_status(run.id, RunStatus::Running),
+        )
+        .await
+        .expect("an impossible transition must not be retried");
+        assert!(matches!(
+            result,
+            Err(StoreError::InvalidTransition {
+                from: RunStatus::Completed,
+                to: RunStatus::Running,
+            })
+        ));
+    }
+
+    #[test]
+    fn invalid_transition_reads_the_api_error_envelope() {
+        let body = json!({
+            "error": {
+                "code": "INVALID_TRANSITION",
+                "message": "invalid status transition: completed -> running",
+                "details": { "from": "completed", "to": "running" }
+            }
+        })
+        .to_string();
+
+        match invalid_transition(&body) {
+            Some(StoreError::InvalidTransition { from, to }) => {
+                assert_eq!(from, RunStatus::Completed);
+                assert_eq!(to, RunStatus::Running);
+            }
+            other => panic!("expected an invalid transition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_transition_ignores_other_409_bodies() {
+        let other_code = json!({
+            "error": {
+                "code": "CONFLICT",
+                "message": "something else",
+                "details": { "from": "completed", "to": "running" }
+            }
+        })
+        .to_string();
+        assert!(invalid_transition(&other_code).is_none());
+        assert!(invalid_transition("not json").is_none());
+        assert!(invalid_transition("").is_none());
     }
 
     #[test]
