@@ -114,6 +114,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
     use serde_json::to_string;
 
     use ironflow_core::providers::claude::ClaudeCodeProvider;
@@ -270,6 +271,67 @@ mod tests {
         assert_eq!(updated.status.state, RunStatus::Completed);
         assert_eq!(updated.cost_usd, Decimal::from_str_exact("2.00").unwrap());
         assert_eq!(updated.duration_ms, 3000);
+    }
+
+    #[tokio::test]
+    async fn an_impossible_transition_answers_409_invalid_transition() {
+        let state = test_state();
+        let run = state
+            .store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                priority: 0,
+                concurrency_limits: Vec::new(),
+                max_cost_usd: None,
+                worker_tags: Vec::new(),
+            })
+            .await
+            .unwrap()
+            .into_run();
+        state
+            .store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        state
+            .store
+            .update_run_status(run.id, RunStatus::Completed)
+            .await
+            .unwrap();
+
+        let app = create_router(state.clone(), RouterConfig::default());
+        let req_body = UpdateRunStatusRequest {
+            status: RunStatus::Running,
+            error: None,
+            cost_usd: None,
+            duration_ms: None,
+        };
+        let req = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/v1/internal/runs/{}/status", run.id))
+            .header("authorization", "Bearer test-worker-token")
+            .header("content-type", "application/json")
+            .body(Body::from(to_string(&req_body).unwrap()))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "INVALID_TRANSITION");
+        assert_eq!(body["error"]["details"]["from"], "completed");
+
+        let unchanged = state.get_run_or_404(run.id).await.unwrap();
+        assert_eq!(unchanged.status.state, RunStatus::Completed);
     }
 
     #[tokio::test]

@@ -29,6 +29,17 @@ pub const MONTHLY_BUDGET_EXCEEDED_CODE: &str = "MONTHLY_BUDGET_EXCEEDED";
 /// ```
 pub const CONCURRENCY_CONFLICT_CODE: &str = "CONCURRENCY_CONFLICT";
 
+/// Error code the API answers when a run status transition is not allowed.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::error::INVALID_TRANSITION_CODE;
+///
+/// assert_eq!(INVALID_TRANSITION_CODE, "INVALID_TRANSITION");
+/// ```
+pub const INVALID_TRANSITION_CODE: &str = "INVALID_TRANSITION";
+
 /// Business error code for handler-version mismatch on retry.
 pub const HANDLER_VERSION_MISMATCH_CODE: &str = "HANDLER_VERSION_MISMATCH";
 

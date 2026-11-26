@@ -95,6 +95,12 @@ fn is_due(run: &Run, now: DateTime<Utc>) -> bool {
         && run.scheduled_at.is_none_or(|at| at <= now)
 }
 
+/// Whether a run is a sub-workflow run its parent has not started yet: only
+/// the parent's `Workflow` step moves it to `Running`, a worker never picks it.
+fn awaits_its_parent(run: &Run) -> bool {
+    matches!(run.trigger, TriggerKind::Workflow) && run.started_at.is_none()
+}
+
 fn run_matches_filter(run: &Run, filter: &RunFilter, steps: &HashMap<Uuid, Step>) -> bool {
     if let Some(ref wf) = filter.workflow_name
         && !run
@@ -463,12 +469,15 @@ impl RunStore for InMemoryStore {
             // The group check and the transition below happen under the same
             // write lock, so concurrent pickers cannot overshoot a limit.
             // Runs the worker cannot take (unregistered workflow, missing tag)
-            // are skipped the same way.
+            // are skipped the same way. A sub-workflow run never started is
+            // skipped too: its parent creates it `Pending` and then moves it
+            // to `Running` itself.
             let oldest_id = state
                 .runs
                 .values()
                 .filter(|r| is_due(r, now) && !is_blocked(r, &state.runs))
                 .filter(|r| !state.workflow_pauses.contains_key(&r.workflow_name))
+                .filter(|r| !awaits_its_parent(r))
                 .filter(|r| {
                     capabilities
                         .as_ref()

@@ -224,7 +224,10 @@ async fn pick_next_pending_does_not_count_sub_workflow_runs() {
         },
     )
     .await;
-    assert_eq!(pick_id(&store).await, Some(child.id));
+    store
+        .update_run_status(child.id, RunStatus::Running)
+        .await
+        .unwrap();
 
     let root = create(&store, new_run(&[(group.as_str(), 1)])).await;
     assert_eq!(pick_id(&store).await, Some(root.id));

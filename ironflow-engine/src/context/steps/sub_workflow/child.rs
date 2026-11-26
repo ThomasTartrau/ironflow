@@ -280,6 +280,8 @@ impl WorkflowContext {
                     )
                     .await?;
 
+                // No worker can pick the child in between: the queue skips a
+                // sub-run that never started.
                 self.store
                     .update_run_status(child_run_id, RunStatus::Running)
                     .await?;
@@ -495,6 +497,26 @@ mod tests {
             .expect("run exists")
             .status
             .state
+    }
+
+    #[tokio::test]
+    async fn a_sub_run_just_created_is_not_handed_out_by_the_queue() {
+        let (_, store, child) = child_moved_along(&[]).await;
+        let picked = store.pick_next_pending(None).await.expect("pick");
+        assert!(picked.is_none());
+        assert_eq!(status_of(&store, child).await, RunStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn a_woken_sub_run_is_still_handed_out_by_the_queue() {
+        let path = [RunStatus::Running, RunStatus::Sleeping, RunStatus::Pending];
+        let (_, store, child) = child_moved_along(&path).await;
+        let picked = store
+            .pick_next_pending(None)
+            .await
+            .expect("pick")
+            .expect("a woken sub-run is pickable");
+        assert_eq!(picked.id, child);
     }
 
     #[tokio::test]
