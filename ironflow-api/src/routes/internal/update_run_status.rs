@@ -329,6 +329,11 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["error"]["code"], "INVALID_TRANSITION");
         assert_eq!(body["error"]["details"]["from"], "completed");
+        assert_eq!(body["error"]["details"]["to"], "running");
+        assert_eq!(
+            body["error"]["message"],
+            "invalid status transition: Completed -> Running"
+        );
 
         let unchanged = state.get_run_or_404(run.id).await.unwrap();
         assert_eq!(unchanged.status.state, RunStatus::Completed);
