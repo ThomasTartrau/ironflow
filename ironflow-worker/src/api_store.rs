@@ -10,7 +10,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{Client, Error as HttpError, StatusCode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_str, json, to_vec};
 use tokio::time::sleep;
 use tracing::warn;
@@ -1226,17 +1226,17 @@ fn concurrency_conflict(body: &str) -> Option<StoreError> {
 }
 
 fn invalid_transition(body: &str) -> Option<StoreError> {
-    #[derive(serde::Deserialize)]
+    #[derive(Deserialize)]
     struct Details {
         from: RunStatus,
         to: RunStatus,
     }
-    #[derive(serde::Deserialize)]
+    #[derive(Deserialize)]
     struct Error {
         code: String,
         details: Details,
     }
-    #[derive(serde::Deserialize)]
+    #[derive(Deserialize)]
     struct Envelope {
         error: Error,
     }
